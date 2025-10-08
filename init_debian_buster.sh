@@ -35,6 +35,4 @@ update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++-11 100
 cd /root
 git clone https://github.com/secondlife/build-variables.git
 cd build-variables
-# Use the same branch as the github action
-git checkout universal
 echo 'export AUTOBUILD_VARIABLES_FILE=/root/build-variables/variables' >> ~/.bashrc

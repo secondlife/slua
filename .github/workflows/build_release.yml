@@ -70,7 +70,6 @@ jobs:
           token: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
           setup-python: false
           setup-autobuild: false
-          build-variables-ref: 'universal'
 
   release:
     name: "Upload autobuild packages to release"
