@@ -38,6 +38,12 @@ VM_SOURCES=$(wildcard VM/src/*.cpp)
 VM_OBJECTS=$(VM_SOURCES:%=$(BUILD)/%.o)
 VM_TARGET=$(BUILD)/libluauvm.a
 
+# these get included in the VM target
+CJSON_SOURCES=$(wildcard VM/src/cjson/*.cpp)
+CJSON_OBJECTS=$(CJSON_SOURCES:%=$(BUILD)/%.o)
+APR_SOURCES=$(wildcard VM/src/apr/*.cpp)
+APR_OBJECTS=$(APR_SOURCES:%=$(BUILD)/%.o)
+
 REQUIRE_SOURCES=$(wildcard Require/Runtime/src/*.cpp)
 REQUIRE_OBJECTS=$(REQUIRE_SOURCES:%=$(BUILD)/%.o)
 REQUIRE_TARGET=$(BUILD)/libluaurequire.a
@@ -50,11 +56,11 @@ ISOCLINE_SOURCES=extern/isocline/src/isocline.c
 ISOCLINE_OBJECTS=$(ISOCLINE_SOURCES:%=$(BUILD)/%.o)
 ISOCLINE_TARGET=$(BUILD)/libisocline.a
 
-TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp
+TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
 TESTS_OBJECTS=$(TESTS_SOURCES:%=$(BUILD)/%.o)
 TESTS_TARGET=$(BUILD)/luau-tests
 
-REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp
+REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
 REPL_CLI_OBJECTS=$(REPL_CLI_SOURCES:%=$(BUILD)/%.o)
 REPL_CLI_TARGET=$(BUILD)/luau
 
@@ -62,7 +68,7 @@ ANALYZE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Analyze.cpp 
 ANALYZE_CLI_OBJECTS=$(ANALYZE_CLI_SOURCES:%=$(BUILD)/%.o)
 ANALYZE_CLI_TARGET=$(BUILD)/luau-analyze
 
-COMPILE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Compile.cpp
+COMPILE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Compile.cpp CLI/src/LSLBuiltins.cpp
 COMPILE_CLI_OBJECTS=$(COMPILE_CLI_SOURCES:%=$(BUILD)/%.o)
 COMPILE_CLI_TARGET=$(BUILD)/luau-compile
 
@@ -81,12 +87,13 @@ ifneq ($(opt),)
 	TESTS_ARGS+=-O$(opt)
 endif
 
-OBJECTS=$(AST_OBJECTS) $(COMPILER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(REQUIRE_OBJECTS) $(REQUIRENAVIGATOR_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(FUZZ_OBJECTS)
+OBJECTS=$(AST_OBJECTS) $(COMPILER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS) $(REQUIRE_OBJECTS) $(REQUIRENAVIGATOR_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(FUZZ_OBJECTS)
 EXECUTABLE_ALIASES = luau luau-analyze luau-compile luau-bytecode luau-tests
 
 # common flags
-CXXFLAGS=-g -Wall
-LDFLAGS=
+# We have to do tailslide builds for `make`-based builds, conditionally including the LSL compiler is annoying in `make`.
+CXXFLAGS+=-g -Wall -DLUAU_USE_TAILSLIDE=1
+LDFLAGS+=
 
 # some gcc versions treat var in `if (type var = val)` as unused
 # some gcc versions treat variables used in constexpr if blocks as unused
@@ -112,7 +119,7 @@ ifeq ($(config),coverage)
 endif
 
 ifeq ($(config),sanitize)
-	CXXFLAGS+=-fsanitize=address -O1
+	CXXFLAGS+=-fsanitize=address -O1 -DLUAU_ENABLE_ASAN=1
 	LDFLAGS+=-fsanitize=address
 endif
 
@@ -150,25 +157,28 @@ endif
 
 # target-specific flags
 $(AST_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include
-$(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -ICompiler/include -ICommon/include -IAst/include
+$(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -ICompiler/include -ICommon/include -IAst/include -Istage/packages/include
 $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/include
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IEqSat/include -IConfig/include -ICompiler/include -IVM/include
 $(EQSAT_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IEqSat/include
 $(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -IVM/include -IVM/src # Code generation needs VM internals
-$(VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
+$(VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include -Istage/packages/include -I VM/cjson
+$(APR_OBJECTS): CXXFLAGS+=-std=c++11 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include
+$(CJSON_OBJECTS): CXXFLAGS+=-std=c++11 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/Navigator/include -IRequire/Runtime/include
 $(REQUIRENAVIGATOR_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IConfig/include -IRequire/Navigator/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -IEqSat/include -ICodeGen/include -IVM/include -IRequire/Runtime/include -ICLI/include -Iextern -DDOCTEST_CONFIG_DOUBLE_STRINGIFY
-$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/Runtime/include -Iextern -Iextern/isocline/include -ICLI/include
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -IEqSat/include -ICodeGen/include -IVM/include -IRequire/Runtime/include -ICLI/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY
+$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/Runtime/include -Iextern -Iextern/isocline/include -ICLI/include -Istage/packages/include
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IEqSat/include -IConfig/include -IRequire/Navigator/include -Iextern -ICLI/include
-$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
+$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -Istage/packages/include
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
 $(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IAnalysis/include -IEqSat/include -IVM/include -ICodeGen/include -IConfig/include
 
-$(TESTS_TARGET): LDFLAGS+=-lpthread
-$(REPL_CLI_TARGET): LDFLAGS+=-lpthread
+$(TESTS_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
+$(REPL_CLI_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
 $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
+$(COMPILE_CLI_TARGET): LDFLAGS+=-Lstage/packages/lib/release -ltailslide
 fuzz-proto fuzz-prototest: LDFLAGS+=build/libprotobuf-mutator/src/libfuzzer/libprotobuf-mutator-libfuzzer.a build/libprotobuf-mutator/src/libprotobuf-mutator.a $(LPROTOBUF)
 
 # pseudo targets
@@ -206,8 +216,8 @@ coverage: $(TESTS_TARGET) $(COMPILE_CLI_TARGET)
 	llvm-profdata merge *.profraw -o default.profdata
 	rm *.profraw
 	llvm-cov show -format=html -show-instantiations=false -show-line-counts=true -show-region-summary=false -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -output-dir=coverage --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
-	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
-	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -format lcov --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile >coverage.info
+	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile
+	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -format lcov --instr-profile default.profdata -object build/coverage/luau-tests -object build/coverage/luau-compile >coverage.info
 
 format:
 	git ls-files '*.h' '*.cpp' | xargs clang-format-11 -i
@@ -260,7 +270,7 @@ $(CONFIG_TARGET): $(CONFIG_OBJECTS)
 $(ANALYSIS_TARGET): $(ANALYSIS_OBJECTS)
 $(EQSAT_TARGET): $(EQSAT_OBJECTS)
 $(CODEGEN_TARGET): $(CODEGEN_OBJECTS)
-$(VM_TARGET): $(VM_OBJECTS)
+$(VM_TARGET): $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
 $(REQUIRE_TARGET): $(REQUIRE_OBJECTS)
 $(REQUIRENAVIGATOR_TARGET): $(REQUIRENAVIGATOR_OBJECTS)
 $(ISOCLINE_TARGET): $(ISOCLINE_OBJECTS)

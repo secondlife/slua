@@ -31,4 +31,8 @@ LUAI_FUNC bool luaG_onbreak(lua_State* L);
 LUAI_FUNC int luaG_getline(Proto* p, int pc);
 
 LUAI_FUNC int luaG_isnative(lua_State* L, int level);
+
+// ServerLua: for debugging!
+LUAI_FUNC void luaG_dumpvalue(lua_State *L, const lua_TValue *tv);
+
 LUAI_FUNC int luaG_hasnative(lua_State* L, int level);

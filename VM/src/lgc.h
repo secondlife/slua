@@ -69,6 +69,8 @@
 
 #define changewhite(x) ((x)->gch.marked ^= WHITEBITS)
 #define gray2black(x) l_setbit((x)->gch.marked, BLACKBIT)
+// ServerLua: for "fixing" objects so the GC skips collection
+#define luaC_fix(x) l_setbit((x)->gch.marked, FIXEDBIT)
 
 #define luaC_white(g) cast_to(uint8_t, ((g)->currentwhite) & WHITEBITS)
 
@@ -140,6 +142,12 @@ LUAI_FUNC void luaC_enumheap(
     void* context,
     void (*node)(void* context, void* ptr, uint8_t tt, uint8_t memcat, size_t size, const char* name),
     void (*edge)(void* context, void* from, void* to, const char* name)
+);
+// ServerLua: User allocation tracking function
+LUAI_FUNC void luaC_enumreachableuserallocs(
+    lua_State* L,
+    void* context,
+    void (*node)(void* context, GCObject* ptr, uint8_t tt, uint8_t memcat, size_t size)
 );
 LUAI_FUNC int64_t luaC_allocationrate(lua_State* L);
 LUAI_FUNC const char* luaC_statename(int state);

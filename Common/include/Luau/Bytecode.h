@@ -225,6 +225,7 @@ enum LuauOpcode
     // A: target register
     // B: source register
     // C: constant table index (0..255); must refer to a number
+    //    ServerLua: or integer!
     LOP_ADDK,
     LOP_SUBK,
     LOP_MULK,
@@ -419,12 +420,33 @@ enum LuauOpcode
     LOP_IDIVK,
 
     // Enum entry for number of opcodes, not a valid opcode by itself!
-    LOP__COUNT
+    LOP__COUNT,
+
+    // ServerLua: These are LSL-specific opcodes, we give them high numbers so that they don't collide with Luau's
+    LOP_LSL__START = 200,
+    LOP_LSL_DOUBLE2FLOAT,
+    LOP_LSL__END,
 };
 
 // Bytecode instruction header: it's always a 32-bit integer, with low byte (first byte in little endian) containing the opcode
 // Some instruction types require more data and have more 32-bit integers following the header
 #define LUAU_INSN_OP(insn) ((insn) & 0xff)
+
+// ServerLua: Pre-emption
+inline bool luau_is_preemptible(unsigned int op)
+{
+    switch(op)
+    {
+        case LOP_CALL:
+        case LOP_JUMPBACK:
+        case LOP_RETURN:
+        case LOP_FORNLOOP:
+        case LOP_FORGLOOP:
+            return true;
+        default:
+            return false;
+    }
+}
 
 // ABC encoding: three 8-bit values, containing registers or small numbers
 #define LUAU_INSN_A(insn) (((insn) >> 8) & 0xff)
@@ -457,6 +479,8 @@ enum LuauBytecodeTag
     LBC_CONSTANT_TABLE,
     LBC_CONSTANT_CLOSURE,
     LBC_CONSTANT_VECTOR,
+    // ServerLua: added by us for integer constant support
+    LBC_CONSTANT_INTEGER,
 };
 
 // Type table tags
@@ -472,6 +496,8 @@ enum LuauBytecodeType
     LBC_TYPE_USERDATA,
     LBC_TYPE_VECTOR,
     LBC_TYPE_BUFFER,
+    // ServerLua: Added by us for integer constant support.
+    LBC_TYPE_INTEGER,
 
     LBC_TYPE_ANY = 15,
 

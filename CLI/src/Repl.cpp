@@ -7,6 +7,7 @@
 
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
+#include "Luau/LSLBuiltins.h"
 #include "Luau/Parser.h"
 #include "Luau/TimeTrace.h"
 
@@ -39,6 +40,12 @@
 #include <valgrind/callgrind.h>
 #endif
 
+#include "llsl.h"
+#ifdef LUAU_USE_TAILSLIDE
+#include "Luau/LSLCompiler.h"
+#endif
+
+
 #include <locale.h>
 #include <signal.h>
 
@@ -48,6 +55,9 @@ LUAU_FASTFLAG(DebugLuauTimeTracing)
 constexpr int MaxTraversalLimit = 50;
 
 static bool codegen = false;
+static bool lsl = false;
+static bool sl = false;
+static lua_SLRuntimeState lsl_state;
 static int program_argc = 0;
 char** program_argv = nullptr;
 
@@ -84,6 +94,7 @@ struct GlobalOptions
 {
     int optimizationLevel = 1;
     int debugLevel = 1;
+    int slLibraries = 1;
 } globalOptions;
 
 static Luau::CompileOptions copts()
@@ -91,11 +102,35 @@ static Luau::CompileOptions copts()
     Luau::CompileOptions result = {};
     result.optimizationLevel = globalOptions.optimizationLevel;
     result.debugLevel = globalOptions.debugLevel;
+    if (globalOptions.slLibraries)
+    {
+        result.libraryMemberConstantCb = &luauSL_lookup_constant_cb;
+    }
     result.typeInfoLevel = 1;
     result.coverageLevel = coverageActive() ? 2 : 0;
 
     return result;
 }
+
+
+class ReplStates
+{
+public:
+    ReplStates() {
+        L = luaL_newstate();
+        constsL = nullptr;
+    }
+
+    ~ReplStates()
+    {
+        lua_close(L);
+        if (constsL)
+            lua_close(constsL);
+    }
+
+    lua_State *L;
+    lua_State *constsL;
+};
 
 static int lua_loadstring(lua_State* L)
 {
@@ -178,6 +213,9 @@ void* createCliRequireContext(lua_State* L)
     if (!ctx)
         luaL_error(L, "unable to allocate ReplRequirer");
 
+    // ServerLua: Requirer upvalue will never die, fix it in place.
+    lua_fixvalue(L, -1);
+
     ctx = new (ctx) ReplRequirer{
         copts,
         coverageActive,
@@ -204,6 +242,32 @@ void setupState(lua_State* L)
 
     luaL_openlibs(L);
 
+    // ServerLua: add cast operations and such
+    if (lsl || sl)
+    {
+        lua_setthreaddata(L, &lsl_state);
+        if (sl)
+            lsl_state.slIdentifier = LUA_SL_IDENTIFIER;
+
+        luaopen_sl(L);
+        if (lsl)
+        {
+            luaopen_lsl(L);
+            lua_pop(L, 1);
+        }
+        luaopen_ll(L, true);
+        lua_pop(L, 1);
+        // Set the builtin constants on _G if we have any.
+        luaSL_set_constant_globals(L);
+    }
+    if (sl)
+    {
+        luaopen_cjson(L);
+        lua_pop(L, 1);
+        luaopen_llbase64(L);
+        lua_pop(L, 1);
+    }
+
     static const luaL_Reg funcs[] = {
         {"loadstring", lua_loadstring},
         {"collectgarbage", lua_collectgarbage},
@@ -217,9 +281,11 @@ void setupState(lua_State* L)
     luaL_register(L, NULL, funcs);
     lua_pop(L, 1);
 
-    luaopen_require(L, requireConfigInit, createCliRequireContext(L));
+    if (!lsl)
+        luaopen_require(L, requireConfigInit, createCliRequireContext(L));
 
     luaL_sandbox(L);
+    lua_fixallcollectable(L);
 }
 
 void setupArguments(lua_State* L, int argc, char** argv)
@@ -248,6 +314,7 @@ std::string runCode(lua_State* L, const std::string& source)
     }
 
     lua_State* T = lua_newthread(L);
+    lua_setthreaddata(T, lua_getthreaddata(L));
 
     lua_pushvalue(L, -2);
     lua_remove(L, -3);
@@ -548,8 +615,8 @@ static void runReplImpl(lua_State* L)
 
 static void runRepl()
 {
-    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
-    lua_State* L = globalState.get();
+    ReplStates replStates;
+    lua_State* L = replStates.L;
 
     setupState(L);
 
@@ -562,6 +629,11 @@ static void runRepl()
 #endif
 
     luaL_sandboxthread(L);
+    if (sl)
+    {
+        luaSL_createeventmanager(L);
+        lua_setglobal(L, "LLEvents");
+    }
     runReplImpl(L);
 }
 
@@ -575,19 +647,49 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
         return false;
     }
 
+    lua_setmemcat(GL, 2);
+
     // module needs to run in a new thread, isolated from the rest
     lua_State* L = lua_newthread(GL);
+
+    lua_setmemcat(GL, 0);
 
     // new thread needs to have the globals sandboxed
     luaL_sandboxthread(L);
 
+    if (sl)
+    {
+        luaSL_createeventmanager(L);
+        lua_setglobal(L, "LLEvents");
+    }
+
     std::string chunkname = "@" + normalizePath(name);
 
-    std::string bytecode = Luau::compile(*source, copts());
+
+    std::string bytecode;
+    const bool is_lsl = chunkname.find(".lsl") != std::string::npos;
+    if (is_lsl)
+    {
+#ifdef LUAU_USE_TAILSLIDE
+        bytecode = compileLSL(*source);
+        lua_setthreaddata(L, lua_getthreaddata(GL));
+#else
+        fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
+        exit(1);
+#endif
+    }
+    else
+    {
+        if (lsl || sl)
+            lua_setthreaddata(L, lua_getthreaddata(GL));
+        bytecode = Luau::compile(*source, copts());
+    }
     int status = 0;
 
+    lua_setmemcat(L, 0);
     if (luau_load(L, chunkname.c_str(), bytecode.data(), bytecode.size(), 0) == 0)
     {
+        lua_setmemcat(L, 2);
         if (codegen)
         {
             Luau::CodeGen::CompilationOptions nativeOptions;
@@ -599,6 +701,13 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
 
         setupArguments(L, program_argc, program_argv);
         status = lua_resume(L, NULL, program_argc);
+
+        if (is_lsl && status == LUA_OK)
+        {
+            // LSL script constructor ran okay, run the default state_entry
+            lua_getglobal(L, "_e0/state_entry");
+            status = lua_resume(L, NULL, 0);
+        }
     }
     else
     {
@@ -646,6 +755,8 @@ static void displayHelp(const char* argv0)
     printf("  -g<n>: compile with debug level n (default 1, n should be between 0 and 2).\n");
     printf("  --profile[=N]: profile the code using N Hz sampling (default 10000) and output results to profile.out\n");
     printf("  --timetrace: record compiler time tracing information into trace.json\n");
+    printf("  --lsl: run REPL with LSL semantics\n");
+    printf("  --sl: run REPL with SL semantics\n");
     printf("  --codegen: execute code using native code generation\n");
     printf("  --program-args,-a: declare start of arguments to be passed to the Luau program\n");
 }
@@ -726,6 +837,19 @@ int replMain(int argc, char** argv)
         {
             FFlag::DebugLuauTimeTracing.value = true;
         }
+        else if (strcmp(argv[i], "--lsl") == 0)
+        {
+            lsl = true;
+        }
+        else if (strcmp(argv[i], "--sl") == 0)
+        {
+            sl = true;
+        }
+        else if (strncmp(argv[i], "--sl-builtins=", 14) == 0)
+        {
+            luauSL_init_global_builtins(argv[i] + 14);
+            globalOptions.slLibraries = 1;
+        }
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
             setLuauFlags(argv[i] + 9);
@@ -741,6 +865,12 @@ int replMain(int argc, char** argv)
             displayHelp(argv[0]);
             return 1;
         }
+    }
+
+    if (lsl && sl)
+    {
+        fprintf(stderr, "can only specify one of --lsl or --sl\n");
+        return 1;
     }
 
     program_argc = argc - program_args;
@@ -789,8 +919,8 @@ int replMain(int argc, char** argv)
     }
     else
     {
-        std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
-        lua_State* L = globalState.get();
+        ReplStates replStates;
+        lua_State *L = replStates.L;
 
         setupState(L);
 

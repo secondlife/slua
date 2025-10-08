@@ -511,6 +511,14 @@ static int loadsafe(
                 break;
             }
 
+            // ServerLua: added for integer constant support
+            case LBC_CONSTANT_INTEGER:
+            {
+                int32_t v = read<int32_t>(data, size, offset);
+                setintvalue(&p->k[j], v);
+                break;
+            }
+
             default:
                 LUAU_ASSERT(!"Unexpected constant kind");
             }
@@ -585,6 +593,15 @@ static int loadsafe(
             {
                 p->upvalues[j] = readString(strings, data, size, offset);
             }
+        }
+
+        // ServerLua: yield points
+        int num_yields = readVarInt(data, size, offset);
+        p->yieldpoints = luaM_newarray(L, num_yields, int, p->memcat);
+        p->sizeyieldpoints = num_yields;
+        for (int j = 0; j < num_yields; ++j)
+        {
+            p->yieldpoints[j] = readVarInt(data, size, offset);
         }
 
         protos[i] = p;

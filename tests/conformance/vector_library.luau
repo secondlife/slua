@@ -20,6 +20,10 @@ local v123 = vector.create(1, 2, 3)
 assert(v12.x == 1 and v12.y == 2 and v12.z == 0)
 assert(v123.x == 1 and v123.y == 2 and v123.z == 3)
 
+-- ServerLua: create alias
+local v123_mod = vector(1, 2, 3)
+assert(v123 == v123_mod)
+
 -- testing 'dot' with error handling and different call kinds to mostly check details in the codegen
 assert(vector.dot(vector.create(1, 2, 4), vector.create(5, 6, 7)) == 45)
 assert(ecall(function() vector.dot(vector.create(1, 2, 4)) end) == "missing argument #2 to 'dot' (vector expected)")

@@ -1,6 +1,8 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include <set>
+
 #include "Luau/Bytecode.h"
 #include "Luau/DenseHash.h"
 #include "Luau/StringUtils.h"
@@ -53,6 +55,7 @@ public:
 
     int32_t addConstantNil();
     int32_t addConstantBoolean(bool value);
+    int32_t addConstantInteger(int32_t value);
     int32_t addConstantNumber(double value);
     int32_t addConstantVector(float x, float y, float z, float w);
     int32_t addConstantString(StringRef value);
@@ -158,12 +161,15 @@ private:
             Type_Import,
             Type_Table,
             Type_Closure,
+            // ServerLua: added by us for constant integer support.
+            Type_Integer,
         };
 
         Type type;
         union
         {
             bool valueBoolean;
+            int32_t valueInteger;
             double valueNumber;
             float valueVector[4];
             unsigned int valueString; // index into string table
@@ -203,6 +209,8 @@ private:
         std::string dumpname;
         std::vector<int> dumpinstoffs;
         std::string typeinfo;
+        // ServerLua: Relative yieldpoints
+        std::set<int> yieldpoints;
     };
 
     struct DebugLocal
@@ -310,6 +318,8 @@ private:
     void validateInstructions() const;
     void validateVariadic() const;
 
+    void tagYieldPoints();
+
     std::string dumpCurrentFunction(std::vector<int>& dumpinstoffs) const;
     void dumpConstant(std::string& result, int k) const;
     void dumpInstruction(const uint32_t* opcode, std::string& output, int targetLabel) const;
@@ -319,6 +329,8 @@ private:
     void writeStringTable(std::string& ss) const;
 
     int32_t addConstant(const ConstantKey& key, const Constant& value);
+    // ServerLua: we need this to be public!
+public:
     unsigned int addStringTableEntry(StringRef value);
 
     const char* tryGetUserdataTypeName(LuauBytecodeType type) const;

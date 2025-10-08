@@ -20,6 +20,7 @@ struct Constant
         Type_Number,
         Type_Vector,
         Type_String,
+        Type_Integer,
     };
 
     Type type = Type_Unknown;
@@ -31,6 +32,7 @@ struct Constant
         double valueNumber;
         float valueVector[4];
         const char* valueString = nullptr; // length stored in stringLength
+        int32_t valueInteger;
     };
 
     bool isTruthful() const

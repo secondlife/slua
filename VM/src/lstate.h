@@ -170,11 +170,20 @@ typedef struct global_State
 
     lua_Alloc frealloc;   // function to reallocate memory
     void* ud;            // auxiliary data to `frealloc'
+    lua_State* constsstate;
+    // ServerLua: This keeps tracks of user allocs that aren't currently
+    //   rooted, but will be soon if the function succeeds. Only relevant
+    //   when code makes multiple allocs in a row in a user memcat without
+    //   a reference being reachable from the root.
+    size_t unrooteduserallocs;
 
 
     uint8_t currentwhite;
     uint8_t gcstate; // state of garbage collector
 
+    // ServerLua: should we do an interrupt check after the current LOP_CALL?
+    // really only relevant for C closures, since they have no LOP_RETURN.
+    uint8_t calltailinterruptcheck;
 
     GCObject* gray;      // list of gray objects
     GCObject* grayagain; // list of objects to be traversed atomically
@@ -199,7 +208,7 @@ typedef struct global_State
     struct lua_State* mainthread;
     UpVal uvhead;                                    // head of double-linked list of all open upvalues
     struct LuaTable* mt[LUA_T_COUNT];                   // metatables for basic types
-    TString* ttname[LUA_T_COUNT];       // names for basic types
+    TString* ttname[LUA_TDEADKEY];       // names for basic types
     TString* tmname[TM_N];             // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr
@@ -219,13 +228,18 @@ typedef struct global_State
     void (*udatagc[LUA_UTAG_LIMIT])(lua_State*, void*); // for each userdata tag, a gc callback to be called immediately before freeing memory
     LuaTable* udatamt[LUA_UTAG_LIMIT]; // metatables for tagged userdata
 
-    TString* lightuserdataname[LUA_LUTAG_LIMIT]; // names for tagged lightuserdata
+    TString* lightuserdataname[LU_TAG_COUNT]; // names for tagged lightuserdata
 
     GCStats gcstats;
 
 #ifdef LUAI_GCMETRICS
     GCMetrics gcmetrics;
 #endif
+    // ServerLua: byte allocation limit for memcats above 1,
+    // memcat "1" is treated as the "garbage" memcat, and everything in
+    // it is immediately collectible. 0 is the "system" memcat, and is
+    // used for all allocations that users don't directly control.
+    uint32_t memcatbyteslimit;
 } global_State;
 // clang-format on
 

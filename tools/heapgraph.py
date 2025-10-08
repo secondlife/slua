@@ -74,7 +74,7 @@ for name, addr in dump["roots"].items():
 while offset < len(queue):
     addr, node = queue[offset]
     offset += 1
-    if addr in visited:
+    if addr in visited or addr not in heap:
         continue
 
     visited.add(addr)
@@ -90,7 +90,7 @@ while offset < len(queue):
         weakkey = False
         weakval = False
 
-        if "metatable" in obj:
+        if "metatable" in obj and obj["metatable"] in heap:
             modemt = getkey(heap, heap[obj["metatable"]], "__mode")
             if modemt:
                 weakkey = "k" in modemt
@@ -112,7 +112,7 @@ while offset < len(queue):
 
         for a in obj.get("array", []):
             queue.append((a, node))
-        if "metatable" in obj:
+        if "metatable" in obj and obj["metatable"] in heap:
             queue.append((obj["metatable"], node.child("__meta")))
     elif obj["type"] == "function":
         queue.append((obj["env"], node.child("__env")))

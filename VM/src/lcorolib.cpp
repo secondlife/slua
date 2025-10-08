@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+#define lcorolib_c
 #include "lualib.h"
 
 #include "ldebug.h"
@@ -22,7 +23,7 @@ static int costatus(lua_State* L)
 static int auxresume(lua_State* L, lua_State* co, int narg)
 {
     // error handling for edge cases
-    if (co->status != LUA_YIELD)
+    if (co->status != LUA_YIELD && co->status != LUA_BREAK)
     {
         int status = lua_costatus(L, co);
         if (status != LUA_COSUS)
@@ -132,11 +133,20 @@ static int coresumecont(lua_State* L, int status)
     lua_State* co = lua_tothread(L, 1);
     luaL_argexpected(L, co, 1, "thread");
 
+    // ServerLua: This continuation might be for a thread that was in break state, try resuming it
+    int r;
+    if (co->status == LUA_BREAK)
+    {
+        // We don't call auxresumecont in this case because it does basically the same
+        // thing as auxresume already does at the end.
+        r = auxresume(L, co, 0);
+    }
+    else
+        r = auxresumecont(L, co);
+
     // if coroutine still hasn't yielded after the break, break current thread again
     if (co->status == LUA_BREAK)
         return interruptThread(L, co);
-
-    int r = auxresumecont(L, co);
 
     return coresumefinish(L, r);
 }
@@ -172,11 +182,20 @@ static int auxwrapcont(lua_State* L, int status)
 {
     lua_State* co = lua_tothread(L, lua_upvalueindex(1));
 
+    // ServerLua: This continuation might be for a thread that was in break state, try resuming it
+    int r;
+    if (co->status == LUA_BREAK)
+    {
+        // We don't call auxresumecont in this case because it does basically the same
+        // thing as auxresume already does at the end.
+        r = auxresume(L, co, 0);
+    }
+    else
+        r = auxresumecont(L, co);
+
     // if coroutine still hasn't yielded after the break, break current thread again
     if (co->status == LUA_BREAK)
         return interruptThread(L, co);
-
-    int r = auxresumecont(L, co);
 
     return auxwrapfinish(L, r);
 }
@@ -193,7 +212,7 @@ static int cowrap(lua_State* L)
 {
     cocreate(L);
 
-    lua_pushcclosurek(L, auxwrapy, NULL, 1, auxwrapcont);
+    lua_pushcclosurek(L, auxwrapy, "<wrapped>", 1, auxwrapcont);
     return 1;
 }
 

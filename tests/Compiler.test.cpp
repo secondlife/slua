@@ -28,6 +28,10 @@ using namespace Luau;
 
 static void luauLibraryConstantLookup(const char* library, const char* member, Luau::CompileConstant* constant)
 {
+    // ServerLua: We support global constant lookups
+    if (library == nullptr)
+        return;
+
     // While 'vector' is built-in, because of LUA_VECTOR_SIZE VM configuration, compiler cannot provide the right default by itself
     if (strcmp(library, "vector") == 0)
     {

@@ -1,5 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+#define ltablib_c
+
 #include "lualib.h"
 
 #include "lapi.h"
@@ -107,7 +109,7 @@ static void moveelements(lua_State* L, int srct, int dstt, int f, int e, int t)
             {
                 TValue* s = &srcarray[f + i - 1];
                 TValue* d = &dstarray[t + i - 1];
-                setobj2t(L, d, s);
+                setobj2t(L, dst, d, s);
             }
         }
         else
@@ -116,7 +118,7 @@ static void moveelements(lua_State* L, int srct, int dstt, int f, int e, int t)
             {
                 TValue* s = &srcarray[(f + i) - 1];
                 TValue* d = &dstarray[(t + i) - 1];
-                setobj2t(L, d, s);
+                setobj2t(L, dst, d, s);
             }
         }
 
@@ -277,7 +279,7 @@ static int tpack(lua_State* L)
     for (int i = 0; i < n; ++i)
     {
         TValue* e = &t->array[i];
-        setobj2t(L, e, L->base + i);
+        setobj2t(L, t, e, L->base + i);
     }
 
     // t.n = number of elements
@@ -342,8 +344,8 @@ inline void sort_swap(lua_State* L, LuaTable* t, int i, int j)
     // no barrier required because both elements are in the array before and after the swap
     TValue temp;
     setobj2s(L, &temp, &arr[i]);
-    setobj2t(L, &arr[i], &arr[j]);
-    setobj2t(L, &arr[j], &temp);
+    setobj2t(L, t, &arr[i], &arr[j]);
+    setobj2t(L, t, &arr[j], &temp);
 }
 
 inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred)
@@ -509,7 +511,7 @@ static int tcreate(lua_State* L)
         for (int i = 0; i < size; ++i)
         {
             TValue* e = &t->array[i];
-            setobj2t(L, e, v);
+            setobj2t(L, t, e, v);
         }
     }
     else
@@ -557,6 +559,8 @@ static int tclear(lua_State* L)
         luaG_readonlyerror(L);
 
     luaH_clear(tt);
+    // ServerLua: Release the iterorder array if there was one
+    luaH_overrideiterorder(L, tt, 0);
     return 0;
 }
 

@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <istream>
+#include <ostream>
 
 #include "luaconf.h"
 
@@ -12,6 +14,36 @@
 
 // option for multiple returns in `lua_pcall' and `lua_call'
 #define LUA_MULTRET (-1)
+
+// ServerLua: LSL support. Should only have non script-specific entries since
+// this will be shared across all scripts within a particular VM!
+#define LUA_SL_IDENTIFIER 0xd34d0000
+#define LUA_SL_IDENTIFIER_MASK 0xFFff0000
+#define LUA_LSL_IDENTIFIER 0xd34df007
+
+struct lua_State;
+
+typedef bool (*lua_mayCallHandleEventCallback)(lua_State *L);
+typedef bool (*lua_eventHandlerRegistrationCallback)(lua_State *L, const char *event_name, bool registered);
+
+// This is meant to be shared between instances of the same script and should
+// NOT have any instance-specific data on it!
+typedef struct lua_SLRuntimeState
+{
+    unsigned int slIdentifier = LUA_LSL_IDENTIFIER;
+    int quatMT = -1;
+    int vecMT = -1;
+    int uuidMT = -1;
+    int uuidWeakTab = -1;
+    int uuidCompressedWeakTab = -1;
+    int detectedEventMT = -1;
+    int eventHandlerMT = -1;
+    lua_mayCallHandleEventCallback mayCallHandleEventCb = nullptr;
+    lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
+} lua_SLRuntimeState;
+
+#define LU_TAG_LSL_INTEGER 100
+
 
 /*
 ** pseudo-indices
@@ -225,6 +257,8 @@ LUA_API int lua_setfenv(lua_State* L, int idx);
 ** `load' and `call' functions (load and run Luau bytecode)
 */
 LUA_API int luau_load(lua_State* L, const char* chunkname, const char* data, size_t size, int env);
+// ServerLua: Do an interrupt check on the tail of the current LOP_CALL instruction handler.
+LUA_API void luau_interruptoncalltail(lua_State *L);
 LUA_API void lua_call(lua_State* L, int nargs, int nresults);
 LUA_API int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc);
 
@@ -300,7 +334,13 @@ LUA_API int lua_gc(lua_State* L, int what, int data);
 */
 
 LUA_API void lua_setmemcat(lua_State* L, int category);
+// ServerLua: For getting the memcat
+LUA_API int lua_getmemcat(lua_State* L);
 LUA_API size_t lua_totalbytes(lua_State* L, int category);
+
+// ServerLua: used for setting a memcat byte size limit for memcat IDs above 1.
+// setting a limit of "0" disables the memory limit.
+LUA_API void lua_setmemcatbyteslimit(lua_State* L, lua_Unsigned bytes_limit);
 
 /*
 ** miscellaneous functions
@@ -338,6 +378,26 @@ LUA_API void lua_cleartable(lua_State* L, int idx);
 LUA_API void lua_clonetable(lua_State* L, int idx);
 
 LUA_API lua_Alloc lua_getallocf(lua_State* L, void** ud);
+
+// ServerLua: GC additions
+LUA_API void lua_fixallcollectable(lua_State *L);
+LUA_API void lua_graphheap(lua_State *L, const char *out);
+LUA_API void lua_dumpgc(lua_State *L, const char *out);
+LUA_API void lua_gcvalidate(lua_State *L);
+// Add utility for marking something on the stack as being un-collectable
+// without using the reftable. The reftable is for things that might be collectible
+// at some point in the future determined by the embedder, this is for things that
+// will _never_ be collectible until the VM shuts down.
+LUA_API void lua_fixvalue(lua_State* L, int idx);
+// Whether the object is fixed or not a collectable type
+LUA_API bool lua_iscollectable(lua_State *L, int idx);
+// Use another state as a source for constants
+LUA_API void lua_useconstsstate(lua_State* L, lua_State * constsL);
+// Get how much "real" memory is used by pages.
+LUA_API int lua_totalmemoverhead(lua_State *L);
+// Gets the total size of all user-allocated objects reachable from a user thread.
+LUA_API size_t lua_userthreadsize(lua_State *L);
+
 
 /*
 ** reference system, can be used to pin objects
@@ -389,6 +449,98 @@ LUA_API void lua_unref(lua_State* L, int ref);
 
 #define lua_pushfstring(L, fmt, ...) lua_pushfstringL(L, fmt, ##__VA_ARGS__)
 
+
+/*
+** =======================================================================
+** Ares persistence
+** =======================================================================
+*/
+
+#if defined(eris_c)
+/* Utility macro for populating the perms table with internal C functions. */
+#define eris_persist_static(lib, fn) eris_persist_static_cont(lib, fn, doesntmatter)
+# define eris_persist_static_cont(lib, fn, cont)\
+    extern lua_CFunction __perm_##lib##_##fn;   \
+    extern lua_Continuation __perm_##lib##_##fn##_cont; \
+    if (forUnpersist) {\
+      lua_pushstring(L, "__eris." #lib "_" #fn);      \
+      /* upvalues on the closure are irrelevant since we'll never actually call it */ \
+      lua_pushcclosurek(L, *__perm_##lib##_##fn, #fn, 0, *__perm_##lib##_##fn##_cont);\
+    }\
+    else {\
+      lua_pushcclosurek(L, *__perm_##lib##_##fn, #fn, 0, *__perm_##lib##_##fn##_cont);\
+      lua_pushstring(L, "__eris." #lib "_" #fn);\
+    }\
+    lua_rawset(L, -3);
+#else
+/* Utility macro to export internal C functions to eris. */
+# define eris_persist_static(lib, fn)\
+    static int fn (lua_State *L);          \
+    lua_CFunction __perm_##lib##_##fn = fn;     \
+    lua_Continuation __perm_##lib##_##fn##_cont = nullptr;
+# define eris_persist_static_cont(lib, fn, cont)\
+    static int fn (lua_State *L);          \
+    static int cont (lua_State *L, int idx);\
+    lua_CFunction __perm_##lib##_##fn = fn;     \
+    lua_Continuation __perm_##lib##_##fn##_cont = cont;
+#endif
+
+#if defined(eris_c)
+/* Functions in Lua libraries used to access C functions we need to add to the
+ * permanents table to fully support yielded coroutines. */
+static void populateperms(lua_State *L, bool forUnpersist)
+{
+#endif
+#if defined(eris_c) || defined(lstrlib_c)
+    eris_persist_static(strlib, gmatch_aux)
+#endif
+#if defined(eris_c) || defined(lbaselib_c)
+    // these aren't continuations, these are upvalues that may end up on
+    // the call stack in their own right, but can't be called directly!
+    eris_persist_static(baselib, luaB_inext)
+    eris_persist_static(baselib, luaB_next)
+#endif
+#if defined(eris_c) || defined(lcorolib_c)
+    // closure created by coroutine.wrap()
+    eris_persist_static_cont(corolib, auxwrapy, auxwrapcont)
+#endif
+#if defined(eris_c) || defined(llsl_c)
+    eris_persist_static_cont(lsllib, lsl_llevents_handle_event_init, lsl_llevents_handle_event_cont)
+    eris_persist_static_cont(lsllib, lsl_llevents_once_wrapper, lsl_llevents_once_wrapper_cont)
+#endif
+#if defined(eris_c)
+}
+#endif
+
+#undef eris_persist_static
+#undef eris_persist_static_cont
+
+LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
+
+LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat);
+LUA_API int eris_serialize_thread(lua_State *Lforker, lua_State *L);
+LUA_API void eris_release_fork(lua_State *LFork);
+LUA_API void eris_set_compile_func(void (*compile_func)(lua_State*, int));
+LUA_API void eris_dump(lua_State* L, std::ostream *writer);
+LUA_API void eris_set_setting(lua_State *L, const char *name, int value);
+LUA_API void eris_populate_perms(lua_State *L, bool for_unpersist);
+LUA_API void eris_register_perms(lua_State *L, bool for_unpersist);
+
+/**
+ * This provides an interface to Eris' unpersist functionality for reading
+ * in an arbitrary way, using a reader.
+ *
+ * When called, the stack in 'L' must look like this:
+ * 1: perms:table
+ *
+ * 'reader' is the reader stream used to read all data
+ *
+ * The result of the operation will be pushed onto the stack.
+ *
+ * [-0, +1, e]
+ */
+LUA_API void eris_undump(lua_State* L, std::istream *reader);
+
 /*
 ** {======================================================================
 ** Debug API
@@ -407,6 +559,9 @@ LUA_API const char* lua_getlocal(lua_State* L, int level, int n);
 LUA_API const char* lua_setlocal(lua_State* L, int level, int n);
 LUA_API const char* lua_getupvalue(lua_State* L, int funcindex, int n);
 LUA_API const char* lua_setupvalue(lua_State* L, int funcindex, int n);
+// Ares: get a pointer to the actual upvalue address rather than
+// pushing its value onto the stack
+LUA_API void* lua_getupvalueid(lua_State* L, int funcindex, int n);
 
 LUA_API void lua_singlestep(lua_State* L, int enabled);
 LUA_API int lua_breakpoint(lua_State* L, int funcindex, int line, int enabled);
@@ -417,6 +572,9 @@ LUA_API void lua_getcoverage(lua_State* L, int funcindex, void* context, lua_Cov
 
 // Warning: this function is not thread-safe since it stores the result in a shared global array! Only use for debugging.
 LUA_API const char* lua_debugtrace(lua_State* L);
+
+// ServerLua: for debugging!
+LUA_API void lua_dumpstack(lua_State *L);
 
 struct lua_Debug
 {
@@ -457,6 +615,8 @@ struct lua_Callbacks
     void (*debugprotectederror)(lua_State* L);           // gets called when protected call results in an error
 
     void (*onallocate)(lua_State* L, size_t osize, size_t nsize); // gets called when memory is allocated
+    // gets called before memory is allocated, return non-zero to fail the alloc. Only called for allocs in user memcats.
+    int (*beforeallocate)(lua_State* L, size_t osize, size_t nsize);
 };
 typedef struct lua_Callbacks lua_Callbacks;
 

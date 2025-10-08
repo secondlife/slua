@@ -3,39 +3,69 @@ name: build
 on:
   push:
     branches:
-      - 'master'
+      - 'integer_stuff'
     paths-ignore:
       - 'docs/**'
       - 'papers/**'
       - 'rfcs/**'
       - '*.md'
+      - '*.bt'
   pull_request:
     paths-ignore:
       - 'docs/**'
       - 'papers/**'
       - 'rfcs/**'
       - '*.md'
+      - '*.bt'
 
 jobs:
   unix:
     strategy:
       matrix:
-        os: [{name: ubuntu, version: ubuntu-latest}, {name: macos, version: macos-latest}, {name: macos-arm, version: macos-14}]
+        include:
+          - os: {name: macos, version: macos-13}
+            # MacOS runners really don't like the increased memory use associated with stack hardening tests
+            cflags: ""
+            addrsize: "64"
+          - os: {name: ubuntu, version: ubuntu-latest}
+            addrsize: "64"
+            cflags: "-DHARDSTACKTESTS=1"
+          - os: {name: ubuntu-32bit, version: ubuntu-latest}
+            addrsize: "32"
+            cflags: "-msse3 -mfpmath=sse"
     name: ${{matrix.os.name}}
     runs-on: ${{matrix.os.version}}
     steps:
     - uses: actions/checkout@v1
     - name: work around ASLR+ASAN compatibility
       run: sudo sysctl -w vm.mmap_rnd_bits=28
-      if: matrix.os.name == 'ubuntu'
+      if: matrix.os.name == 'ubuntu' || matrix.os.name == 'ubuntu-32bit'
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: "3.11"
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
+    - name: Autobuild install
+      env:
+        AUTOBUILD_GITHUB_TOKEN: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
+      run: |
+        autobuild install -A${{matrix.addrsize}}
+    - name: install 32-bit dependencies
+      if: matrix.os.name == 'ubuntu-32bit'
+      run: |
+        sudo apt-get update
+        sudo apt-get install g++-multilib
     - name: make tests
       run: |
-        make -j2 config=sanitize werror=1 native=1 luau-tests
+        LDFLAGS=-m${{matrix.addrsize}} CXXFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" CFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" make -j4 config=sanitize ${{ matrix.addrsize == '64' && 'native=1' || ''}} luau-tests
     - name: run tests
       run: |
         ./luau-tests
         ./luau-tests --fflags=true
     - name: run extra conformance tests
+      if: matrix.os.name != 'ubuntu-32bit'
       run: |
         ./luau-tests -ts=Conformance -O2
         ./luau-tests -ts=Conformance -O2 --fflags=true
@@ -45,45 +75,57 @@ jobs:
         ./luau-tests -ts=Conformance --codegen -O2 --fflags=true
     - name: make cli
       run: |
-         make -j2 config=sanitize werror=1 luau luau-analyze luau-compile # match config with tests to improve build time
+         LDFLAGS=-m${{matrix.addrsize}} CXXFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}} -DHARDSTACKTESTS=1" CFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" make -j4 config=sanitize ${{ matrix.addrsize == '64' && 'native=1' || ''}} werror=1 luau luau-analyze luau-compile # match config with tests to improve build time
          ./luau tests/conformance/assert.luau
          ./luau-analyze tests/conformance/assert.luau
          ./luau-compile tests/conformance/assert.luau
 
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       matrix:
-        arch: [Win32, x64]
+        arch: [x64]
     steps:
-    - uses: actions/checkout@v1
-    - name: cmake configure
-      run: cmake . -A ${{matrix.arch}} -DLUAU_WERROR=ON -DLUAU_NATIVE=ON
-    - name: cmake build
-      run: cmake --build . --target Luau.UnitTest Luau.Conformance --config Debug
-    - name: run tests
-      shell: bash # necessary for fail-fast
-      run: |
-        Debug/Luau.UnitTest.exe
-        Debug/Luau.Conformance.exe
-        Debug/Luau.UnitTest.exe --fflags=true
-        Debug/Luau.Conformance.exe --fflags=true
-    - name: run extra conformance tests
-      shell: bash # necessary for fail-fast
-      run: |
-        Debug/Luau.Conformance.exe -O2
-        Debug/Luau.Conformance.exe -O2 --fflags=true
-        Debug/Luau.Conformance.exe --codegen
-        Debug/Luau.Conformance.exe --codegen --fflags=true
-        Debug/Luau.Conformance.exe --codegen -O2
-        Debug/Luau.Conformance.exe --codegen -O2 --fflags=true
-    - name: cmake cli
-      shell: bash # necessary for fail-fast
-      run: |
-        cmake --build . --target Luau.Repl.CLI Luau.Analyze.CLI Luau.Compile.CLI --config Debug # match config with tests to improve build time
-        Debug/luau tests/conformance/assert.luau
-        Debug/luau-analyze tests/conformance/assert.luau
-        Debug/luau-compile tests/conformance/assert.luau
+      - uses: actions/checkout@v1
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
+      - name: Autobuild install
+        env:
+          AUTOBUILD_GITHUB_TOKEN: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
+        run: |
+          autobuild install -A64
+      - name: cmake configure
+        run: cmake . -A x64 -DLUAU_WERROR=OFF -DLUAU_NATIVE=ON
+      - name: cmake build
+        run: cmake --build . --target Luau.UnitTest Luau.Conformance --config RelWithDebInfo
+      - name: run tests
+        shell: bash # necessary for fail-fast
+        run: |
+          RelWithDebInfo/Luau.UnitTest.exe
+          RelWithDebInfo/Luau.Conformance.exe
+          RelWithDebInfo/Luau.UnitTest.exe --fflags=true
+          RelWithDebInfo/Luau.Conformance.exe --fflags=true
+      - name: run extra conformance tests
+        shell: bash # necessary for fail-fast
+        run: |
+          RelWithDebInfo/Luau.Conformance.exe -O2
+          RelWithDebInfo/Luau.Conformance.exe -O2 --fflags=true
+          RelWithDebInfo/Luau.Conformance.exe --codegen
+          RelWithDebInfo/Luau.Conformance.exe --codegen --fflags=true
+          RelWithDebInfo/Luau.Conformance.exe --codegen -O2
+          RelWithDebInfo/Luau.Conformance.exe --codegen -O2 --fflags=true
+      - name: cmake cli
+        shell: bash # necessary for fail-fast
+        run: |
+          cmake --build . --target Luau.Repl.CLI Luau.Analyze.CLI Luau.Compile.CLI --config RelWithDebInfo # match config with tests to improve build time
+          RelWithDebInfo/luau tests/conformance/assert.luau
+          RelWithDebInfo/luau-analyze tests/conformance/assert.luau
+          RelWithDebInfo/luau-compile tests/conformance/assert.luau
 
   coverage:
     runs-on: ubuntu-22.04
@@ -92,30 +134,106 @@ jobs:
     - name: install
       run: |
         sudo apt install llvm
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: "3.11"
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
+    - name: Autobuild install
+      env:
+        AUTOBUILD_GITHUB_TOKEN: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
+      run: |
+        autobuild install -A64
     - name: make coverage
       run: |
         CXX=clang++ make -j2 config=coverage native=1 coverage
-    - name: upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./coverage.info
-        token: ${{ secrets.CODECOV_TOKEN }}
+#    - name: upload coverage
+#      uses: codecov/codecov-action@v3
+#      with:
+#        files: ./coverage.info
+#        token: ${{ secrets.CODECOV_TOKEN }}
 
-  web:
-    runs-on: ubuntu-latest
+  package_dryrun_32bit:
+    name: Package (32-bit)
+    runs-on: ubuntu-22.04
+    container:
+      image: debian:buster
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    continue-on-error: false
     steps:
-    - uses: actions/checkout@v1
-    - uses: actions/checkout@v2
-      with:
-        repository: emscripten-core/emsdk
-        path: emsdk
-    - name: emsdk install
-      run: |
-        cd emsdk
-        ./emsdk install latest
-        ./emsdk activate latest
-    - name: make
-      run: |
-        source emsdk/emsdk_env.sh
-        emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
-        make -j2 Luau.Web
+      - name: install dependencies
+        run: |
+          # buster is out-of-support, point the apt lists at the archive
+          sed -i s/deb.debian.org/archive.debian.org/g /etc/apt/sources.list
+          sed -i s/security.debian.org/archive.debian.org/g /etc/apt/sources.list
+
+          # First, enable multiarch in dpkg/apt land
+          dpkg --add-architecture i386
+
+          # Get both updated amd64 and 'new to us' i386 packages
+          apt-get update
+          apt-get upgrade -y
+
+          # 64-bit tools.  The debian:buster image has very, very old packages in it.
+          # The 'git' it includes does not support the recursive git submodule mode of
+          # the various checkout actions so update it to 2.18 or better.
+          apt-get install -y git jq python3-pip gettext bison mawk
+
+          # Multiarch tools and libraries.  Get the compiler and library tooling needed
+          # for i386 and amd64 building.
+          apt-get install -y gcc-8-multilib gcc-8-base:amd64 gcc-8-base:i386 libgcc-8-dev:amd64 libgcc-8-dev:i386 libgcc1:amd64 libgcc1:i386
+          apt-get install -y libglib2.0-0:amd64 libglib2.0-0:i386 libglib2.0-bin libglib2.0-data libglib2.0-dev:amd64 libglib2.0-dev:i386 libglib2.0-dev-bin
+          apt-get install -y libstdc++-8-dev:amd64 libstdc++-8-dev:i386 libstdc++6:amd64 libstdc++6:i386 zlib1g:amd64 zlib1g:i386 zlib1g-dev:amd64 zlib1g-dev:i386
+          apt-get install -y build-essential libpthread-stubs0-dev clang-11
+          apt-get install -y gcc-multilib g++-multilib cmake
+
+          # Finally, autobuild
+          pip3 --no-cache-dir install pydot==1.4.2 pyzstd==0.15.10 autobuild
+
+      - name: configure tools
+        run: |
+          # Don't muck with line endings and make things dirty on checkout
+          git config --global core.autocrlf false
+          # There's gonna be a lot of legitimate dubious ownership
+          git config --global --add safe.directory '*'
+
+          update-alternatives --install /usr/bin/cc cc /usr/bin/clang-11 100
+          update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++-11 100
+
+      - uses: actions/checkout@v3
+
+      - uses: secondlife/action-autobuild@v5
+        with:
+          addrsize: 32
+          token: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
+          setup-python: false
+          setup-autobuild: false
+          build-variables-ref: 'master'
+
+#    - name: upload coverage
+#      uses: codecov/codecov-action@v3
+#      with:
+#        files: ./coverage.info
+#        token: ${{ secrets.CODECOV_TOKEN }}
+
+#  web:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v1
+#      - uses: actions/checkout@v2
+#        with:
+#          repository: emscripten-core/emsdk
+#          path: emsdk
+#      - name: emsdk install
+#        run: |
+#          cd emsdk
+#          ./emsdk install latest
+#          ./emsdk activate latest
+#      - name: make
+#        run: |
+#          source emsdk/emsdk_env.sh
+#          emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
+#          make -j2 Luau.Web

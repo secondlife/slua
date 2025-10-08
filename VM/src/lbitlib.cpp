@@ -4,6 +4,8 @@
 
 #include "lcommon.h"
 #include "lnumutils.h"
+// ServerLua: for luaSL_lsl_type
+#include "llsl.h"
 
 #define ALLONES ~0u
 #define NBITS int(8 * sizeof(unsigned))
@@ -15,6 +17,37 @@
 #define mask(n) (~((ALLONES << 1) << ((n)-1)))
 
 typedef unsigned b_uint;
+
+// ServerLua: Check that everything passed is an integer type. If so, an integer is returned
+//  regardless of VM mode.
+static bool all_lsl_int(lua_State *L)
+{
+    int n = lua_gettop(L);
+    if (n == 0)
+        return false;
+
+    for (int i = 1; i<= n; i++)
+    {
+        if (luaSL_lsl_type(L, i) != (uint8_t)LSLIType::LST_INTEGER)
+            return false;
+    }
+    return true;
+}
+
+static void push_int_result(lua_State *L, unsigned int result)
+{
+    if (all_lsl_int(L))
+    {
+        luaSL_pushinteger(L, result);
+    }
+    else
+    {
+        lua_pushunsigned(L, result);
+    }
+}
+
+// Stupid hack, but helps prevent diff drift from changing the file too much.
+#define lua_pushunsigned push_int_result
 
 static b_uint andaux(lua_State* L)
 {

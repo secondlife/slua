@@ -62,6 +62,13 @@ target_sources(Luau.Compiler PRIVATE
     Compiler/src/ValueTracking.h
 )
 
+if (LUAU_USE_TAILSLIDE)
+    target_sources(Luau.Compiler PRIVATE
+        Compiler/include/Luau/LSLCompiler.h
+        Compiler/src/LSLCompiler.cpp
+    )
+endif()
+
 # Luau.Config Sources
 target_sources(Luau.Config PRIVATE
     Config/include/Luau/Config.h
@@ -341,7 +348,9 @@ target_sources(Luau.VM PRIVATE
     VM/include/lua.h
     VM/include/luaconf.h
     VM/include/lualib.h
+    VM/include/llsl.h
 
+    VM/src/ares.cpp
     VM/src/lapi.cpp
     VM/src/laux.cpp
     VM/src/lbaselib.cpp
@@ -356,6 +365,8 @@ target_sources(Luau.VM PRIVATE
     VM/src/lfunc.cpp
     VM/src/lgc.cpp
     VM/src/lgcdebug.cpp
+    VM/src/lgcgraph.cpp
+    VM/src/lgctraverse.cpp
     VM/src/linit.cpp
     VM/src/lmathlib.cpp
     VM/src/lmem.cpp
@@ -376,6 +387,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/lvmload.cpp
     VM/src/lvmutils.cpp
 
+    VM/src/ares.h
     VM/src/lapi.h
     VM/src/lbuffer.h
     VM/src/lbuiltins.h
@@ -385,6 +397,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/ldo.h
     VM/src/lfunc.h
     VM/src/lgc.h
+    VM/src/lgcgraph.h
     VM/src/lmem.h
     VM/src/lnumutils.h
     VM/src/lobject.h
@@ -394,6 +407,28 @@ target_sources(Luau.VM PRIVATE
     VM/src/ltm.h
     VM/src/ludata.h
     VM/src/lvm.h
+
+    # ServerLua: LSL specific stuff
+    VM/src/llsl.cpp
+    VM/src/lll.cpp
+    VM/src/lllbase64.cpp
+    VM/src/mono_floats.cpp
+    VM/src/mono_floats.h
+    VM/src/mono_strings.cpp
+    VM/src/mono_strings.h
+
+    # ServerLua: CJson
+    VM/src/cjson/dtoa_config.h
+    VM/src/cjson/fpconv.cpp
+    VM/src/cjson/fpconv.h
+    VM/src/cjson/lua_cjson.cpp
+    VM/src/cjson/dtoa_config.h
+    VM/src/cjson/strbuf.cpp
+    VM/src/cjson/strbuf.h
+
+    # ServerLua: base64-related routines from APR
+    VM/src/apr/apr_base64.cpp
+    VM/src/apr/apr_base64.h
 )
 
 target_sources(isocline PRIVATE
@@ -406,10 +441,12 @@ target_sources(Luau.CLI.lib PRIVATE
     CLI/include/Luau/FileUtils.h
     CLI/include/Luau/Flags.h
     CLI/include/Luau/VfsNavigator.h
+    CLI/include/Luau/LSLBuiltins.h
 
     CLI/src/FileUtils.cpp
     CLI/src/Flags.cpp
     CLI/src/VfsNavigator.cpp
+    CLI/src/LSLBuiltins.cpp
 )
 
 if(TARGET Luau.Repl.CLI)
@@ -545,6 +582,12 @@ if(TARGET Luau.UnitTest)
         tests/VecDeque.test.cpp
         tests/VisitType.test.cpp
         tests/main.cpp)
+
+    if (LUAU_USE_TAILSLIDE)
+        target_sources(Luau.UnitTest PRIVATE
+            tests/LSLCompiler.test.cpp
+        )
+    endif()
 endif()
 
 if(TARGET Luau.Conformance)
@@ -556,7 +599,14 @@ if(TARGET Luau.Conformance)
         tests/Conformance.test.cpp
         tests/IrLowering.test.cpp
         tests/SharedCodeAllocator.test.cpp
+        tests/SLConformance.test.cpp
         tests/main.cpp)
+
+    if (LUAU_USE_TAILSLIDE)
+        target_sources(Luau.Conformance PRIVATE
+            tests/LSL.test.cpp
+        )
+    endif()
 endif()
 
 if(TARGET Luau.CLI.Test)

@@ -19,10 +19,13 @@ typedef struct LG
     global_State g;
 } LG;
 
-static void stack_init(lua_State* L1, lua_State* L)
+static void stack_init(lua_State* L1, lua_State* L, bool track_allocs)
 {
     // initialize CallInfo array
     L1->base_ci = luaM_newarray(L, BASIC_CI_SIZE, CallInfo, L1->memcat);
+    // ServerLua: keep track of these allocs if we're being called by luaE_newthread()
+    if (track_allocs)
+        LUAU_MAYBE_TRACK_UNROOTED(L, sizeof(CallInfo) * BASIC_CI_SIZE);
     L1->ci = L1->base_ci;
     L1->size_ci = BASIC_CI_SIZE;
     L1->end_ci = L1->base_ci + L1->size_ci - 1;
@@ -53,7 +56,7 @@ static void freestack(lua_State* L, lua_State* L1)
 static void f_luaopen(lua_State* L, void* ud)
 {
     global_State* g = L->global;
-    stack_init(L, L);                             // init stack
+    stack_init(L, L, false);                      // init stack
     L->gt = luaH_new(L, 0, 2);                    // table of globals
     sethvalue(L, registry(L), luaH_new(L, 0, 2)); // registry
     luaS_resize(L, LUA_MINSTRTABSIZE);            // initial size of string table
@@ -109,11 +112,16 @@ static void close_state(lua_State* L)
 
 lua_State* luaE_newthread(lua_State* L)
 {
+    // ServerLua: Keep track of allocs we make relating to creating this while the
+    //   thread itself is unrooted.
+    LUAU_TRACK_UNROOTED_ALLOCS();
+
     lua_State* L1 = luaM_newgco(L, lua_State, sizeof(lua_State), L->activememcat);
+    LUAU_MAYBE_TRACK_UNROOTED(L, sizeof(lua_State));
     luaC_init(L, L1, LUA_TTHREAD);
     preinit_state(L1, L->global);
     L1->activememcat = L->activememcat; // inherit the active memory category
-    stack_init(L1, L);                  // init stack
+    stack_init(L1, L, true);            // init stack
     L1->gt = L->gt;                     // share table of globals
     L1->singlestep = L->singlestep;
     LUAU_ASSERT(iswhite(obj2gco(L1)));
@@ -175,6 +183,10 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     preinit_state(L, g);
     g->frealloc = f;
     g->ud = ud;
+    // ServerLua: keep track of the state we keep constants in
+    g->constsstate = NULL;
+    // ServerLua: For user alloc tracking
+    g->unrooteduserallocs = 0;
     g->mainthread = L;
     g->uvhead.u.open.prev = &g->uvhead;
     g->uvhead.u.open.next = &g->uvhead;
@@ -220,6 +232,9 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
         g->memcatbytes[i] = 0;
 
     g->memcatbytes[0] = sizeof(LG);
+    // ServerLua: additional book-keeping
+    g->memcatbyteslimit = 0;
+    g->calltailinterruptcheck = 0;
 
     g->cb = lua_Callbacks();
 
@@ -245,4 +260,16 @@ void lua_close(lua_State* L)
     L = L->global->mainthread; // only the main thread can be closed
     luaF_close(L, L->stack);   // close all upvalues for this thread
     close_state(L);
+}
+
+// ServerLua: Do an interrupt check on the tail of the current LOP_CALL instruction handler.
+void luau_interruptoncalltail(lua_State *L)
+{
+    // Don't set the flag if it's unlikely we're in a Lua function's LOP_CALL handler.
+    // If somehow this is getting invoked within a metamethod, definitely don't set it.
+    if (L->nCcalls > L->baseCcalls)
+        return;
+    if (L->ci == nullptr)
+        return;
+    L->global->calltailinterruptcheck = 1;
 }

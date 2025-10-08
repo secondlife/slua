@@ -24,6 +24,12 @@ const TValue* luaV_tonumber(const TValue* obj, TValue* n)
         setnvalue(n, num);
         return n;
     }
+    if (l_isinteger(obj))
+    {
+        // ServerLua: handle integers
+        setnvalue(n, intvalue(obj));
+        return n;
+    }
     else
         return NULL;
 }
@@ -152,7 +158,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
 
                 L->cachedslot = gval2slot(h, newval); // remember slot to accelerate future lookups
 
-                setobj2t(L, newval, val);
+                setobj2t(L, h, newval, val);
                 luaC_barriert(L, h, val);
                 return;
             }
@@ -389,6 +395,18 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
 
     if (vb && vc)
     {
+        // ServerLua: vector * vector is special in LSL, need to sidestep
+        // Luau's typical logic and just call the multiply impls from the
+        // metatable.
+        if (LUAU_IS_LSL_VM(L))
+        {
+            if (!call_binTM(L, rb, rc, ra, op))
+            {
+                luaG_aritherror(L, rb, rc, op);
+            }
+            return;
+        }
+
         switch (op)
         {
         case TM_ADD:
@@ -475,7 +493,6 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
     if ((b = luaV_tonumber(rb, &tempb)) != NULL && (c = luaV_tonumber(rc, &tempc)) != NULL)
     {
         double nb = nvalue(b), nc = nvalue(c);
-
         switch (op)
         {
         case TM_ADD:

@@ -1342,6 +1342,10 @@ struct Compiler
             cid = bytecode.addConstantNumber(c->valueNumber);
             break;
 
+        case Constant::Type_Integer:
+            cid = bytecode.addConstantInteger(c->valueInteger);
+            break;
+
         case Constant::Type_Vector:
             cid = bytecode.addConstantVector(c->valueVector[0], c->valueVector[1], c->valueVector[2], c->valueVector[3]);
             break;
@@ -2214,6 +2218,14 @@ struct Compiler
 
                 emitLoadK(target, cid);
             }
+        }
+        break;
+
+        // ServerLua: constant integers
+        case Constant::Type_Integer:
+        {
+            int32_t cid = bytecode.addConstantInteger(cv->valueInteger);
+            emitLoadK(target, cid);
         }
         break;
 

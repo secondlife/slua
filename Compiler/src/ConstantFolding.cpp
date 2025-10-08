@@ -421,9 +421,11 @@ struct ConstantVisitor : AstVisitor
             if (l)
                 result = *l;
         }
-        else if (node->is<AstExprGlobal>())
+        else if (AstExprGlobal* expr = node->as<AstExprGlobal>())
         {
-            // nope
+            // ServerLua: some constants live in globals, not as `module.const_name`.
+            if (libraryMemberConstantCb && result.type == Constant::Type_Unknown)
+                libraryMemberConstantCb(nullptr, expr->name.value, reinterpret_cast<Luau::CompileConstant*>(&result));
         }
         else if (node->is<AstExprVarargs>())
         {

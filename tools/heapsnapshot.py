@@ -108,6 +108,8 @@ def convertToSnapshot(data):
                 for i in range(0, len(obj["pairs"]), 2):
                     key = obj["pairs"][i]
                     value = obj["pairs"][i + 1]
+                    if value not in addressToNodeIndex:
+                        continue
                     if key is None and value is None:
                         # Both the key and value are value types, nothing meaningful to add here
                         continue

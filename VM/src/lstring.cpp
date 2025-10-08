@@ -110,16 +110,22 @@ TString* luaS_bufstart(lua_State* L, size_t size)
     return ts;
 }
 
-TString* luaS_buffinish(lua_State* L, TString* ts)
+// TODO: Remove this if we don't end up going with a micro-VM approach.
+// ServerLua: Split out here since we have a multi-tiered string table approach.
+static TString* findstring(const lua_State * L, const char *data, unsigned int len, int hash)
 {
-    unsigned int h = luaS_hash(ts->data, ts->len);
-    stringtable* tb = &L->global->strt;
-    int bucket = lmod(h, tb->size);
-
+    stringtable *tb = &L->global->strt;
+    int bucket = lmod(hash, tb->size);
     // search if we already have this string in the hash table
     for (TString* el = tb->hash[bucket]; el != NULL; el = el->next)
     {
-        if (el->len == ts->len && memcmp(el->data, ts->data, ts->len) == 0)
+        // ServerLua: strings in different memory categories are considered unique. This is to ensure that
+        // distinct scripts get their own copies of strings unless they belong to the "shared" pool
+        // of memcat 0. Memcat 0 is almost exclusively used for compile-time constants or runtime
+        // allocations that should not count towards a specific script's limits.
+        // Note: this uses the state's _active_ memcat rather than the _state's memcat_,
+        // make sure your memcat is set appropriately!
+        if ((!el->memcat || el->memcat == L->activememcat) && el->len == len && memcmp(el->data, data, len) == 0)
         {
             // string may be dead
             if (isdead(L->global, obj2gco(el)))
@@ -128,9 +134,28 @@ TString* luaS_buffinish(lua_State* L, TString* ts)
             return el;
         }
     }
+    return nullptr;
+}
+
+TString* luaS_buffinish(lua_State* L, TString* ts)
+{
+    unsigned int h = luaS_hash(ts->data, ts->len);
+    stringtable* tb = &L->global->strt;
+
+    // ServerLua: look at the consts state to see if the string exists there first.
+    if (lua_State *const_L = L->global->constsstate)
+    {
+        TString *const_tstr = findstring(const_L, ts->data, ts->len, h);
+        if (const_tstr != nullptr)
+            return const_tstr;
+    }
+    TString *existing_tstr = findstring(L, ts->data, ts->len, h);
+    if (existing_tstr != nullptr)
+        return existing_tstr;
 
     LUAU_ASSERT(ts->next == NULL);
 
+    int bucket = lmod(h, tb->size);
     ts->hash = h;
     ts->data[ts->len] = '\0'; // ending 0
     ts->atom = ATOM_UNDEF;
@@ -147,16 +172,16 @@ TString* luaS_buffinish(lua_State* L, TString* ts)
 TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
 {
     unsigned int h = luaS_hash(str, l);
-    for (TString* el = L->global->strt.hash[lmod(h, L->global->strt.size)]; el != NULL; el = el->next)
+    // ServerLua: look at the consts state to see if the string exists there first.
+    if (lua_State *const_L = L->global->constsstate)
     {
-        if (el->len == l && (memcmp(str, getstr(el), l) == 0))
-        {
-            // string may be dead
-            if (isdead(L->global, obj2gco(el)))
-                changewhite(obj2gco(el));
-            return el;
-        }
+        TString *const_tstr = findstring(const_L, str, l, h);
+        if (const_tstr != nullptr)
+            return const_tstr;
     }
+    TString *existing_tstr = findstring(L, str, (int)l, h);
+    if (existing_tstr != nullptr)
+        return existing_tstr;
     return newlstr(L, str, l, h); // not found
 }
 

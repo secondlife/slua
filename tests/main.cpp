@@ -1,6 +1,9 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Common.h"
 
+// ServerLua: IIRC this was to make debugging under LLDB easier.
+#define DOCTEST_CONFIG_NO_EXCEPTIONS
+
 #include "Luau/CodeGenCommon.h"
 
 #define DOCTEST_CONFIG_IMPLEMENT

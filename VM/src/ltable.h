@@ -8,6 +8,9 @@
 #define gkey(n) (&(n)->key)
 #define gval(n) (&(n)->val)
 #define gnext(n) ((n)->key.next)
+// ServerLua: means we have nothing at this node index
+#define ITERORDER_EMPTY -1
+#define ghaveiterorder(t) ((t)->iterorder != nullptr)
 
 #define gval2slot(t, v) int(cast_to(LuaNode*, static_cast<const TValue*>(v)) - t->node)
 
@@ -29,6 +32,8 @@ LUAI_FUNC int luaH_next(lua_State* L, LuaTable* t, StkId key);
 LUAI_FUNC int luaH_getn(LuaTable* t);
 LUAI_FUNC LuaTable* luaH_clone(lua_State* L, LuaTable* tt);
 LUAI_FUNC void luaH_clear(LuaTable* tt);
+// ServerLua: set whether or not a custom iter order should be used
+LUAI_FUNC void luaH_overrideiterorder(lua_State* L, LuaTable* t, int override);
 
 #define luaH_setslot(L, t, slot, key) (invalidateTMcache(t), (slot == luaO_nilobject ? luaH_newkey(L, t, key) : cast_to(TValue*, slot)))
 

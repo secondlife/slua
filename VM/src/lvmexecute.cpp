@@ -14,6 +14,7 @@
 #include "lnumutils.h"
 #include "lbytecode.h"
 
+#include <cmath>
 #include <string.h>
 
 // Disable c99-designator to avoid the warning in CGOTO dispatch table
@@ -192,12 +193,23 @@ inline bool luau_skipstep(uint8_t op)
     return op == LOP_PREPVARARGS || op == LOP_BREAK;
 }
 
+
+static const char * const MATH_ERROR_STR = "Math error: division or modulus (possibly by 0) resulted in NaN";
+
 template<bool SingleStep>
 static void luau_execute(lua_State* L)
 {
 #if VM_USE_CGOTO
     static const void* kDispatchTable[256] = {VM_DISPATCH_TABLE()};
+    // TODO: This is janky, we'd like this in the static dispatch table,
+    //  but since the bytecode indices aren't contiguous we need to get a little crafty.
+    //  Can we do this in a constexpr or something?
+    //  I get the sense that in some cases this might force dispatch on the array in memory...
+    kDispatchTable[LOP_LSL_DOUBLE2FLOAT] = VM_DISPATCH_OP(LOP_LSL_DOUBLE2FLOAT);
 #endif
+
+    // ServerLua: Make sure this is unset
+    L->global->calltailinterruptcheck = 0;
 
     // the critical interpreter state, stored in locals for performance
     // the hope is that these map to registers without spilling (which is not true for x86 :/)
@@ -320,6 +332,20 @@ reentry:
                 VM_NEXT();
             }
 
+            // ServerLua: truncate double to float range
+            VM_CASE(LOP_LSL_DOUBLE2FLOAT)
+            {
+                // This effectively works like LOP_MOVE, but truncating from
+                // 64-bit float range to 32-bit float range.
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                LUAU_ASSERT(ttisnumber(rb));
+
+                setnvalue(ra, (float)nvalue(rb));
+                VM_NEXT();
+            }
+
             VM_CASE(LOP_GETGLOBAL)
             {
                 Instruction insn = *pc++;
@@ -366,7 +392,7 @@ reentry:
 
                 if (LUAU_LIKELY(ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n)) && !h->readonly))
                 {
-                    setobj2t(L, gval(n), ra);
+                    setobj2t(L, h, gval(n), ra);
                     luaC_barriert(L, h, ra);
                     VM_NEXT();
                 }
@@ -575,7 +601,7 @@ reentry:
                     // fast-path: value is in expected slot
                     if (LUAU_LIKELY(ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n)) && !h->readonly))
                     {
-                        setobj2t(L, gval(n), ra);
+                        setobj2t(L, h, gval(n), ra);
                         luaC_barriert(L, h, ra);
                         VM_NEXT();
                     }
@@ -587,7 +613,7 @@ reentry:
                         int cachedslot = gval2slot(h, res);
                         // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                         VM_PATCH_C(pc - 2, cachedslot);
-                        setobj2t(L, res, ra);
+                        setobj2t(L, h, res, ra);
                         luaC_barriert(L, h, ra);
                         VM_NEXT();
                     }
@@ -668,6 +694,17 @@ reentry:
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
 
+                // ServerLua: double-check that we don't have lists or nil in list
+                if (LUAU_IS_LSL_VM(L))
+                {
+                    auto const type = ttype(ra);
+                    if (type == LUA_TTABLE || type == LUA_TNIL)
+                    {
+                        lua_pushstring(L, "No nil or lists allowed in lists");
+                        lua_error(L);
+                    }
+                }
+
                 // fast-path: array assign
                 if (ttistable(rb) && ttisnumber(rc))
                 {
@@ -679,7 +716,7 @@ reentry:
                     // index has to be an exact integer and in-bounds for the array portion
                     if (LUAU_LIKELY(unsigned(index) - 1 < unsigned(h->sizearray) && !h->metatable && !h->readonly && double(index) == indexd))
                     {
-                        setobj2t(L, &h->array[unsigned(index - 1)], ra);
+                        setobj2t(L, h, &h->array[unsigned(index - 1)], ra);
                         luaC_barriert(L, h, ra);
                         VM_NEXT();
                     }
@@ -727,6 +764,17 @@ reentry:
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
                 int c = LUAU_INSN_C(insn);
 
+                // ServerLua: double-check that we don't have lists or nil in list
+                if (LUAU_IS_LSL_VM(L))
+                {
+                    auto const type = ttype(ra);
+                    if (type == LUA_TTABLE || type == LUA_TNIL)
+                    {
+                        lua_pushstring(L, "No nil or lists allowed in lists");
+                        lua_error(L);
+                    }
+                }
+
                 // fast-path: array assign
                 if (ttistable(rb))
                 {
@@ -734,7 +782,7 @@ reentry:
 
                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable && !h->readonly))
                     {
-                        setobj2t(L, &h->array[c], ra);
+                        setobj2t(L, h, &h->array[c], ra);
                         luaC_barriert(L, h, ra);
                         VM_NEXT();
                     }
@@ -919,6 +967,15 @@ reentry:
                     argtop++; // __call adds an extra self
                 }
 
+                // ServerLua: Clear out all values _after_ the top of the args.
+                // This makes sure that temporaries related to stack operations
+                // no longer have references that are reachable by the garbage collector.
+                // Might be smart to just make this memset() if it ends up impacting perf.
+                for (StkId argafter=argtop; argafter<L->top; ++argafter)
+                {
+                    setnilvalue(argafter);
+                }
+
                 Closure* ccl = clvalue(ra);
                 L->ci->savedpc = pc;
 
@@ -992,6 +1049,20 @@ reentry:
                     L->top = (nresults == LUA_MULTRET) ? res : cip->top;
 
                     base = L->base; // stack may have been reallocated, so we need to refresh base ptr
+
+                    // ServerLua: Now that the stack is all in order with the retvals, check if we need to
+                    // break for an interrupt. This helps us with C functions that will greatly overrun
+                    // the quanta that are followed by trivial code that incidentally don't allow yielding
+                    // (for example, __index metamethods.)
+                    if (L->global->calltailinterruptcheck)
+                    {
+                        // We're not doing this because the interrupt might fail, we're doing this because
+                        // we need to remember that we're _past_ the LOP_CALL if we interrupt.
+                        VM_PROTECT_PC();
+                        VM_INTERRUPT();
+                        L->global->calltailinterruptcheck = 0;
+                    }
+
                     VM_NEXT();
                 }
             }
@@ -1338,6 +1409,13 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
+                else if (l_isinteger(ra) && l_isinteger(rb))
+                {
+                    // ServerLua: integer math
+                    pc += intvalue(ra) <= intvalue(rb) ? LUAU_INSN_D(insn) : 1;
+                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                    VM_NEXT();
+                }
                 else
                 {
                     int res;
@@ -1368,6 +1446,13 @@ reentry:
                 else if (ttisstring(ra) && ttisstring(rb))
                 {
                     pc += !(luaV_strcmp(tsvalue(ra), tsvalue(rb)) <= 0) ? LUAU_INSN_D(insn) : 1;
+                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                    VM_NEXT();
+                }
+                else if (l_isinteger(ra) && l_isinteger(rb))
+                {
+                    // ServerLua: integer math
+                    pc += !(intvalue(ra) <= intvalue(rb)) ? LUAU_INSN_D(insn) : 1;
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
@@ -1404,6 +1489,13 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
+                else if (l_isinteger(ra) && l_isinteger(rb))
+                {
+                    // ServerLua: integer math
+                    pc += intvalue(ra) < intvalue(rb) ? LUAU_INSN_D(insn) : 1;
+                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                    VM_NEXT();
+                }
                 else
                 {
                     int res;
@@ -1437,6 +1529,13 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
+                else if (l_isinteger(ra) && l_isinteger(rb))
+                {
+                    // ServerLua: integer math
+                    pc += !(intvalue(ra) < intvalue(rb)) ? LUAU_INSN_D(insn) : 1;
+                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                    VM_NEXT();
+                }
                 else
                 {
                     int res;
@@ -1459,6 +1558,12 @@ reentry:
                 if (LUAU_LIKELY(ttisnumber(rb) && ttisnumber(rc)))
                 {
                     setnvalue(ra, nvalue(rb) + nvalue(rc));
+                    VM_NEXT();
+                }
+                else if (l_isinteger(rb) && l_isinteger(rc))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, intvalue(rb) + intvalue(rc));
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
@@ -1507,6 +1612,12 @@ reentry:
                     setnvalue(ra, nvalue(rb) - nvalue(rc));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(rc))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, intvalue(rb) - intvalue(rc));
+                    VM_NEXT();
+                }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
                     const float* vb = vvalue(rb);
@@ -1553,6 +1664,12 @@ reentry:
                     setnvalue(ra, nvalue(rb) * nvalue(rc));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(rc))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, intvalue(rb) * intvalue(rc));
+                    VM_NEXT();
+                }
                 else if (ttisvector(rb) && ttisnumber(rc))
                 {
                     const float* vb = vvalue(rb);
@@ -1560,8 +1677,9 @@ reentry:
                     setvvalue(ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
                     VM_NEXT();
                 }
-                else if (ttisvector(rb) && ttisvector(rc))
+                else if (ttisvector(rb) && ttisvector(rc) && !LUAU_IS_LSL_VM(L))
                 {
+                    // ServerLua: Vector multiplication behaves differently under LSL
                     const float* vb = vvalue(rb);
                     const float* vc = vvalue(rc);
                     setvvalue(ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
@@ -1611,11 +1729,24 @@ reentry:
                 // fast-path
                 if (LUAU_LIKELY(ttisnumber(rb) && ttisnumber(rc)))
                 {
-                    setnvalue(ra, nvalue(rb) / nvalue(rc));
+                    // ServerLua: ints not represented in here, they only support idiv.
+                    const double res = nvalue(rb) / nvalue(rc);
+
+                    // ServerLua: Any division that results in NaN is an error under Mono
+                    // Generally this is div by zero, but there might be others.
+                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && std::isnan(res)))
+                    {
+                        // VM protection is necessary here because PC may be invalid if we've
+                        // not called `VM_PROTECT()` in this function yet.
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+
+                    setnvalue(ra, res);
                     VM_NEXT();
                 }
-                else if (ttisvector(rb) && ttisnumber(rc))
+                else if (ttisvector(rb) && ttisnumber(rc) && !LUAU_IS_LSL_VM(L))
                 {
+                    // ServerLua: we use different logic in the LSL case.
                     const float* vb = vvalue(rb);
                     float vc = cast_to(float, nvalue(rc));
                     setvvalue(ra, vb[0] / vc, vb[1] / vc, vb[2] / vc, vb[3] / vc);
@@ -1675,6 +1806,27 @@ reentry:
                     setnvalue(ra, luai_numidiv(nvalue(rb), nvalue(rc)));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(rc))
+                {
+                    // ServerLua: integer math
+                    int32_t rh = intvalue(rc);
+                    if (LUAU_UNLIKELY(rh == 0))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+                    else if (LUAU_UNLIKELY(rh == -1))
+                    {
+                        // ServerLua: division by -1 is weird, and
+                        // previously special-cased to prevent division errors.
+                        setintvalue(ra, -1 * intvalue(rb));
+                    }
+                    else
+                    {
+                        setintvalue(ra, intvalue(rb) / rh);
+                    }
+
+                    VM_NEXT();
+                }
                 else if (ttisvector(rb) && ttisnumber(rc))
                 {
                     const float* vb = vvalue(rb);
@@ -1730,6 +1882,27 @@ reentry:
                     setnvalue(ra, luai_nummod(nb, nc));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(rc))
+                {
+                    // ServerLua: integer math
+                    int32_t rh = intvalue(rc);
+                    if (LUAU_UNLIKELY(rh == 0))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+                    else if (LUAU_UNLIKELY(rh == 1 || rh == -1))
+                    {
+                        // ServerLua: mod by 1 or -1 is weird, and
+                        // previously special-cased to prevent division errors.
+                        setintvalue(ra, 0);
+                    }
+                    else
+                    {
+                        setintvalue(ra, intvalue(rb) % rh);
+                    }
+
+                    VM_NEXT();
+                }
                 else
                 {
                     // slow-path, may invoke C/Lua via metamethods
@@ -1772,6 +1945,12 @@ reentry:
                     setnvalue(ra, nvalue(rb) + nvalue(kv));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(kv))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, intvalue(rb) + intvalue(kv));
+                    VM_NEXT();
+                }
                 else
                 {
                     // slow-path, may invoke C/Lua via metamethods
@@ -1793,6 +1972,12 @@ reentry:
                     setnvalue(ra, nvalue(rb) - nvalue(kv));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(kv))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, intvalue(rb) - intvalue(kv));
+                    VM_NEXT();
+                }
                 else
                 {
                     // slow-path, may invoke C/Lua via metamethods
@@ -1812,6 +1997,12 @@ reentry:
                 if (LUAU_LIKELY(ttisnumber(rb)))
                 {
                     setnvalue(ra, nvalue(rb) * nvalue(kv));
+                    VM_NEXT();
+                }
+                else if (l_isinteger(rb) && l_isinteger(kv))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, intvalue(rb) * intvalue(kv));
                     VM_NEXT();
                 }
                 else if (ttisvector(rb))
@@ -1860,6 +2051,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) / nvalue(kv));
                     VM_NEXT();
                 }
+                // ServerLua: int intentionally not handled, it uses idivk
                 else if (ttisvector(rb))
                 {
                     const float* vb = vvalue(rb);
@@ -1904,6 +2096,27 @@ reentry:
                 if (LUAU_LIKELY(ttisnumber(rb)))
                 {
                     setnvalue(ra, luai_numidiv(nvalue(rb), nvalue(kv)));
+                    VM_NEXT();
+                }
+                else if (l_isinteger(rb) && l_isinteger(kv))
+                {
+                    // ServerLua: integer math
+                    int32_t rh = intvalue(kv);
+                    if (LUAU_UNLIKELY(rh == 0))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+                    else if (LUAU_UNLIKELY(rh == -1))
+                    {
+                        // ServerLua: division by -1 is weird, and
+                        // previously special-cased to prevent division errors.
+                        setintvalue(ra, -1 * intvalue(rb));
+                    }
+                    else
+                    {
+                        setintvalue(ra, intvalue(rb) / rh);
+                    }
+
                     VM_NEXT();
                 }
                 else if (ttisvector(rb))
@@ -1960,6 +2173,27 @@ reentry:
                     setnvalue(ra, luai_nummod(nb, nk));
                     VM_NEXT();
                 }
+                else if (l_isinteger(rb) && l_isinteger(kv))
+                {
+                    // ServerLua: integer math
+                    int32_t rh = intvalue(kv);
+                    if (LUAU_UNLIKELY(rh == 0))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
+                    else if (LUAU_UNLIKELY(rh == 1 || rh == -1))
+                    {
+                        // ServerLua: mod by 1 or -1 is weird, and
+                        // previously special-cased to prevent division errors.
+                        setintvalue(ra, 0);
+                    }
+                    else
+                    {
+                        setintvalue(ra, intvalue(rb) % rh);
+                    }
+
+                    VM_NEXT();
+                }
                 else
                 {
                     // slow-path, may invoke C/Lua via metamethods
@@ -2002,7 +2236,15 @@ reentry:
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
 
-                setobj2s(L, ra, l_isfalse(rb) ? rb : rc);
+                // ServerLua: LSL AND behavior
+                if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L)))
+                {
+                    setintvalue(ra, (intvalue(rb) != 0 && intvalue(rc) != 0));
+                }
+                else
+                {
+                    setobj2s(L, ra, l_isfalse(rb) ? rb : rc);
+                }
                 VM_NEXT();
             }
 
@@ -2013,7 +2255,15 @@ reentry:
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
 
-                setobj2s(L, ra, l_isfalse(rb) ? rc : rb);
+                // ServerLua: LSL OR behavior
+                if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L)))
+                {
+                    setintvalue(ra, (intvalue(rb) != 0 || intvalue(rc) != 0));
+                }
+                else
+                {
+                    setobj2s(L, ra, l_isfalse(rb) ? rc : rb);
+                }
                 VM_NEXT();
             }
 
@@ -2061,8 +2311,17 @@ reentry:
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
 
+                // ServerLua: NOT behaves specially in LSL mode, we want it to return an int
+                // when we're working with integer lightuserdata.
                 int res = l_isfalse(rb);
-                setbvalue(ra, res);
+                if (LUAU_IS_LSL_VM(L) && l_isinteger(rb))
+                {
+                    setintvalue(ra, res);
+                }
+                else
+                {
+                    setbvalue(ra, res);
+                }
                 VM_NEXT();
             }
 
@@ -2076,6 +2335,12 @@ reentry:
                 if (LUAU_LIKELY(ttisnumber(rb)))
                 {
                     setnvalue(ra, -nvalue(rb));
+                    VM_NEXT();
+                }
+                else if (l_isinteger(rb))
+                {
+                    // ServerLua: integer math
+                    setintvalue(ra, -intvalue(rb));
                     VM_NEXT();
                 }
                 else if (ttisvector(rb))
@@ -2122,7 +2387,15 @@ reentry:
 
                     if (fastnotm(h->metatable, TM_LEN))
                     {
-                        setnvalue(ra, cast_num(luaH_getn(h)));
+                        // ServerLua: We want table length as an int for LSL
+                        if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L)))
+                        {
+                            setintvalue(ra, luaH_getn(h));
+                        }
+                        else
+                        {
+                            setnvalue(ra, cast_num(luaH_getn(h)));
+                        }
                         VM_NEXT();
                     }
                     else
@@ -2205,7 +2478,7 @@ reentry:
                 TValue* array = h->array;
 
                 for (int i = 0; i < c; ++i)
-                    setobj2t(L, &array[index + i - 1], rb + i);
+                    setobj2t(L, h, &array[index + i - 1], rb + i);
 
                 luaC_barrierfast(L, h);
                 VM_NEXT();
@@ -2374,7 +2647,22 @@ reentry:
                     // then we advance index through the hash portion
                     while (unsigned(index - sizearray) < unsigned(sizenode))
                     {
-                        LuaNode* n = &h->node[index - sizearray];
+                        // Ares: need to look up the "real" next index in `iterorder` if
+                        // this is an unpersisted table
+                        int node_idx = index - sizearray;
+                        if (ghaveiterorder(h))
+                        {
+                            node_idx = h->iterorder[node_idx].node_idx;
+                            LUAU_ASSERT(node_idx <= sizenode && node_idx >= ITERORDER_EMPTY);
+                            // nil equivalent, try the next entry
+                            if (node_idx == ITERORDER_EMPTY)
+                            {
+                                ++index;
+                                continue;
+                            }
+                        }
+
+                        LuaNode* n = &h->node[node_idx];
 
                         if (!ttisnil(gval(n)))
                         {
@@ -2706,6 +2994,8 @@ reentry:
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
                 TValue* kv = VM_KV(LUAU_INSN_B(insn));
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
+
+                // NOTE: ServerLua can't use these for integer-aware paths!
 
                 // fast-path
                 if (ttisnumber(rc))

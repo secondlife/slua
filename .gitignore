@@ -16,5 +16,9 @@
 /luau-bytecode
 /luau-compile
 __pycache__
+/stage
 .cache
 .clangd
+*.orig
+*.rej
+

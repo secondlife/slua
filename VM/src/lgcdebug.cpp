@@ -10,9 +10,12 @@
 #include "ltable.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "llsl.h"
 
 #include <string.h>
 #include <stdio.h>
+
+#include <unordered_set>
 
 LUAU_FASTFLAGVARIABLE(LuauHeapDumpStringSizeOverhead)
 
@@ -20,10 +23,45 @@ static void validateobjref(global_State* g, GCObject* f, GCObject* t)
 {
     LUAU_ASSERT(!isdead(g, t));
 
+    // ServerLua: These checks are somewhat expensive, but necessary during debugging
+    // to make sure we didn't mess up our fixing scheme.
+    if (isfixed(f) && !isfixed(t))
+    {
+        // If f is fixed, then t must also be fixed. To do otherwise would allow
+        // t to be marked black and collected out from underneath f. We do, however,
+        // have a handful of cases where we know this won't result in GC errors.
+        bool validity_carveout = false;
+        if (f == obj2gco(g->mainthread))
+        {
+            // We expect the main thread to be fixed, but it can have a non-fixed globals table
+            // and non-fixed items on its stack. We'll still traverse it anyway. We don't mark
+            // any other threads fixed, so this is fine.
+            validity_carveout = true;
+        }
+        else if (f->gch.tt == LUA_TFUNCTION && t == obj2gco(f->cl.env))
+        {
+            // This one is tricky. A fixed function pointing to a non-fixed env is okay, since
+            // we expect something else to be keeping env alive if we're in safeenv mode, which
+            // is the only mode in which we allow functions to be fixed.
+            // Note that this _could_ cause still issues if you xmove fixed closures between
+            // threads that have different envs. In that case, you're required to also `luaC_fix()`
+            // the env manually.
+            validity_carveout = true;
+        }
+
+        if (!validity_carveout)
+        {
+            fprintf(stderr, "fixed %s pointed to non-fixed %s\n", luaT_typenames[f->gch.tt], luaT_typenames[t->gch.tt]);
+            LUAU_ASSERT(false);
+        }
+    }
+
     if (keepinvariant(g))
     {
         // basic incremental invariant: black can't point to white
-        LUAU_ASSERT(!(isblack(f) && iswhite(t)));
+        // ServerLua: Although it's okay for a black object to reference a white object
+        // if the referenced object is fixed, we wouldn't have changed the mark.
+        LUAU_ASSERT(!(isblack(f) && iswhite(t)) || isfixed(t));
     }
 }
 
@@ -285,9 +323,9 @@ static void dumpstringdata(FILE* f, const char* data, size_t len)
         fputc(safejson(data[i]) ? data[i] : '?', f);
 }
 
-static void dumpstring(FILE* f, TString* ts)
+static void dumpstring(FILE* f, TString* ts, bool include_size)
 {
-    fprintf(f, "{\"type\":\"string\",\"cat\":%d,\"size\":%d,\"data\":\"", ts->memcat, int(sizestring(ts->len)));
+    fprintf(f, "{\"type\":\"string\",\"cat\":%d,\"size\":%d,\"data\":\"", ts->memcat, include_size ? int(sizestring(ts->len)) : 0);
     dumpstringdata(f, ts->data, ts->len);
     fprintf(f, "\"}");
 }
@@ -534,12 +572,36 @@ static void dumpupval(FILE* f, UpVal* uv)
     fprintf(f, "}");
 }
 
-static void dumpobj(FILE* f, GCObject* o)
+static void dumpsynthesized(FILE* f, GCObject *gco)
 {
+    fprintf(f, "{\"type\":\"buffer\",\"cat\":%d,\"size\":%d}", gco->gch.memcat, 0);
+}
+
+static void dumpobj(FILE* f, GCObject* o, bool include_size)
+{
+    if (!include_size)
+    {
+        switch (o->gch.tt)
+        {
+        case LUA_TTABLE:
+        case LUA_TFUNCTION:
+        case LUA_TUSERDATA:
+        case LUA_TTHREAD:
+        case LUA_TBUFFER:
+        case LUA_TPROTO:
+        case LUA_TUPVAL:
+            dumpsynthesized(f, o);
+            return;
+
+        default:
+            break;
+        }
+    }
+
     switch (o->gch.tt)
     {
     case LUA_TSTRING:
-        return dumpstring(f, gco2ts(o));
+        return dumpstring(f, gco2ts(o), include_size);
 
     case LUA_TTABLE:
         return dumptable(f, gco2h(o));
@@ -567,18 +629,25 @@ static void dumpobj(FILE* f, GCObject* o)
     }
 }
 
-static bool dumpgco(void* context, lua_Page* page, GCObject* gco)
+static bool dumpgco(void* context, lua_Page* page, GCObject* gco, bool include_size)
 {
     FILE* f = (FILE*)context;
 
     dumpref(f, gco);
     fputc(':', f);
-    dumpobj(f, gco);
+    dumpobj(f, gco, include_size);
     fputc(',', f);
     fputc('\n', f);
 
     return false;
 }
+
+typedef struct DumpContext
+{
+    std::unordered_set<void*> nodes = {};
+    std::unordered_set<void*> references = {};
+    FILE* file = nullptr;
+} DumpContext;
 
 void luaC_dump(lua_State* L, void* file, const char* (*categoryName)(lua_State* L, uint8_t memcat))
 {
@@ -587,9 +656,41 @@ void luaC_dump(lua_State* L, void* file, const char* (*categoryName)(lua_State* 
 
     fprintf(f, "{\"objects\":{\n");
 
-    dumpgco(f, NULL, obj2gco(g->mainthread));
+    // ServerLua: We make this use luaC_enumheap so we can synthesize objects that are not owned by our GC,
+    // but are still referenced by our GC. We need to know about edges for that.
+    if (g->constsstate)
+    {
+        DumpContext ctx;
+        ctx.file = f;
 
-    luaM_visitgco(L, f, dumpgco);
+        luaC_enumheap(
+            L,
+            &ctx,
+            [](void* ctx, void* gco, uint8_t tt, uint8_t memcat, size_t size, const char* name)
+            {
+                DumpContext& context = *(DumpContext*)ctx;
+                context.nodes.insert(gco);
+                dumpgco(context.file, nullptr, (GCObject*)gco, true);
+            },
+            [](void* ctx, void* src, void* dst, const char* edge_name)
+            {
+                DumpContext& context = *(DumpContext*)ctx;
+                context.references.insert(src);
+                context.references.insert(dst);
+            }
+        );
+
+        for (auto edge_ptr : ctx.references)
+        {
+            if (edge_ptr == nullptr)
+                continue;
+            if (ctx.nodes.find(edge_ptr) != ctx.nodes.cend())
+                continue;
+            ctx.nodes.insert(edge_ptr);
+            // Don't include the size, this is an object we're referencing from a foreign GC.
+            dumpgco(file, nullptr, (GCObject*)edge_ptr, false);
+        }
+    }
 
     fprintf(f, "\"0\":{\"type\":\"userdata\",\"cat\":0,\"size\":0}\n"); // to avoid issues with trailing ,
     fprintf(f, "},\"roots\":{\n");
@@ -629,7 +730,9 @@ struct EnumContext
 static void* enumtopointer(GCObject* gco)
 {
     // To match lua_topointer, userdata pointer is represented as a pointer to internal data
-    return gco->gch.tt == LUA_TUSERDATA ? (void*)gco2u(gco)->data : (void*)gco;
+    // ServerLua: Let's not, this makes debugging annoying as hell.
+    // return gco->gch.tt == LUA_TUSERDATA ? (void*)gco2u(gco)->data : (void*)gco;
+    return (void *)gco;
 }
 
 static void enumnode(EnumContext* ctx, GCObject* gco, size_t size, const char* objname)
@@ -644,10 +747,15 @@ static void enumedge(EnumContext* ctx, GCObject* from, GCObject* to, const char*
 
 static void enumedges(EnumContext* ctx, GCObject* from, TValue* data, size_t size, const char* edgename)
 {
+    char name[256];
     for (size_t i = 0; i < size; ++i)
     {
         if (iscollectable(&data[i]))
-            enumedge(ctx, from, gcvalue(&data[i]), edgename);
+        {
+            // ServerLua: Having indices is helpful here.
+            snprintf(&name[0], 255, "%s[%d]", edgename, (int)i);
+            enumedge(ctx, from, gcvalue(&data[i]), name);
+        }
     }
 }
 
@@ -664,7 +772,26 @@ static void enumtable(EnumContext* ctx, LuaTable* h)
     size_t size = sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : sizenode(h) * sizeof(LuaNode)) + h->sizearray * sizeof(TValue);
 
     // Provide a name for a special registry table
-    enumnode(ctx, obj2gco(h), size, h == hvalue(registry(ctx->L)) ? "registry" : NULL);
+    // ServerLua: and also a few other things we care about.
+    const char *name = NULL;
+    // This is fine because enumnode() is meant to copy names it
+    // cares about if it wants to keep them around
+    char name_buf[256];
+    if (h == hvalue(registry(ctx->L)))
+        name = "registry";
+    else
+    {
+        auto *g = ctx->L->global;
+        for (int i = 0; i<LUA_UTAG_LIMIT; ++i)
+        {
+            if (h == g->udatamt[i])
+            {
+                snprintf(&name_buf[0], 255, "udatamt[%d]", i);
+                break;
+            }
+        }
+    }
+    enumnode(ctx, obj2gco(h), size, name);
 
     if (h->node != &luaH_dummynode)
     {
@@ -777,6 +904,13 @@ static void enumudata(EnumContext* ctx, Udata* u)
     }
 
     enumnode(ctx, obj2gco(u), sizeudata(u->len), name);
+
+    // ServerLua: handle an edge for UUID str instances too
+    if (u->tag == UTAG_UUID)
+    {
+        // grab the underlying string reference and draw an edge to it
+        enumedge(ctx, obj2gco(u), obj2gco(((lua_LSLUUID *)&u->data)->str), "[uuid_str]");
+    }
 
     if (u->metatable)
         enumedge(ctx, obj2gco(u), obj2gco(u->metatable), "metatable");

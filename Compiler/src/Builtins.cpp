@@ -253,6 +253,10 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
             return LBF_VECTOR_MAX;
     }
 
+    // ServerLua: `vector`'s mt also has `__call`, which is the same as `vector.create()`
+    if (builtin.isGlobal("vector"))
+        return LBF_VECTOR;
+
     if (options.vectorCtor)
     {
         if (options.vectorLib)

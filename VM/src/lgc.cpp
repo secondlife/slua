@@ -232,8 +232,27 @@ static void removeentry(LuaNode* n)
         setttype(gkey(n), LUA_TDEADKEY); // dead key; remove it
 }
 
+// ServerLua: Used to figure out if we need to mark something's referents
+//  this is basically the magic step that makes GC faster with fixed objects.
+static inline bool shouldtraverseformarking(global_State* g, GCObject *o)
+{
+    // Note that fixed threads still need to be traversed because they
+    // probably have non-fixed items on their stacks. Generally only
+    // the main thread should be fixed anyway.
+    // LUA_TDEADKEY is a potential hairy case, but I don't believe this
+    // should ever be called with a dead key anyway.
+    LUAU_ASSERT(o->gch.tt != LUA_TDEADKEY);
+    return !isfixed(o) || o->gch.tt == LUA_TTHREAD;
+}
+
 static void reallymarkobject(global_State* g, GCObject* o)
 {
+    // ServerLua: Don't traverse if this is a fixed object that needs no traversal.
+    if (!shouldtraverseformarking(g, o))
+    {
+        return;
+    }
+
     LUAU_ASSERT(iswhite(o) && !isdead(g, o));
     white2gray(o);
     switch (o->gch.tt)
@@ -468,6 +487,10 @@ static void shrinkstackprotected(lua_State* L)
 static size_t propagatemark(global_State* g)
 {
     GCObject* o = g->gray;
+    // ServerLua: Don't try to traverse fixed objects, they will never be collected,
+    //  and they're not allowed to have references to non-fixed objects.
+    LUAU_ASSERT(shouldtraverseformarking(g, o));
+
     LUAU_ASSERT(isgray(o));
     gray2black(o);
     switch (o->gch.tt)
@@ -554,6 +577,11 @@ static int isobjcleared(GCObject* o)
         stringmark(&o->ts); // strings are `values', so are never weak
         return 0;
     }
+
+    // ServerLua: This was changed to not evict fixed objects from weaklists
+    // regardless of color.
+    if(isfixed(o))
+        return 0;
 
     return iswhite(o);
 }
@@ -784,7 +812,9 @@ static size_t clearupvals(lua_State* L)
         LUAU_ASSERT(upisopen(uv));
         LUAU_ASSERT(uv->u.open.next->u.open.prev == uv && uv->u.open.prev->u.open.next == uv);
         LUAU_ASSERT(!isblack(obj2gco(uv))); // open upvalues are never black
-        LUAU_ASSERT(iswhite(obj2gco(uv)) || !iscollectable(uv->v) || !iswhite(gcvalue(uv->v)));
+        // TODO: ServerLua: ... is my isfixed() addition correct here? I think so?
+        //  We shouldn't really care what color fixed values are.
+        LUAU_ASSERT(iswhite(obj2gco(uv)) || !iscollectable(uv->v) || !iswhite(gcvalue(uv->v)) || isfixed(gcvalue(uv->v)));
 
         if (uv->markedopen)
         {

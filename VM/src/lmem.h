@@ -31,3 +31,18 @@ LUAI_FUNC lua_Page* luaM_getnextpage(lua_Page* page);
 
 LUAI_FUNC void luaM_visitpage(lua_Page* page, void* context, bool (*visitor)(void* context, lua_Page* page, GCObject* gco));
 LUAI_FUNC void luaM_visitgco(lua_State* L, void* context, bool (*visitor)(void* context, lua_Page* page, GCObject* gco));
+
+// ServerLua: for user allocation tracking, basically used as a `defer` to clear out
+// `unrooteduserallocs` in case of exceptions.
+struct global_State;
+class UnrootedAllocTracker
+{
+public:
+    UnrootedAllocTracker(lua_State *L);
+    ~UnrootedAllocTracker();
+protected:
+    global_State *_mGlobalState;
+};
+
+#define LUAU_TRACK_UNROOTED_ALLOCS() [[maybe_unused]] UnrootedAllocTracker _tracker{L};
+#define LUAU_MAYBE_TRACK_UNROOTED(L, size) do { if ((L)->activememcat > 1) { L->global->unrooteduserallocs += (size); }} while (0);

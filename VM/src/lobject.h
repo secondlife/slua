@@ -78,12 +78,24 @@ typedef struct lua_TValue
 #define bufvalue(o) check_exp(ttisbuffer(o), &(o)->value.gc->buf)
 #define upvalue(o) check_exp(ttisupval(o), &(o)->value.gc->uv)
 
-#define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0))
+// ServerLua: we extend this to include integers.
+#define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0) || (l_isinteger(o) && intvalue(o) == 0))
 
 #define lightuserdatatag(o) check_exp(ttislightuserdata(o), (o)->extra[0])
 
 // Internal tags used by the VM
 #define LU_TAG_ITERATOR LUA_UTAG_LIMIT
+#define LU_TAG_COUNT (LU_TAG_ITERATOR+1)
+
+// ServerLua: Integer support
+#define l_isinteger(o) (ttype(o) == LUA_TLIGHTUSERDATA && (o)->extra[0] == LU_TAG_LSL_INTEGER)
+#define intvalue(o) (static_cast<int32_t>((size_t)pvalue(o)))
+// Specifically an LSL vm
+#define LUAU_IS_LSL_VM(L) (lua_getthreaddata(L) != nullptr && (((lua_SLRuntimeState*)lua_getthreaddata(L))->slIdentifier == LUA_LSL_IDENTIFIER))
+// Any VM for SL
+#define LUAU_IS_SL_VM(L) (lua_getthreaddata(L) != nullptr && ((((lua_SLRuntimeState*)lua_getthreaddata(L))->slIdentifier & LUA_SL_IDENTIFIER_MASK) == LUA_SL_IDENTIFIER))
+#define LUAU_GET_SL_VM_STATE(L) check_exp(LUAU_IS_SL_VM(L), (lua_SLRuntimeState *)lua_getthreaddata((L)))
+
 
 /*
 ** for internal debug only
@@ -204,6 +216,9 @@ typedef struct lua_TValue
         checkliveness(L->global, i_o); \
     }
 
+// ServerLua: Be _very_ careful about truncating to 32-bit space before we shove this into a wider value type!
+#define setintvalue(obj, x) setpvalue(obj, (void *)(((size_t)(x)) & 0xFFffFFff), LU_TAG_LSL_INTEGER)
+
 #define setobj(L, obj1, obj2) \
     { \
         const TValue* o2 = (obj2); \
@@ -221,7 +236,19 @@ typedef struct lua_TValue
 // from table to same table (no barrier)
 #define setobjt2t setobj
 // to table (needs barrier)
-#define setobj2t setobj
+// ServerLua: need to invalidate any existing table iter order when changing
+// a nil elem to non-nil. This is not necessarily true when setting a
+// non-nil element to nil...
+// TODO: Variant that skips this check where the check can be hoisted out?
+#define setobj2t(L, tab, obj1, obj2) \
+    {                           \
+        const TValue* ob2 = (obj2); \
+        TValue* ob1 = (obj1);        \
+        LuaTable* tab_ob = (tab);  \
+        if (LUAU_UNLIKELY(ghaveiterorder(tab_ob) && ttisnil(ob1) && !ttisnil(ob2))) \
+            luaH_overrideiterorder(L, tab_ob, 0); \
+        setobj((L), (ob1), (ob2)) \
+    }
 // to new object (no barrier)
 #define setobj2n setobj
 
@@ -319,6 +346,8 @@ typedef struct Proto
 
     GCObject* gclist;
 
+    // ServerLua: yield points
+    int* yieldpoints;
 
     int sizecode;
     int sizep;
@@ -330,6 +359,9 @@ typedef struct Proto
     int linedefined;
     int bytecodeid;
     int sizetypeinfo;
+
+    // ServerLua: yield points
+    int sizeyieldpoints;
 } Proto;
 // clang-format on
 
@@ -447,6 +479,16 @@ typedef struct LuaNode
         checkliveness(L->global, i_o); \
     }
 
+// ServerLua: For keeping track of original node iteration order
+typedef struct LuaNodeIterOrder {
+    // Index of the node to look at for this point in the iteration
+    // order. indexes into `Table.node`.
+    int node_idx;
+    // Used to convert from a node index to that node's index
+    // within the iterorder list.
+    int node_to_iterorder_idx;
+} LuaNodeIterOrder;
+
 // clang-format off
 typedef struct LuaTable
 {
@@ -471,6 +513,8 @@ typedef struct LuaTable
     TValue* array;  // array part
     LuaNode* node;
     GCObject* gclist;
+    // ServerLua: used for maintaining iterator indices across `unpersist(persist(foo))`
+    LuaNodeIterOrder* iterorder; // indices into the `node` array, or -1 if N/A
 } LuaTable;
 // clang-format on
 

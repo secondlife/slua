@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+#define lstrlib_c
 #include "lualib.h"
 
 #include "lstring.h"
@@ -687,6 +688,8 @@ static int str_find_aux(lua_State* L, int find)
     }
     else
     {
+        // ServerLua: This can run long, try an interrupt on the call tail.
+        luau_interruptoncalltail(L);
         MatchState ms;
         const char* s1 = s + init - 1;
         int anchor = (*p == '^');
@@ -729,6 +732,8 @@ static int str_match(lua_State* L)
 
 static int gmatch_aux(lua_State* L)
 {
+    // ServerLua: This can run long, try an interrupt on the call tail.
+    luau_interruptoncalltail(L);
     MatchState ms;
     size_t ls, lp;
     const char* s = lua_tolstring(L, lua_upvalueindex(1), &ls);
@@ -830,6 +835,7 @@ static void add_value(MatchState* ms, luaL_Strbuf* b, const char* s, const char*
 
 static int str_gsub(lua_State* L)
 {
+    luau_interruptoncalltail(L);
     size_t srcl, lp;
     const char* src = luaL_checklstring(L, 1, &srcl);
     const char* p = luaL_checklstring(L, 2, &lp);

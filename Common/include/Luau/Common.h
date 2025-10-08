@@ -37,6 +37,18 @@
 #define LUAU_BIG_ENDIAN
 #endif
 
+// ServerLua: Various macros to tell the compiler not to optimize a function (mostly for debugging)
+#if defined(__clang__)
+#   define CLANG_NOOPT [[clang::optnone]]
+#   define GCC_NOOPT
+#elif defined(__GNUC__)
+#   define GCC_NOOPT __attribute__((optimize("O0")))
+#   define CLANG_NOOPT
+#else
+#   define GCC_NOOPT
+#   define CLANG_NOOPT
+#endif
+
 namespace Luau
 {
 

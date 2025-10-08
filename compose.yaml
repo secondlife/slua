@@ -1,0 +1,4 @@
+services:
+  serverlua:
+    build: .
+    platform: linux/amd64

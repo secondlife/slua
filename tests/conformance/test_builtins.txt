@@ -1,0 +1,10 @@
+// foo
+
+
+const integer DAMAGEABLE = 0x20
+const integer DAMAGE_TYPE_ACID = 1
+const string EOF = "\n\n\n"
+const string IMG_USE_BAKED_HEAD = "5a9f4a74-30f2-821c-b88d-70499d3e7183"
+const float LEGACY_MASS_FACTOR = 0.01
+const vector TOUCH_INVALID_VECTOR = <0.0, 0.0, 0.0>
+const rotation ZERO_ROTATION = <0.0, 0.0, 0.0, 1.0>

@@ -16,6 +16,8 @@ struct luaL_Reg
 typedef struct luaL_Reg luaL_Reg;
 
 LUALIB_API void luaL_register(lua_State* L, const char* libname, const luaL_Reg* l);
+// ServerLua: added to allow updating existing modules
+LUALIB_API void luaL_register_noclobber(lua_State* L, const char* libname, const luaL_Reg* l);
 LUALIB_API int luaL_getmetafield(lua_State* L, int obj, const char* e);
 LUALIB_API int luaL_callmeta(lua_State* L, int obj, const char* e);
 LUALIB_API l_noret luaL_typeerrorL(lua_State* L, int narg, const char* tname);
@@ -138,6 +140,23 @@ LUALIB_API int luaopen_math(lua_State* L);
 
 #define LUA_DBLIBNAME "debug"
 LUALIB_API int luaopen_debug(lua_State* L);
+
+#define LUA_ERISLIBNAME "ares"
+LUALIB_API int luaopen_eris(lua_State *L);
+
+#define LUA_LSLLIBNAME "lsl"
+LUALIB_API int luaopen_lsl(lua_State* L);
+
+LUALIB_API int luaopen_sl(lua_State* L);
+
+#define LUA_LLBASE64LIBNAME "llbase64"
+LUALIB_API int luaopen_llbase64(lua_State* L);
+
+#define LUA_CJSONLIBNAME "lljson"
+LUALIB_API int luaopen_cjson(lua_State* L);
+
+#define LUA_LLLIBNAME "ll"
+LUALIB_API int luaopen_ll(lua_State* L, int testing_funcs);
 
 #define LUA_VECLIBNAME "vector"
 LUALIB_API int luaopen_vector(lua_State* L);

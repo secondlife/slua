@@ -53,31 +53,31 @@ jobs:
         asset_path: luau-${{matrix.os.name}}.zip
         asset_name: luau-${{matrix.os.name}}.zip
         asset_content_type: application/octet-stream
-
-  web:
-    needs: ["create-release"]
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-    - uses: actions/checkout@v2
-      with:
-        repository: emscripten-core/emsdk
-        path: emsdk
-    - name: emsdk install
-      run: |
-        cd emsdk
-        ./emsdk install latest
-        ./emsdk activate latest
-    - name: make
-      run: |
-        source emsdk/emsdk_env.sh
-        emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
-        make -j2 Luau.Web
-    - uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: Luau.Web.js
-        asset_name: Luau.Web.js
-        asset_content_type: application/octet-stream
+#
+#  web:
+#    needs: ["create-release"]
+#    runs-on: ubuntu-latest
+#    steps:
+#    - uses: actions/checkout@v1
+#    - uses: actions/checkout@v2
+#      with:
+#        repository: emscripten-core/emsdk
+#        path: emsdk
+#    - name: emsdk install
+#      run: |
+#        cd emsdk
+#        ./emsdk install latest
+#        ./emsdk activate latest
+#    - name: make
+#      run: |
+#        source emsdk/emsdk_env.sh
+#        emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
+#        make -j2 Luau.Web
+#    - uses: actions/upload-release-asset@v1
+#      env:
+#        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#      with:
+#        upload_url: ${{ needs.create-release.outputs.upload_url }}
+#        asset_path: Luau.Web.js
+#        asset_name: Luau.Web.js
+#        asset_content_type: application/octet-stream

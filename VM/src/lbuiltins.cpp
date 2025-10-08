@@ -1003,7 +1003,7 @@ static int luauF_rawset(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
             return -1;
 
         setobj2s(L, res, arg0);
-        setobj2t(L, luaH_set(L, t, args), args + 1);
+        setobj2t(L, t, luaH_set(L, t, args), args + 1);
         luaC_barriert(L, t, args + 1);
         return 1;
     }
@@ -1020,7 +1020,7 @@ static int luauF_tinsert(lua_State* L, StkId res, TValue* arg0, int nresults, St
             return -1;
 
         int pos = luaH_getn(t) + 1;
-        setobj2t(L, luaH_setnum(L, t, pos), args);
+        setobj2t(L, t, luaH_setnum(L, t, pos), args);
         luaC_barriert(L, t, args);
         return 0;
     }
@@ -1275,6 +1275,12 @@ static int luauF_tonumber(lua_State* L, StkId res, TValue* arg0, int nresults, S
         else if (ttisstring(arg0) && luaO_str2d(svalue(arg0), &num))
         {
             setnvalue(res, num);
+            return 1;
+        }
+        // ServerLua: integer support
+        else if (l_isinteger(arg0))
+        {
+            setnvalue(res, intvalue(arg0));
             return 1;
         }
         else

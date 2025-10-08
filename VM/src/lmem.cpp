@@ -120,7 +120,8 @@ static_assert(sizeof(LuaNode) == ABISWITCH(32, 32, 32), "size mismatch for table
 #endif
 
 static_assert(offsetof(TString, data) == ABISWITCH(24, 20, 20), "size mismatch for string header");
-static_assert(sizeof(LuaTable) == ABISWITCH(48, 32, 32), "size mismatch for table header");
+// ServerLua: Tables are larger due to iterorder tracking
+static_assert(sizeof(LuaTable) == ABISWITCH(56, 36, 36), "size mismatch for table header");
 static_assert(offsetof(Buffer, data) == ABISWITCH(8, 8, 8), "size mismatch for buffer header");
 
 // The userdata is designed to provide 16 byte alignment for 16 byte and larger userdata sizes
@@ -200,7 +201,8 @@ const SizeClassConfig kSizeClassConfig;
 #define metadata(block) (*(void**)(block))
 #define freegcolink(block) (*(void**)((char*)block + kGCOLinkOffset))
 
-#if defined(LUAU_ASSERTENABLED)
+// ServerLua: We always use these, it's so cheap it's basically free.
+#if defined(LUAU_ASSERTENABLED) || 1
 #define debugpageset(x) (x)
 #else
 #define debugpageset(x) NULL
@@ -494,9 +496,28 @@ static void freegcoblock(lua_State* L, int sizeClass, void* block, lua_Page* pag
         freeclasspage(L, g->freegcopages, &g->allgcopages, page, sizeClass);
 }
 
+// ServerLua: Since we have many new uses of memcats, add a special debugging mode that
+//   can helps us find mismatched memcats between new() and free()
+#if LUAU_MEMCAT_DEBUGGING
+static std::unordered_map<const void*, uint8_t> sBlockMemcats = {};
+#endif
+
 void* luaM_new_(lua_State* L, size_t nsize, uint8_t memcat)
 {
     global_State* g = L->global;
+
+    // ServerLua: enforce memory allocation limits in user-owned memcats
+    if (memcat > 1 && g->memcatbyteslimit)
+    {
+        if (g->memcatbytes[memcat] + nsize >= g->memcatbyteslimit)
+            luaD_throw(L, LUA_ERRMEM);
+    }
+
+    if (LUAU_LIKELY(!!g->cb.beforeallocate) && memcat > 1)
+    {
+        if (g->cb.beforeallocate(L, 0, nsize))
+            luaD_throw(L, LUA_ERRMEM);
+    }
 
     int nclass = sizeclass(nsize);
 
@@ -512,6 +533,13 @@ void* luaM_new_(lua_State* L, size_t nsize, uint8_t memcat)
         g->cb.onallocate(L, 0, nsize);
     }
 
+#if LUAU_MEMCAT_DEBUGGING
+    if (block != nullptr)
+    {
+        sBlockMemcats[block] = memcat;
+    }
+#endif
+
     return block;
 }
 
@@ -521,6 +549,19 @@ GCObject* luaM_newgco_(lua_State* L, size_t nsize, uint8_t memcat)
     LUAU_ASSERT(nsize >= kGCOLinkOffset + sizeof(void*));
 
     global_State* g = L->global;
+
+    // ServerLua: enforce memory allocation limits in user-owned memcats
+    if (memcat > 1 && g->memcatbyteslimit)
+    {
+        if (g->memcatbytes[memcat] + nsize >= g->memcatbyteslimit)
+            luaD_throw(L, LUA_ERRMEM);
+    }
+
+    if (LUAU_LIKELY(!!g->cb.beforeallocate) && memcat > 1)
+    {
+        if (g->cb.beforeallocate(L, 0, nsize))
+            luaD_throw(L, LUA_ERRMEM);
+    }
 
     int nclass = sizeclass(nsize);
 
@@ -552,11 +593,27 @@ GCObject* luaM_newgco_(lua_State* L, size_t nsize, uint8_t memcat)
         g->cb.onallocate(L, 0, nsize);
     }
 
+#if LUAU_MEMCAT_DEBUGGING
+    if (block != nullptr)
+    {
+        sBlockMemcats[block] = memcat;
+    }
+#endif
+
     return (GCObject*)block;
 }
 
 void luaM_free_(lua_State* L, void* block, size_t osize, uint8_t memcat)
 {
+#if LUAU_MEMCAT_DEBUGGING
+    if (block != nullptr)
+    {
+        auto memcat_iter = sBlockMemcats.find(block);
+        LUAU_ASSERT(memcat_iter != sBlockMemcats.end());
+        LUAU_ASSERT(memcat_iter->second == memcat || memcat == 1);
+        sBlockMemcats.erase(memcat_iter);
+    }
+#endif
     global_State* g = L->global;
     LUAU_ASSERT((osize == 0) == (block == NULL));
 
@@ -573,6 +630,15 @@ void luaM_free_(lua_State* L, void* block, size_t osize, uint8_t memcat)
 
 void luaM_freegco_(lua_State* L, GCObject* block, size_t osize, uint8_t memcat, lua_Page* page)
 {
+#if LUAU_MEMCAT_DEBUGGING
+    if (block != nullptr)
+    {
+        auto memcat_iter = sBlockMemcats.find(block);
+        LUAU_ASSERT(memcat_iter != sBlockMemcats.end());
+        LUAU_ASSERT(memcat_iter->second == memcat || memcat == 1);
+        sBlockMemcats.erase(memcat_iter);
+    }
+#endif
     global_State* g = L->global;
     LUAU_ASSERT((osize == 0) == (block == NULL));
 
@@ -601,6 +667,19 @@ void* luaM_realloc_(lua_State* L, void* block, size_t osize, size_t nsize, uint8
 {
     global_State* g = L->global;
     LUAU_ASSERT((osize == 0) == (block == NULL));
+
+    // ServerLua: enforce memory allocation limits in user-owned memcats
+    if (memcat > 1 && g->memcatbyteslimit)
+    {
+        if (g->memcatbytes[memcat] - osize + nsize >= g->memcatbyteslimit)
+            luaD_throw(L, LUA_ERRMEM);
+    }
+
+    if (LUAU_LIKELY(!!g->cb.beforeallocate) && memcat > 1)
+    {
+        if (g->cb.beforeallocate(L, 0, nsize))
+            luaD_throw(L, LUA_ERRMEM);
+    }
 
     int nclass = sizeclass(nsize);
     int oclass = sizeclass(osize);
@@ -636,6 +715,28 @@ void* luaM_realloc_(lua_State* L, void* block, size_t osize, size_t nsize, uint8
     {
         g->cb.onallocate(L, osize, nsize);
     }
+
+#if LUAU_MEMCAT_DEBUGGING
+    // Needs to be down here rather than above, because we may throw during allocation,
+    // which will prevent the `free()` from happening. If we throw, then this function
+    // is effectively a no-op for memcat tracking, so just keep it down here.
+    auto memcat_iter = sBlockMemcats.find(block);
+    if (block == nullptr)
+    {
+        LUAU_ASSERT(osize == 0);
+        LUAU_ASSERT(memcat_iter == sBlockMemcats.end());
+    }
+    else
+    {
+        LUAU_ASSERT(memcat_iter != sBlockMemcats.end());
+        LUAU_ASSERT(memcat_iter->second == memcat || memcat == 1);
+        // There's a potential free() here, address might not be the same.
+        sBlockMemcats.erase(memcat_iter);
+    }
+
+    if (result != nullptr)
+        sBlockMemcats[result] = memcat;
+#endif
 
     return result;
 }
@@ -707,4 +808,11 @@ void luaM_visitgco(lua_State* L, void* context, bool (*visitor)(void* context, l
 
         curr = next;
     }
+}
+
+
+UnrootedAllocTracker::UnrootedAllocTracker(lua_State* L) : _mGlobalState(L->global) {}
+UnrootedAllocTracker::~UnrootedAllocTracker()
+{
+    _mGlobalState->unrooteduserallocs = 0;
 }

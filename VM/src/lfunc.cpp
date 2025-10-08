@@ -52,6 +52,10 @@ Proto* luaF_newproto(lua_State* L)
     f->bytecodeid = 0;
     f->sizetypeinfo = 0;
 
+    // ServerLua: yield points
+    f->yieldpoints = NULL;
+    f->sizeyieldpoints = 0;
+
     return f;
 }
 
@@ -85,6 +89,18 @@ Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e)
     return c;
 }
 
+// ServerLua: used for u_closure
+UpVal* luaF_newupval (lua_State *L)
+{
+    // TODO: This is cribbed from Lua 5.1 and may not be correct, verify?
+    UpVal *uv = luaM_newgco(L, UpVal, sizeof(UpVal), L->activememcat);
+    luaC_init(L, uv, LUA_TUPVAL);
+    uv->markedopen = 0;
+    uv->v = &uv->u.value;
+    setnilvalue(uv->v);
+    return uv;
+}
+
 UpVal* luaF_findupval(lua_State* L, StkId level)
 {
     global_State* g = L->global;
@@ -100,7 +116,8 @@ UpVal* luaF_findupval(lua_State* L, StkId level)
         pp = &p->u.open.threadnext;
     }
 
-    LUAU_ASSERT(L->isactive);
+    // ServerLua: We do this on inactive threads, so allow if we're currently serializing (GC disabled.)
+    LUAU_ASSERT(L->isactive || L->global->GCthreshold == SIZE_MAX);
     LUAU_ASSERT(!isblack(obj2gco(L))); // we don't use luaC_threadbarrier because active threads never turn black
 
     UpVal* uv = luaM_newgco(L, UpVal, sizeof(UpVal), L->activememcat); // not found: create a new one
@@ -176,6 +193,10 @@ void luaF_freeproto(lua_State* L, Proto* f, lua_Page* page)
 
     if (f->typeinfo)
         luaM_freearray(L, f->typeinfo, f->sizetypeinfo, uint8_t, f->memcat);
+
+    // ServerLua: yield points
+    if (f->yieldpoints)
+        luaM_freearray(L, f->yieldpoints, f->sizeyieldpoints, int, f->memcat);
 
     luaM_freegco(L, f, sizeof(Proto), f->memcat, page);
 }

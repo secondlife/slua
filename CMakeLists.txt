@@ -12,13 +12,25 @@ option(LUAU_BUILD_WEB "Build Web module" OFF)
 option(LUAU_WERROR "Warnings as errors" OFF)
 option(LUAU_STATIC_CRT "Link with the static CRT (/MT)" OFF)
 option(LUAU_EXTERN_C "Use extern C for all APIs" OFF)
+option(LUAU_USE_TAILSLIDE "Link against tailslide for LSL support" ON)
 
 cmake_policy(SET CMP0054 NEW)
-cmake_policy(SET CMP0091 NEW)
+if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.15")
+    cmake_policy(SET CMP0091 NEW)
+endif()
 
 if(LUAU_STATIC_CRT)
     cmake_minimum_required(VERSION 3.15)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+set(TAILSLIDE_LIBRARY "")
+if (LUAU_USE_TAILSLIDE)
+    set(PACKAGE_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/stage/packages/include")
+    # TODO: this seems wacky
+    set(PACKAGE_LIB_DIR "${CMAKE_SOURCE_DIR}/stage/packages/lib/release")
+    set(TAILSLIDE_LIBRARY "tailslide")
+    add_compile_definitions("LUAU_USE_TAILSLIDE=1")
 endif()
 
 project(Luau LANGUAGES CXX C)
@@ -78,7 +90,7 @@ target_include_directories(Luau.Ast PUBLIC Ast/include)
 target_link_libraries(Luau.Ast PUBLIC Luau.Common)
 
 target_compile_features(Luau.Compiler PUBLIC cxx_std_17)
-target_include_directories(Luau.Compiler PUBLIC Compiler/include)
+target_include_directories(Luau.Compiler PUBLIC Compiler/include "${PACKAGE_INCLUDE_DIR}")
 target_link_libraries(Luau.Compiler PUBLIC Luau.Ast)
 
 target_compile_features(Luau.Config PUBLIC cxx_std_17)
@@ -100,7 +112,7 @@ target_link_libraries(Luau.CodeGen PRIVATE Luau.VM Luau.VM.Internals) # Code gen
 target_link_libraries(Luau.CodeGen PUBLIC Luau.Common)
 
 target_compile_features(Luau.VM PRIVATE cxx_std_11)
-target_include_directories(Luau.VM PUBLIC VM/include)
+target_include_directories(Luau.VM PUBLIC VM/include "${PACKAGE_INCLUDE_DIR}")
 target_link_libraries(Luau.VM PUBLIC Luau.Common)
 
 target_compile_features(Luau.Require PUBLIC cxx_std_17)
@@ -210,6 +222,15 @@ if(MSVC_IDE)
     target_sources(Luau.VM PRIVATE tools/natvis/VM.natvis)
 endif()
 
+
+# ServerLua: GCC doesn't support the FP_CONTRACT pragma, so we have to use this to tell it it not to
+# fuse multiply and add for these files.
+set(FP_SENSITIVE_SOURCE_FILES
+        ${CMAKE_SOURCE_DIR}/VM/src/lll.cpp
+        ${CMAKE_SOURCE_DIR}/VM/src/llsl.cpp
+)
+set_source_files_properties(${FP_SENSITIVE_SOURCE_FILES} PROPERTIES COMPILE_FLAGS "-ffp-contract=off")
+
 # On Windows and Android threads are provided, on Linux/Mac/iOS we use pthreads
 add_library(osthreads INTERFACE)
 if(CMAKE_SYSTEM_NAME MATCHES "Linux|Darwin|iOS")
@@ -225,8 +246,10 @@ if(LUAU_BUILD_CLI)
     target_compile_options(Luau.Bytecode.CLI PRIVATE ${LUAU_OPTIONS})
 
     target_include_directories(Luau.Repl.CLI PRIVATE extern extern/isocline/include)
+    target_link_directories(Luau.Repl.CLI PRIVATE "${PACKAGE_LIB_DIR}")
 
-    target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline)
+    target_link_libraries(Luau.CLI.lib PRIVATE Luau.VM Luau.Compiler)
+    target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline "${TAILSLIDE_LIBRARY}")
 
     target_link_libraries(Luau.Repl.CLI PRIVATE osthreads)
     target_link_libraries(Luau.Analyze.CLI PRIVATE osthreads)
@@ -239,7 +262,8 @@ if(LUAU_BUILD_CLI)
     target_include_directories(Luau.Reduce.CLI PUBLIC Reduce/include)
     target_link_libraries(Luau.Reduce.CLI PRIVATE Luau.Common Luau.Ast Luau.Analysis Luau.CLI.lib)
 
-    target_link_libraries(Luau.Compile.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib)
+    target_link_directories(Luau.Compile.CLI PRIVATE "${PACKAGE_LIB_DIR}")
+    target_link_libraries(Luau.Compile.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
 
     target_link_libraries(Luau.Bytecode.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib)
 endif()
@@ -247,23 +271,30 @@ endif()
 if(LUAU_BUILD_TESTS)
     target_compile_options(Luau.UnitTest PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.UnitTest PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY)
-    target_include_directories(Luau.UnitTest PRIVATE extern)
-    target_link_libraries(Luau.UnitTest PRIVATE Luau.Analysis Luau.Compiler Luau.CodeGen)
+    target_include_directories(Luau.UnitTest PRIVATE extern "${PACKAGE_INCLUDE_DIR}")
+    target_link_directories(Luau.UnitTest PRIVATE "${PACKAGE_LIB_DIR}")
+    target_link_libraries(Luau.UnitTest PRIVATE Luau.Analysis Luau.Compiler Luau.CodeGen "${TAILSLIDE_LIBRARY}")
 
     target_compile_options(Luau.Conformance PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY)
-    target_include_directories(Luau.Conformance PRIVATE extern)
-    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Compiler Luau.CodeGen Luau.VM)
+    target_include_directories(Luau.Conformance PRIVATE extern "${PACKAGE_INCLUDE_DIR}")
+    target_link_directories(Luau.Conformance PRIVATE "${PACKAGE_LIB_DIR}")
+    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Compiler Luau.CodeGen Luau.VM "${TAILSLIDE_LIBRARY}")
+
     if(CMAKE_SYSTEM_NAME MATCHES "Android|iOS")
         set(LUAU_CONFORMANCE_SOURCE_DIR "Client/Luau/tests/conformance")
     else ()
-        file(REAL_PATH "tests/conformance" LUAU_CONFORMANCE_SOURCE_DIR)
+        # ServerLua: Use this form since the newer file() command needs CMake>=3.19.0
+        get_filename_component(LUAU_CONFORMANCE_SOURCE_DIR "tests/conformance" REALPATH)
     endif ()
+
     target_compile_definitions(Luau.Conformance PRIVATE LUAU_CONFORMANCE_SOURCE_DIR="${LUAU_CONFORMANCE_SOURCE_DIR}")
 
     target_compile_options(Luau.CLI.Test PRIVATE ${LUAU_OPTIONS})
     target_include_directories(Luau.CLI.Test PRIVATE extern CLI)
-    target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline)
+
+    target_link_directories(Luau.CLI.Test PRIVATE "${PACKAGE_LIB_DIR}")
+    target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline "${TAILSLIDE_LIBRARY}")
     target_link_libraries(Luau.CLI.Test PRIVATE osthreads)
 
 endif()

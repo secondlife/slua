@@ -68,6 +68,9 @@ struct lua_CompileOptions
 // compile source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
 LUACODE_API char* luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize);
 
+// compile LSL source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
+LUACODE_API char* luau_lsl_compile(const char* source, size_t size, size_t* outsize, bool *is_error);
+
 // when libraryMemberConstantCb is called, these methods can be used to set a value of the opaque lua_CompileConstant struct
 // vector component 'w' is not visible to VM runtime configured with LUA_VECTOR_SIZE == 3, but can affect constant folding during compilation
 // string storage must outlive the invocation of 'luau_compile' which used the callback
@@ -76,3 +79,4 @@ LUACODE_API void luau_set_compile_constant_boolean(lua_CompileConstant* constant
 LUACODE_API void luau_set_compile_constant_number(lua_CompileConstant* constant, double n);
 LUACODE_API void luau_set_compile_constant_vector(lua_CompileConstant* constant, float x, float y, float z, float w);
 LUACODE_API void luau_set_compile_constant_string(lua_CompileConstant* constant, const char* s, size_t l);
+

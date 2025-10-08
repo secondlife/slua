@@ -254,6 +254,9 @@ void BytecodeBuilder::endFunction(uint8_t maxstacksize, uint8_t numupvalues, uin
     validate();
 #endif
 
+    // ServerLua: keep track of yield points.
+    tagYieldPoints();
+
     // this call is indirect to make sure we only gain link time dependency on dumpCurrentFunction when needed
     if (dumpFunctionPtr)
         func.dump = (this->*dumpFunctionPtr)(func.dumpinstoffs);
@@ -353,6 +356,17 @@ int32_t BytecodeBuilder::addConstantBoolean(bool value)
     c.valueBoolean = value;
 
     ConstantKey k = {Constant::Type_Boolean, value};
+    return addConstant(k, c);
+}
+
+int32_t BytecodeBuilder::addConstantInteger(int32_t value)
+{
+    Constant c = {Constant::Type_Integer};
+    c.valueInteger = value;
+
+    ConstantKey k = {Constant::Type_Integer, 0};
+    // plop this into the uint64_t
+    memcpy(&k.value, &value, sizeof(value));
     return addConstant(k, c);
 }
 
@@ -779,6 +793,12 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags)
             writeByte(ss, c.valueBoolean);
             break;
 
+        // ServerLua: This is for us, it creates a lightuserdata.
+        case Constant::Type_Integer:
+            writeByte(ss, LBC_CONSTANT_INTEGER);
+            writeInt(ss, c.valueInteger);
+            break;
+
         case Constant::Type_Number:
             writeByte(ss, LBC_CONSTANT_NUMBER);
             writeDouble(ss, c.valueNumber);
@@ -878,6 +898,13 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags)
     else
     {
         writeByte(ss, 0);
+    }
+
+    // ServerLua: write yield points too
+    writeVarInt(ss, func.yieldpoints.size());
+    for (int yield_point : func.yieldpoints)
+    {
+        writeVarInt(ss, yield_point);
     }
 }
 
@@ -1121,7 +1148,7 @@ void BytecodeBuilder::expandJumps()
     for (size_t i = 0; i < insns.size();)
     {
         uint8_t op = LUAU_INSN_OP(insns[i]);
-        LUAU_ASSERT(op < LOP__COUNT);
+        LUAU_ASSERT(op < LOP__COUNT || (op > LOP_LSL__START && op < LOP_LSL__END));
 
         if (currentJump < jumps.size() && jumps[currentJump].source == i)
         {
@@ -1277,7 +1304,8 @@ void BytecodeBuilder::validateInstructions() const
 
         case LOP_LOADB:
             VREG(LUAU_INSN_A(insn));
-            LUAU_ASSERT(LUAU_INSN_B(insn) == 0 || LUAU_INSN_B(insn) == 1);
+            // ServerLua: not true because we abuse this for integers
+            // LUAU_ASSERT(LUAU_INSN_B(insn) == 0 || LUAU_INSN_B(insn) == 1);
             VJUMP(LUAU_INSN_C(insn));
             break;
 
@@ -1444,7 +1472,9 @@ void BytecodeBuilder::validateInstructions() const
         case LOP_POWK:
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
-            VCONST(LUAU_INSN_C(insn), Number);
+            // ServerLua: This can be either a Number or an int.
+            // VCONST(LUAU_INSN_C(insn), Number);
+            VCONSTANY(LUAU_INSN_C(insn));
             break;
 
         case LOP_SUBRK:
@@ -1605,6 +1635,12 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_COVERAGE:
+            break;
+
+        // ServerLua: LSL bytecode support
+        case LOP_LSL_DOUBLE2FLOAT:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
             break;
 
         case LOP_CAPTURE:
@@ -1771,6 +1807,39 @@ void BytecodeBuilder::validateVariadic() const
 }
 #endif
 
+// ServerLua: Tag places where it's valid to yield in case bytecode changes
+// Note that this does NOT account for changes in the NUMBER of yield points
+// in a given bytecode, and can't account for differing stack effects.
+void BytecodeBuilder::tagYieldPoints()
+{
+    LUAU_ASSERT(currentFunction != ~0u);
+
+    Function& func = functions[currentFunction];
+
+    for (size_t i = 0; i < insns.size();)
+    {
+        uint32_t insn = insns[i];
+        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(insn));
+
+        if (luau_is_preemptible(op))
+        {
+            func.yieldpoints.insert(i);
+            if (op == LOP_CALL)
+            {
+                // calls are weird, sometimes savedpc will be just past
+                // the call instruction, and that's totally okay.
+                // There's a distinction between yielding just before
+                // a LOP_CALL is executed due to an interrupt hook, and
+                // interrupting _inside_ a LOP_CALL due to an internal yield.
+                // Add a yield just past the call so we can handle that.
+                func.yieldpoints.insert(i + 1);
+            }
+        }
+        i += getOpLength(op);
+        LUAU_ASSERT(i <= insns.size());
+    }
+}
+
 static bool printableStringConstant(const char* str, size_t len)
 {
     for (size_t i = 0; i < len; ++i)
@@ -1794,6 +1863,10 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k) const
         break;
     case Constant::Type_Boolean:
         formatAppend(result, "%s", data.valueBoolean ? "true" : "false");
+        break;
+    // ServerLua: added by us for integer constant support
+    case Constant::Type_Integer:
+        formatAppend(result, "%d", data.valueInteger);
         break;
     case Constant::Type_Number:
         formatAppend(result, "%.17g", data.valueNumber);
@@ -2227,6 +2300,11 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         formatAppend(result, "COVERAGE\n");
         break;
 
+    // ServerLua: LSL support
+    case LOP_LSL_DOUBLE2FLOAT:
+        formatAppend(result, "LSL_DOUBLE2FLOAT R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
+        break;
+
     case LOP_CAPTURE:
         formatAppend(
             result,
@@ -2278,6 +2356,9 @@ static const char* getBaseTypeString(uint8_t type)
         return "nil";
     case LBC_TYPE_BOOLEAN:
         return "boolean";
+    // ServerLua: added by us for integer constant support
+    case LBC_TYPE_INTEGER:
+        return "integer";
     case LBC_TYPE_NUMBER:
         return "number";
     case LBC_TYPE_STRING:

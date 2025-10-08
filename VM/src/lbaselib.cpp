@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+#define lbaselib_c
 #include "lualib.h"
 
 #include "lstate.h"
@@ -442,9 +443,9 @@ static const luaL_Reg base_funcs[] = {
     {NULL, NULL},
 };
 
-static void auxopen(lua_State* L, const char* name, lua_CFunction f, lua_CFunction u)
+static void auxopen(lua_State* L, const char* name, lua_CFunction f, lua_CFunction u, const char* u_name)
 {
-    lua_pushcfunction(L, u, NULL);
+    lua_pushcfunction(L, u, u_name);
     lua_pushcclosure(L, f, name, 1);
     lua_setfield(L, -2, name);
 }
@@ -461,8 +462,8 @@ int luaopen_base(lua_State* L)
     lua_setglobal(L, "_VERSION"); // set global _VERSION
 
     // `ipairs' and `pairs' need auxiliary functions as upvalues
-    auxopen(L, "ipairs", luaB_ipairs, luaB_inext);
-    auxopen(L, "pairs", luaB_pairs, luaB_next);
+    auxopen(L, "ipairs", luaB_ipairs, luaB_inext, "ipairs_inext");
+    auxopen(L, "pairs", luaB_pairs, luaB_next, "pairs_next");
 
     lua_pushcclosurek(L, luaB_pcally, "pcall", 0, luaB_pcallcont);
     lua_setfield(L, -2, "pcall");

@@ -1,5 +1,6 @@
 MIT License
 
+Copyright (c) 2025 Linden Lab
 Copyright (c) 2019-2025 Roblox Corporation
 Copyright (c) 1994–2019 Lua.org, PUC-Rio.
 

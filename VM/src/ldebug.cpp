@@ -613,3 +613,83 @@ const char* lua_debugtrace(lua_State* L)
 
     return buf;
 }
+
+
+// ServerLua: debugging functions!
+void luaG_dumpvalue(lua_State *L, const lua_TValue *tv) {
+    const char *type_name = lua_typename(L, tv->tt);
+    if (tv->tt == LUA_TLIGHTUSERDATA) {
+        // lightuserdata has a type name of userdata,
+        // let's disambiguate them.
+        type_name = "lightuserdata";
+    }
+    fprintf(stderr, "%s\t", type_name);
+
+    switch (tv->tt) {
+    case LUA_TNUMBER:
+        fprintf(stderr, "%g\n", nvalue(tv));
+        break;
+    case LUA_TSTRING:
+        fprintf(stderr, "%s\n", svalue(tv));
+        break;
+    case LUA_TNIL:
+        fprintf(stderr, "%s\n", "nil");
+        break;
+    case LUA_TBOOLEAN:
+        fprintf(stderr, "%s\n", bvalue(tv) ? "true" : "false");
+        break;
+    case LUA_TLIGHTUSERDATA:
+        // This is a little special because we want to see the full
+        // value range of booleans.
+        if (lightuserdatatag(tv) == LU_TAG_LSL_INTEGER)
+        {
+            fprintf(stderr, "(integer) %d\n", intvalue(tv));
+        }
+        else
+        {
+            fprintf(stderr, "(%d) %p\n", lightuserdatatag(tv), pvalue(tv));
+        }
+        break;
+    case LUA_TFUNCTION:
+    {
+        const char *debug_name = nullptr;
+        if (isLfunction(tv))
+        {
+            const auto *ts = clvalue(tv)->l.p->debugname;
+            if (ts)
+                debug_name = ts->data;
+        }
+        else
+        {
+            debug_name = clvalue(tv)->c.debugname;
+        }
+
+        if (debug_name)
+        {
+            fprintf(stderr, "%s\n", debug_name);
+        }
+        else
+        {
+            fprintf(stderr, "is_c: (%d) %p\n", clvalue(tv)->isC, gcvalue(tv));
+        }
+        break;
+    }
+    case LUA_TUSERDATA:
+        fprintf(stderr, "%p\n", uvalue(tv)->data);
+        break;
+    default:
+        fprintf(stderr, "%p\n", iscollectable(tv) ? gcvalue(tv) : NULL);
+        break;
+    }
+}
+
+/// Debugging utility for making sense of the current state of the stack.
+void lua_dumpstack (lua_State *L) {
+    fprintf(stderr, "dumping stack\n");
+    int top=lua_gettop(L);
+    for (int i=1; i <= top; i++) {
+        const TValue *tv = luaA_toobject(L, i);
+        fprintf(stderr, "%d\t", i);
+        luaG_dumpvalue(L, tv);
+    }
+}

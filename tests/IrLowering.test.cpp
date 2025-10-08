@@ -20,6 +20,10 @@ LUAU_FASTFLAG(LuauCodeGenSimplifyImport2)
 
 static void luauLibraryConstantLookup(const char* library, const char* member, Luau::CompileConstant* constant)
 {
+    // ServerLua: We support global constant lookups
+    if (library == nullptr)
+        return;
+
     // While 'vector' library constants are a Luau built-in, their constant value depends on the embedder LUA_VECTOR_SIZE value
     if (strcmp(library, "vector") == 0)
     {
@@ -42,6 +46,10 @@ static void luauLibraryConstantLookup(const char* library, const char* member, L
 
 static void luauLibraryConstantLookupC(const char* library, const char* member, lua_CompileConstant* constant)
 {
+    // ServerLua: We support global constant lookups
+    if (library == nullptr)
+        return;
+
     if (strcmp(library, "test") == 0)
     {
         if (strcmp(member, "some_nil") == 0)

@@ -11,4 +11,4 @@ doesn't come with any security guarantees; make sure to sign and/or encrypt the 
 
 # Reporting a Vulnerability
 
-You can report security bugs via [HackerOne](https://hackerone.com/roblox). Please refer to the linked page for rules of the bounty program.
+File an issue on this repo.

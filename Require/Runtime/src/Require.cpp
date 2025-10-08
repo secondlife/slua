@@ -49,6 +49,8 @@ static int pushrequireclosureinternal(
     if (!config)
         luaL_error(L, "failed to allocate memory for require configuration");
 
+    lua_fixvalue(L, -1);
+
     config_init(config);
     validateConfig(L, *config);
 

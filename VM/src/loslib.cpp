@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <time.h>
+#include <type_traits>
 
 #define LUA_STRFTIMEOPTIONS "aAbBcdHIjmMpSUwWxXyYzZ%"
 
@@ -21,7 +22,10 @@ static tm* localtime_r(const time_t* timep, tm* result)
 }
 #endif
 
-static time_t os_timegm(struct tm* timep)
+// ServerLua: use a 64-bit time if we're on a platform with 32-bit times.
+using lua_time_t = std::conditional<sizeof(time_t) != sizeof(int32_t), time_t, int64_t>::type;
+
+static lua_time_t os_timegm(struct tm* timep)
 {
     // Julian day number calculation
     int day = timep->tm_mday;
@@ -44,16 +48,16 @@ static time_t os_timegm(struct tm* timep)
 
     // fail the dates before UTC start
     if (julianday < utcstartasjulianday)
-        return time_t(-1);
+        return lua_time_t(-1);
 
     int64_t daysecond = timep->tm_hour * 3600ll + timep->tm_min * 60ll + timep->tm_sec;
     int64_t julianseconds = int64_t(julianday) * 86400ull + daysecond;
 
     if (julianseconds < utcstartasjuliansecond)
-        return time_t(-1);
+        return lua_time_t(-1);
 
     int64_t utc = julianseconds - utcstartasjuliansecond;
-    return time_t(utc);
+    return lua_time_t(utc);
 }
 
 static int os_clock(lua_State* L)
@@ -109,22 +113,46 @@ static int getfield(lua_State* L, const char* key, int d)
     return res;
 }
 
+static tm *os_gmtime_r(const lua_time_t *t, struct tm *tm)
+{
+    time_t clamp_time = (time_t)*t;
+    // Can use the platform gmtime_r
+    if (sizeof(time_t) != sizeof(int32_t))
+    {
+        return gmtime_r(&clamp_time, tm);
+    }
+    // TODO: y2038 polyfills for 32-bit time_t
+    return gmtime_r(&clamp_time, tm);
+}
+
+static tm *os_localtime_r(const lua_time_t *t, struct tm *tm)
+{
+    time_t clamp_time = (time_t)*t;
+    // Can use the platform localtime_r
+    if (sizeof(time_t) != sizeof(int32_t))
+    {
+        return localtime_r(&clamp_time, tm);
+    }
+    // TODO: y2038 polyfills for 32-bit time_t
+    return localtime_r(&clamp_time, tm);
+}
+
 static int os_date(lua_State* L)
 {
     const char* s = luaL_optstring(L, 1, "%c");
-    time_t t = luaL_opt(L, (time_t)luaL_checknumber, 2, time(NULL));
+    lua_time_t t = luaL_opt(L, (lua_time_t)luaL_checknumber, 2, time(NULL));
 
     struct tm tm;
     struct tm* stm;
     if (*s == '!')
     { // UTC?
-        stm = gmtime_r(&t, &tm);
+        stm = os_gmtime_r(&t, &tm);
         s++; // skip `!'
     }
     else
     {
         // on Windows, localtime() fails with dates before epoch start so we disallow that
-        stm = t < 0 ? NULL : localtime_r(&t, &tm);
+        stm = t < 0 ? NULL : os_localtime_r(&t, &tm);
     }
 
     if (stm == NULL) // invalid date?
@@ -178,7 +206,7 @@ static int os_date(lua_State* L)
 
 static int os_time(lua_State* L)
 {
-    time_t t;
+    lua_time_t t;
     if (lua_isnoneornil(L, 1)) // called without args?
         t = time(NULL);        // get current time
     else
@@ -197,7 +225,7 @@ static int os_time(lua_State* L)
         // Note: upstream Lua uses mktime() here which assumes input is local time, but we prefer UTC for consistency
         t = os_timegm(&ts);
     }
-    if (t == (time_t)(-1))
+    if (t == (lua_time_t)(-1))
         lua_pushnil(L);
     else
         lua_pushnumber(L, (double)t);
@@ -206,7 +234,13 @@ static int os_time(lua_State* L)
 
 static int os_difftime(lua_State* L)
 {
+#if defined(__linux__)
+    // ServerLua: GNU systems can just subtract time, but we don't want to rely on time_t since it might be 32-bit.
+    // particularly important for old glibc versions.
+    lua_pushnumber(L, (lua_time_t)(luaL_checknumber(L, 1)) - (lua_time_t)(luaL_optnumber(L, 2, 0)));
+#else
     lua_pushnumber(L, difftime((time_t)(luaL_checknumber(L, 1)), (time_t)(luaL_optnumber(L, 2, 0))));
+#endif
     return 1;
 }
 

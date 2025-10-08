@@ -4,9 +4,13 @@
 
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
+#ifdef LUAU_USE_TAILSLIDE
+#include "Luau/LSLCompiler.h"
+#endif
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/Parser.h"
 #include "Luau/TimeTrace.h"
+#include "Luau/LSLBuiltins.h"
 
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
@@ -46,6 +50,7 @@ struct GlobalOptions
     int optimizationLevel = 1;
     int debugLevel = 1;
     int typeInfoLevel = 0;
+    int slLibraries = 0;
 
     const char* vectorLib = nullptr;
     const char* vectorCtor = nullptr;
@@ -62,7 +67,10 @@ static Luau::CompileOptions copts()
     result.vectorLib = globalOptions.vectorLib;
     result.vectorCtor = globalOptions.vectorCtor;
     result.vectorType = globalOptions.vectorType;
-
+    if (globalOptions.slLibraries)
+    {
+        result.libraryMemberConstantCb = &luauSL_lookup_constant_cb;
+    }
     return result;
 }
 
@@ -296,6 +304,7 @@ static double recordDeltaTime(double& timer)
 static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::AssemblyOptions::Target assemblyTarget, CompileStats& stats)
 {
     double currts = Luau::TimeTrace::getClock();
+    std::string sName = name;
 
     std::optional<std::string> source = readFile(name);
     if (!source)
@@ -353,17 +362,30 @@ static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::A
 
         stats.miscTime += recordDeltaTime(currts);
 
-        Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
-        Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator);
+        // ServerLua: for debugging!
+        if (sName.substr(sName.length() - 4) == ".lsl")
+        {
+#ifdef LUAU_USE_TAILSLIDE
+            compileLSLOrThrow(bcb, *source);
+#else
+            fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
+            exit(1);
+#endif
+        }
+        else
+        {
+            Luau::Allocator allocator;
+            Luau::AstNameTable names(allocator);
+            Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator);
 
-        if (!result.errors.empty())
-            throw Luau::ParseErrors(result.errors);
+            if (!result.errors.empty())
+                throw Luau::ParseErrors(result.errors);
 
-        stats.lines += result.lines;
-        stats.parseTime += recordDeltaTime(currts);
+            stats.lines += result.lines;
+            stats.parseTime += recordDeltaTime(currts);
 
-        Luau::compileOrThrow(bcb, result, names, copts());
+            Luau::compileOrThrow(bcb, result, names, copts());
+        }
         stats.bytecode += bcb.getBytecode().size();
         stats.bytecodeInstructionCount = bcb.getTotalInstructionCount();
         stats.compileTime += recordDeltaTime(currts);
@@ -575,6 +597,11 @@ int main(int argc, char** argv)
         else if (strncmp(argv[i], "--vector-type=", 14) == 0)
         {
             globalOptions.vectorType = argv[i] + 14;
+        }
+        else if (strncmp(argv[i], "--sl-builtins=", 14) == 0)
+        {
+            luauSL_init_global_builtins(argv[i] + 14);
+            globalOptions.slLibraries = 1;
         }
         else if (argv[i][0] == '-' && argv[i][1] == '-' && getCompileFormat(argv[i] + 2))
         {

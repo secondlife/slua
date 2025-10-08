@@ -315,6 +315,33 @@ void luaL_register(lua_State* L, const char* libname, const luaL_Reg* l)
     }
 }
 
+// ServerLua: Used to pepper functions into existing module without clobbering existing funcs
+void luaL_register_noclobber(lua_State* L, const char* libname, const luaL_Reg* l)
+{
+    if (libname)
+    {
+        // check whether lib already exists
+        luaL_findtable(L, LUA_REGISTRYINDEX, "_LOADED", 1);
+        lua_getfield(L, -1, libname); // get _LOADED[libname]
+        if (!lua_istable(L, -1))
+        {                  // not found?
+            lua_pop(L, 1); // remove previous result
+            luaL_error(L, "'%s' is not an existing module", libname);
+        }
+        lua_remove(L, -2); // remove _LOADED table
+    }
+    for (; l->name; l++)
+    {
+        bool exists = lua_getfield(L, -1, l->name) != LUA_TNIL;
+        lua_pop(L, 1);
+        if (!exists)
+        {
+            lua_pushcfunction(L, l->func, l->name);
+            lua_setfield(L, -2, l->name);
+        }
+    }
+}
+
 const char* luaL_findtable(lua_State* L, int idx, const char* fname, int szhint)
 {
     const char* e;
@@ -592,6 +619,18 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TSTRING:
         lua_pushvalue(L, idx);
         break;
+    case LUA_TLIGHTUSERDATA:
+        // ServerLua: Special handling for "integers"
+        if (lua_lightuserdatatag(L, idx) == LU_TAG_LSL_INTEGER)
+        {
+            double n = lua_tointeger(L, idx);
+            char s[LUAI_MAXNUM2STR];
+            char* e = luai_num2str(s, n);
+            lua_pushlstring(L, s, e - s);
+            break;
+        }
+        // intentional fallthrough
+        LUAU_FALLTHROUGH;
     default:
     {
         const void* ptr = lua_topointer(L, idx);

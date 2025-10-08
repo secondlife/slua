@@ -3,6 +3,8 @@
 
 #include "lcommon.h"
 #include "lnumutils.h"
+#include "llsl.h"
+#include "ldebug.h"
 
 #include <math.h>
 
@@ -24,6 +26,14 @@ static int vector_create(lua_State* L)
 #endif
 
     return 1;
+}
+
+// ServerLua: callable vector module
+static int vector_call(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_remove(L, 1);
+    return vector_create(L);
 }
 
 static int vector_magnitude(lua_State* L)
@@ -283,6 +293,71 @@ static int vector_index(lua_State* L)
     luaL_error(L, "attempt to index vector with '%s'", name);
 }
 
+// ServerLua: SL vector additions
+
+static int vector_mul(lua_State *L)
+{
+    const auto* a = luaL_checkvector(L, 1);
+
+    const float *b;
+    if ((b = (const float *)lua_touserdatatagged(L, 2, UTAG_QUATERNION)))
+    {
+        float res[3] = {0.0f};
+        rot_vec(a, b, res);
+        lua_pushvector(L, res[0], res[1], res[2]);
+    }
+    else
+    {
+        b = luaL_checkvector(L, 2);
+        lua_pushnumber(L, a[0]*b[0] + a[1]*b[1] + a[2]*b[2]);
+    }
+    return 1;
+}
+
+static int vector_div(lua_State *L)
+{
+    const auto* a = luaL_checkvector(L, 1);
+
+    const float *b;
+    if ((b = (const float *)lua_touserdatatagged(L, 2, UTAG_QUATERNION)))
+    {
+        float res[3] = {0.0f};
+        float b_conj[4];
+        copy_quat(b_conj, b);
+        conj_quat(b_conj);
+        rot_vec(a, b_conj, res);
+        lua_pushvector(L, res[0], res[1], res[2]);
+    }
+    else
+    {
+        // Must be a vector div float, use the Mono logic.
+        auto rhs = luaL_checknumber(L, 2);
+        if (rhs == 0.0)
+            luaG_runerrorL(L, "Math error: division by zero");
+
+        float mul = 1.0f / (float)rhs;
+        lua_pushvector(L, a[0] * mul, a[1] * mul, a[2] * mul);
+    }
+    return 1;
+}
+
+static int vector_mod(lua_State *L)
+{
+    const auto* a = luaL_checkvector(L, 1);
+    const auto *b = luaL_checkvector(L, 2);
+
+    lua_pushvector(L, a[1]*b[2] - b[1]*a[2], a[2]*b[0] - b[2]*a[0], a[0]*b[1] - b[0]*a[1]);
+    return 1;
+}
+
+static int vector_tostring(lua_State *L)
+{
+    auto* a = luaL_checkvector(L, 1);
+    lua_pushfstringL(L, "<%5.5f, %5.5f, %5.5f>", a[0], a[1], a[2]);
+
+    return 1;
+}
+
 static const luaL_Reg vectorlib[] = {
     {"create", vector_create},
     {"magnitude", vector_magnitude},
@@ -315,8 +390,22 @@ static void createmetatable(lua_State* L)
     lua_setmetatable(L, -2); // set vector metatable
     lua_pop(L, 1);           // pop dummy vector
 
-    lua_pushcfunction(L, vector_index, nullptr);
+    lua_pushcfunction(L, vector_index, "__index");
     lua_setfield(L, -2, "__index");
+
+    // ServerLua: SL additions to vectors
+    lua_pushcfunction(L, vector_mul, "__mul");
+    lua_setfield(L, -2, "__mul");
+
+    lua_pushcfunction(L, vector_div, "__div");
+    lua_setfield(L, -2, "__div");
+
+    lua_pushcfunction(L, vector_mod, "__mod");
+    lua_setfield(L, -2, "__mod");
+
+    lua_pushcfunction(L, vector_tostring, "__tostring");
+    lua_setfield(L, -2, "__tostring");
+
 
     lua_setreadonly(L, -1, true);
     lua_pop(L, 1); // pop the metatable
@@ -337,6 +426,14 @@ int luaopen_vector(lua_State* L)
     lua_pushvector(L, 1.0f, 1.0f, 1.0f);
     lua_setfield(L, -2, "one");
 #endif
+
+    // ServerLua: `vector()` is an alias to `vector.create()`, so we need to add a metatable
+    //  to the vector module which allows calling it.
+    lua_newtable(L);
+    lua_pushcfunction(L, vector_call, "__call");
+    lua_setfield(L, -2, "__call");
+    lua_setreadonly(L, -1, true);
+    lua_setmetatable(L, -2);
 
     createmetatable(L);
 
