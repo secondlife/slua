@@ -74,6 +74,7 @@ static int lsl_quaternion_ctor(lua_State *L)
 
 int luaSL_pushquaternion(lua_State *L, double x, double y, double z, double s)
 {
+    lua_checkstack(L, 5);
     lua_pushcfunction(L, lsl_quaternion_ctor, "quaternion");
     lua_pushnumber(L, x);
     lua_pushnumber(L, y);
@@ -1263,6 +1264,7 @@ static void make_weak_uuid_table(lua_State *L)
 
 int luaSL_pushdetectedevent(lua_State *L, int index, bool valid, bool can_change_damage)
 {
+    lua_checkstack(L, 1);
     auto *detected_event = (lua_DetectedEvent *)lua_newuserdatataggedwithmetatable(L, sizeof(lua_DetectedEvent), UTAG_DETECTED_EVENT);
     detected_event->index = index;
     detected_event->valid = valid;
@@ -1391,6 +1393,7 @@ static void lsl_llevents_dtor(lua_State *L, void *data)
 
 int luaSL_createeventmanager(lua_State *L)
 {
+    lua_checkstack(L, 2);
     auto *llevents = (lua_LLEvents *)lua_newuserdatataggedwithmetatable(L, sizeof(lua_LLEvents), UTAG_LLEVENTS);
 
     // Create empty listeners table
