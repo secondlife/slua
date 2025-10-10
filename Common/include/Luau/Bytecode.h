@@ -424,7 +424,18 @@ enum LuauOpcode
 
     // ServerLua: These are LSL-specific opcodes, we give them high numbers so that they don't collide with Luau's
     LOP_LSL__START = 200,
+
+    // LSL_DOUBLE2FLOAT: truncate double to 32-bit float range
+    // A: target register
+    // B: source register
     LOP_LSL_DOUBLE2FLOAT,
+
+    // LSL_CASTINTFLOAT: convert between LSL integer and float
+    // A: target register
+    // B: source register
+    // C: direction (0 = int->float, 1 = float->int)
+    LOP_LSL_CASTINTFLOAT,
+
     LOP_LSL__END,
 };
 

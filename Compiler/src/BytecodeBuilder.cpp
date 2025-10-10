@@ -1643,6 +1643,11 @@ void BytecodeBuilder::validateInstructions() const
             VREG(LUAU_INSN_B(insn));
             break;
 
+        case LOP_LSL_CASTINTFLOAT:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            break;
+
         case LOP_CAPTURE:
             switch (LUAU_INSN_A(insn))
             {
@@ -2303,6 +2308,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
     // ServerLua: LSL support
     case LOP_LSL_DOUBLE2FLOAT:
         formatAppend(result, "LSL_DOUBLE2FLOAT R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
+        break;
+
+    case LOP_LSL_CASTINTFLOAT:
+        formatAppend(result, "LSL_CASTINTFLOAT R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
         break;
 
     case LOP_CAPTURE:

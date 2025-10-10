@@ -206,6 +206,7 @@ static void luau_execute(lua_State* L)
     //  Can we do this in a constexpr or something?
     //  I get the sense that in some cases this might force dispatch on the array in memory...
     kDispatchTable[LOP_LSL_DOUBLE2FLOAT] = VM_DISPATCH_OP(LOP_LSL_DOUBLE2FLOAT);
+    kDispatchTable[LOP_LSL_CASTINTFLOAT] = VM_DISPATCH_OP(LOP_LSL_CASTINTFLOAT);
 #endif
 
     // ServerLua: Make sure this is unset
@@ -343,6 +344,29 @@ reentry:
                 LUAU_ASSERT(ttisnumber(rb));
 
                 setnvalue(ra, (float)nvalue(rb));
+                VM_NEXT();
+            }
+
+            // ServerLua: convert between LSL integer and float
+            VM_CASE(LOP_LSL_CASTINTFLOAT)
+            {
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                int direction = LUAU_INSN_C(insn);
+
+                if (direction == 0)
+                {
+                    // int -> float
+                    LUAU_ASSERT(l_isinteger(rb));
+                    setnvalue(ra, (double)intvalue(rb));
+                }
+                else
+                {
+                    // float -> int (matches lsl_cast() and avoids AArch64 weirdness)
+                    LUAU_ASSERT(ttisnumber(rb));
+                    setintvalue(ra, (int32_t)((int64_t)((float)nvalue(rb))));
+                }
                 VM_NEXT();
             }
 

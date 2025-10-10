@@ -489,7 +489,18 @@ typedef enum <uint32> {
     LOP__COUNT,
 
     LOP__LSL_START = 200,
+
+    // LSL_DOUBLE2FLOAT: truncate double to 32-bit float range
+    // A: target register
+    // B: source register
     LOP_LSL_DOUBLE2FLOAT,
+
+    // LSL_CASTINTFLOAT: convert between LSL integer and float
+    // A: target register
+    // B: source register
+    // C: direction (0 = int->float, 1 = float->int)
+    LOP_LSL_CASTINTFLOAT,
+
     LOP__LSL_END
 } LuauOpCode;
 

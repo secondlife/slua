@@ -880,13 +880,29 @@ bool LuauVisitor::visit(LSLBoolConversionExpression *bool_expr)
 bool LuauVisitor::visit(LSLTypecastExpression *typecast_expr)
 {
     auto *child_expr = typecast_expr->getChildExpr();
-    if (child_expr->getIType() == typecast_expr->getIType())
+    auto from_type = child_expr->getIType();
+    auto to_type = typecast_expr->getIType();
+
+    if (from_type == to_type)
     {
         // self-cast is just an identity function, pass through
         child_expr->visit(this);
         return false;
     }
 
+    // This may seem weird, but these kinds of casts are all over LSL math code,
+    // particularly int->float promotion, so avoiding function call overhead is very useful.
+    if ((from_type == LST_INTEGER && to_type == LST_FLOATINGPOINT) ||
+        (from_type == LST_FLOATINGPOINT && to_type == LST_INTEGER))
+    {
+        const auto dest_reg = takeTargetReg(typecast_expr);
+        const auto source_reg = handlePositionIndependentExpr(child_expr);
+        int direction = (from_type == LST_INTEGER) ? 0 : 1;  // 0 = int->float, 1 = float->int
+        mBuilder->emitABC(LOP_LSL_CASTINTFLOAT, dest_reg, source_reg, direction);
+        return false;
+    }
+
+    // Slow path: general casts via function call
     const auto expected_target = mTargetReg;
     const auto func_reg = allocReg(typecast_expr);
     [[maybe_unused]] RegScope reg_scope(this);
@@ -895,7 +911,7 @@ bool LuauVisitor::visit(LSLTypecastExpression *typecast_expr)
     // We don't need to cast doubles to floats, cast() will handle that.
     pushArgument(child_expr, false);
 
-    mBuilder->emitAD(LOP_LOADN, allocReg(typecast_expr), typecast_expr->getIType());
+    mBuilder->emitAD(LOP_LOADN, allocReg(typecast_expr), to_type);
     mBuilder->emitABC(LOP_CALL, func_reg, 2 + 1, 1 + 1);
     maybeMove(expected_target, func_reg);
     return false;
