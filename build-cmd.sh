@@ -46,6 +46,17 @@ pushd "$top"
     # Don't litter the source directory with build artifacts
     mkdir -p "$stage/build"
     cd "$stage/build"
+
+    # 32-bit linux needs some different vars
+    case "$AUTOBUILD_PLATFORM" in
+        linux)
+            # These flags are all that are needed to successfully pass the conformance tests under -m32.
+            # 64-bit times are needed for the time tests, and SSE is needed so that x87 is not
+            # used for floating point math. SSE is the default under x64, so not a problem.
+            LL_BUILD_RELEASE="${LL_BUILD_RELEASE} -msse3 -mfpmath=sse"
+        ;;
+    esac
+
     case "$AUTOBUILD_PLATFORM" in
         windows*)
             set -o igncr
@@ -68,14 +79,6 @@ pushd "$top"
 
             cp -v Release/luau.exe "$stage/bin/"
         ;;
-        linux)
-          # These flags are all that are needed to successfully pass the conformance tests under -m32.
-          # 64-bit times are needed for the time tests, and SSE is needed so that x87 is not
-          # used for floating point math. SSE is the default under x64, so not a problem.
-          # Weirdly enough, -O2 under x64 causes zero issues.
-          LL_BUILD_RELEASE="${LL_BUILD_RELEASE} -msse3 -mfpmath=sse"
-          # Fall through to below
-        ;&
         darwin*|linux*)
             # Continue compiling with asserts for now
             LL_BUILD_RELEASE="$(remove_switch -DNDEBUG $LL_BUILD_RELEASE)"

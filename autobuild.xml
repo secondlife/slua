@@ -18,11 +18,11 @@
               <key>creds</key>
               <string>github</string>
               <key>hash</key>
-              <string>3c9403c0872911f7617d369ff13756dbdd219808</string>
+              <string>23d8784ffb50b76c04978913cccebe054b044e04</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/301313637</string>
+              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/303294511</string>
             </map>
             <key>name</key>
             <string>darwin64</string>
@@ -34,11 +34,11 @@
               <key>creds</key>
               <string>github</string>
               <key>hash</key>
-              <string>a3cc1132d79ef60ae14e3040ff04fbadf8c9e6e3</string>
+              <string>cede59451ed57083e41482c315ac42a4cceea6fa</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/301313640</string>
+              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/303294512</string>
             </map>
             <key>name</key>
             <string>linux</string>
@@ -50,11 +50,11 @@
               <key>creds</key>
               <string>github</string>
               <key>hash</key>
-              <string>dcf505ca651a02fa8161f1da2b4e0552ffba409a</string>
+              <string>7a9d7fcc59cb8349b97c550f0a8f5dc6aeab6b55</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/301313643</string>
+              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/303294513</string>
             </map>
             <key>name</key>
             <string>linux64</string>
@@ -66,11 +66,11 @@
               <key>creds</key>
               <string>github</string>
               <key>hash</key>
-              <string>fc7f40d9e0d24756a4adbd18b3e7cce76c14a4f2</string>
+              <string>12533b0e2a81e80fe233acebc688d6341fc5fa7b</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/301313651</string>
+              <string>https://api.github.com/repos/secondlife/tailslide/releases/assets/303294516</string>
             </map>
             <key>name</key>
             <string>windows64</string>
@@ -83,7 +83,7 @@
         <key>copyright</key>
         <string>You may copy it</string>
         <key>version</key>
-        <string>1.5.3</string>
+        <string>1.5.4</string>
         <key>use_scm_version</key>
         <boolean>true</boolean>
         <key>name</key>
