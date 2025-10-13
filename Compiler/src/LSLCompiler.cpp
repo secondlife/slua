@@ -7,6 +7,7 @@
 
 #include <tailslide/tailslide.hh>
 #include <tailslide/logger.hh>
+#include <tailslide/passes/constant_expression_simplifier.hh>
 #include <unordered_set>
 
 using namespace Tailslide;
@@ -2171,6 +2172,9 @@ void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source)
 
     // Need to propagate values for all the injected casts and whatnot
     script->propagateValues();
+
+    ConstantExpressionSimplifier constant_expression_simplifier(&parser.allocator);
+    script->visit(&constant_expression_simplifier);
 
     // Determine register usage for locals
     LuauSymbolMap symbol_map;
