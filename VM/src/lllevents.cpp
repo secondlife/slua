@@ -1,4 +1,6 @@
 #define lllevents_c
+
+#include <cstring>
 #include "lua.h"
 #include "lcommon.h"
 #include "lualib.h"
@@ -61,7 +63,7 @@ static int detected_event_call_ll_function(lua_State *L, const char *function_na
 
     lua_getglobal(lua_mainthread(L), "ll");
     lua_rawgetfield(L, -1, function_name);
-    lua_pushinteger(L, detected_event->index - 1);
+    lua_pushinteger(L, detected_event->index);
     lua_call(L, 1, 1);
     return 1;
 }
@@ -109,7 +111,7 @@ static int detected_event_adjust_damage(lua_State *L)
 
     lua_getglobal(lua_mainthread(L), "ll");
     lua_rawgetfield(L, -1, "AdjustDamage");
-    lua_pushinteger(L, detected_event->index - 1);
+    lua_pushinteger(L, detected_event->index);
     lua_pushnumber(L, damage);
     lua_call(L, 2, 0);
     return 0;
@@ -391,7 +393,7 @@ static int llevents_once(lua_State *L)
     if (!llevents)
         luaL_typeerror(L, 1, "LLEvents");
 
-    const char *event_name = luaL_checkstring(L, 2);
+    luaL_checkstring(L, 2);
     luaL_checktype(L, 3, LUA_TFUNCTION);
 
     // Create wrapper function with upvalues
