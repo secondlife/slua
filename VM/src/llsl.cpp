@@ -1226,6 +1226,52 @@ int luaSL_pushnativeinteger(lua_State *L, int val)
     return 1;
 }
 
+void luaSL_pushindexlike(lua_State *L, int index)
+{
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+    if (!compat_mode)
+    {
+        if (index == -1)
+        {
+            // "-1" == "not found" == nil in Lua semantics
+            lua_pushnil(L);
+            return;
+        }
+        else if (index >= 0)
+            ++index;
+    }
+
+    luaSL_pushnativeinteger(L, index);
+}
+
+int luaSL_checkindexlike(lua_State *L, int index)
+{
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+    int val = luaL_checkinteger(L, index);
+    if (!compat_mode)
+    {
+        if (val == 0)
+        {
+            luaL_error(L, "passed 0 when a 1-based index was expected");
+        }
+        else if (val >= 1)
+            --val;
+    }
+
+    return val;
+}
+
+void luaSL_pushboollike(lua_State *L, int val)
+{
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
+    if (!compat_mode)
+    {
+        // We want to push _real_ booleans if we're not in compat mode.
+        lua_pushboolean(L, val == 0);
+    }
+
+    luaSL_pushnativeinteger(L, val);
+}
 
 static const luaL_Reg lsllib[] = {
     {"cast", lsl_must_cast},
