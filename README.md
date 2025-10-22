@@ -1,8 +1,8 @@
 # SLua ![CI](https://github.com/secondlife/SLua/actions/workflows/build.yml/badge.svg) [![codecov](https://codecov.io/gh/secondlife/SLua/branch/main/graph/badge.svg)](https://codecov.io/gh/secondlife/SLua)
 
-SLua (short for ServerLua) is a friendly fork of [Luau](https://github.com/Roblox/luau/) exploring serializable micro-VMs for
-[mobile agent](https://en.wikipedia.org/wiki/Mobile_agent) entities in virtual worlds.
-It uses a modified [Eris](https://github.com/fnuecke/eris) to serialize agent execution state.
+SLua (short for ServerLua) is a friendly fork of [Luau](https://github.com/Roblox/luau/) implementing efficient
+serializable relocatable scripted entities in virtual worlds (specifically Second Life).
+It uses a modified [Eris](https://github.com/fnuecke/eris) called "Ares" to serialize agent execution state.
 
 Its intended use is scripting for mixed-author environments with stateful, semi-autonomous objects that can seamlessly
 roam across server instances.
@@ -34,7 +34,7 @@ they aren't in SLua-specific code.
 ## Building
 
 If building with LSL support (the default), you must first install [`autobuild`](https://github.com/secondlife/autobuild),
-which will pull in the [`tailslide`](https://github.com/SaladDais/tailslide) dependency:
+which will pull in the [`tailslide`](https://github.com/secondlife/tailslide) dependency:
 
 ```sh
 pipx install autobuild
