@@ -46,7 +46,12 @@ typedef struct lua_SLRuntimeState
 */
 #define LUA_REGISTRYINDEX (-LUAI_MAXCSTACK - 2000)
 #define LUA_ENVIRONINDEX (-LUAI_MAXCSTACK - 2001)
-#define LUA_GLOBALSINDEX (-LUAI_MAXCSTACK - 2002)
+// ServerLua: So we can get the "real" globals without any user additions
+//  Some cases care about a value's index relative to `LUA_GLOBALSINDEX` specifically,
+//  so we sandwich our new value in the middle here and shift `LUA_GLOBALSINDEX`'s
+//  value up by one.
+#define LUA_BASEGLOBALSINDEX (-LUAI_MAXCSTACK - 2002)
+#define LUA_GLOBALSINDEX (-LUAI_MAXCSTACK - 2003)
 #define lua_upvalueindex(i) (LUA_GLOBALSINDEX - (i))
 #define lua_ispseudo(i) ((i) <= LUA_REGISTRYINDEX)
 

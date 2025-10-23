@@ -73,11 +73,13 @@ local detected_table = nil
 LLEvents:on("touch_start", function(detected)
     detected_table = detected
     assert(detected[1].valid)
+    -- Should return the 0-indexed event index we used.
+    assert(detected[3]:getTouchFace() == 2)
 end)
 
-LLEvents:_handleEvent("touch_start", 2)
+LLEvents:_handleEvent("touch_start", 5)
 assert(detected_table ~= nil)
-assert(#detected_table == 2)
+assert(#detected_table == 5)
 assert(typeof(detected_table[1]) == "DetectedEvent")
 -- We're outside the event handler, so this shouldn't be valid anymore
 assert(not detected_table[1].valid)

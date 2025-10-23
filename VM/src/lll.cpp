@@ -859,6 +859,13 @@ static int ll_getfreememory(lua_State *L)
     return 1;
 }
 
+static int ll_detectedtouchface(lua_State *L)
+{
+    // Just return whatever we passed in if it was an int.
+    luaSL_pushnativeinteger(L, luaSL_checkindexlike(L, 1));
+    return 1;
+}
+
 static const luaL_Reg lltestlib[] = {
     // This requires weird unicode semantics we shouldn't re-implement by hand.
     {"GetSubString", ll_getsubstring},
@@ -869,6 +876,8 @@ static const luaL_Reg lltestlib[] = {
     {"Sleep", ll_sleep},
     {"GetUsedMemory", ll_getusedmemory},
     {"GetFreeMemory", ll_getfreememory},
+    // Strictly just for testing that the `ll.Detected*()` wrappers work at all.
+    {"DetectedTouchFace", ll_detectedtouchface},
     {NULL, NULL},
 };
 

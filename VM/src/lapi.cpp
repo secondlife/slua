@@ -94,6 +94,12 @@ static LUAU_NOINLINE TValue* pseudo2addr(lua_State* L, int idx)
         sethvalue(L, &L->global->pseudotemp, L->gt);
         return &L->global->pseudotemp;
     }
+    // ServerLua: quick way of getting "base" globals
+    case LUA_BASEGLOBALSINDEX:
+    {
+        sethvalue(L, &L->global->pseudotemp, L->global->mainthread->gt);
+        return &L->global->pseudotemp;
+    }
     default:
     {
         Closure* func = curr_func(L);

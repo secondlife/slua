@@ -61,7 +61,7 @@ static int detected_event_call_ll_function(lua_State *L, const char *function_na
     if (!detected_event->valid)
         luaL_errorL(L, "DetectedEvent is no longer valid");
 
-    lua_getglobal(lua_mainthread(L), "ll");
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "ll");
     lua_rawgetfield(L, -1, function_name);
     lua_pushinteger(L, detected_event->index);
     lua_call(L, 1, 1);
@@ -132,7 +132,7 @@ void luaSL_setup_detectedevent_metatable(lua_State *L)
     ADD_DETECTED_GETTER("getOwner", "DetectedOwner");
     ADD_DETECTED_GETTER("getName", "DetectedName");
     ADD_DETECTED_GETTER("getKey", "DetectedKey");
-    ADD_DETECTED_GETTER("getTouchFace", "DetectedFace");
+    ADD_DETECTED_GETTER("getTouchFace", "DetectedTouchFace");
     ADD_DETECTED_GETTER("getLinkNumber", "DetectedLinkNumber");
     ADD_DETECTED_GETTER("getGrab", "DetectedGrab");
     ADD_DETECTED_GETTER("getGroup", "DetectedGroup");
