@@ -11,7 +11,7 @@ namespace Tailslide {
 struct LuauSymbolData {
     // Index of the given variable within the locals (not for globals!)
     // For functions, this is the function ID.
-    uint32_t index = 0;
+    int16_t index = 0;
     // all locals (if this symbol is a function or event handler)
     std::vector<LSLSymbol *> locals{};
     // Constants that need small indices (tracked during resource visitor pass)
@@ -105,14 +105,14 @@ protected:
     /// This allows MOVE ellision when storing something directly into a local
     uint8_t takeTargetReg(LSLASTNode* node);
     /// Maybe emit a MOVE instruction if expected_target != and the regs don't match
-    void maybeMove(const int16_t expected_target, const uint8_t actual_reg) const;
+    void maybeMove(int16_t expected_target, uint8_t actual_reg) const;
     void pushGlobal(uint8_t target_reg, const char* global_name);
     void pushGlobal(uint8_t target_reg, LSLASTNode* node);
     void setGlobal(uint8_t source_reg, LSLASTNode* glob_node);
     void pushImport(uint8_t target_reg, const char* import1, const char* import2) const;
     void pushImport(uint8_t target_reg, const char* import1) const;
     void patchJumpOrThrow(size_t jumpLabel, size_t targetLabel);
-    bool needTruncateToFloat(Tailslide::LSLExpression* expr) const;
+    static bool needTruncateToFloat(Tailslide::LSLExpression* expr) ;
     int16_t addConstantUnder(LSLConstant* cv, size_t limit) const;
     int16_t addConstant(LSLConstant* cv) const;
     int16_t addConstantFloat(float num, size_t limit) const;

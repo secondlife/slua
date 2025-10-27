@@ -51,7 +51,7 @@ bool LuauResourceVisitor::visit(LSLState *state)
     // This better not be too big to fit in LOADN's args
     if (_mTopStateID >= INT16_MAX)
         throw Luau::CompileError(convertLoc(state->getLoc()), "Too many states");
-    getSymbolData(state->getSymbol())->index = _mTopStateID++;
+    getSymbolData(state->getSymbol())->index = (int16_t)_mTopStateID++;
     return true;
 }
 
@@ -65,7 +65,9 @@ void LuauResourceVisitor::handleFuncLike(LSLASTNode* node)
     auto *sym = node->getSymbol();
     auto *func_sym_data = getSymbolData(sym);
     _mCurrentFunc = func_sym_data;
-    func_sym_data->index = _mTopFuncID++;
+    if (_mTopFuncID >= INT16_MAX)
+        throw Luau::CompileError(convertLoc(node->getLoc()), "Too many functions");
+    func_sym_data->index = (int16_t)_mTopFuncID++;
 
     // Register the parameters
     for (auto *param_node : *node->getSymbol()->getFunctionDecl())
@@ -221,7 +223,7 @@ bool LuauResourceVisitor::visit(LSLTypecastExpression *typecast_expr)
 class LuauDeSugaringVisitor : public DeSugaringVisitor
 {
 public:
-    LuauDeSugaringVisitor(Tailslide::ScriptAllocator *allocator): DeSugaringVisitor(allocator, true) {};
+    explicit LuauDeSugaringVisitor(Tailslide::ScriptAllocator *allocator): DeSugaringVisitor(allocator, true) {};
     bool visit(Tailslide::LSLBinaryExpression *bin_expr) override;
 protected:
     using DeSugaringVisitor::visit;
@@ -308,7 +310,7 @@ bool LuauLValueMutationVisitor::visit(Tailslide::LSLBinaryExpression* bin_expr)
 // Copied from Compiler.cpp, used for keeping track of the virtual stack in registers
 struct RegScope
 {
-    explicit RegScope(LuauVisitor* self)
+    [[maybe_unused]] explicit RegScope(LuauVisitor* self)
         : self(self)
         , oldTop(self->mRegTop)
     {
@@ -316,7 +318,7 @@ struct RegScope
 
     // This ctor is useful to forcefully adjust the stack frame in case we know that registers after a certain point are scratch and can be
     // discarded
-    RegScope(LuauVisitor* self, unsigned int top)
+    [[maybe_unused]] RegScope(LuauVisitor* self, unsigned int top)
         : self(self)
         , oldTop(self->mRegTop)
     {
@@ -550,7 +552,7 @@ void LuauVisitor::buildFunction(LSLASTNode *func_like)
     const std::string &name = _mSymbolNames[func_like->getSymbol()];
     mBuilder->setDebugFunctionName(sref(name));
     // Keep track of these so that we can assign the globals later
-    _mFunctionFuncIds.push_back({name, func_id});
+    _mFunctionFuncIds.emplace_back(name, func_id);
 
     for (auto [jump_loc, label_sym] : _mJumpTargets)
     {
@@ -1149,7 +1151,7 @@ bool LuauVisitor::visit(LSLUnaryExpression *un_expr)
 
 bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
 {
-    const int expected_target = mTargetReg;
+    const auto expected_target = mTargetReg;
     const auto target_reg = takeTargetReg(bin_expr);
     const auto op = bin_expr->getOperation();
 
@@ -1448,7 +1450,7 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
         if (rhs->getNodeSubType() == NODE_CONSTANT_EXPRESSION &&
             (rhs->getIType() == LST_INTEGER || rhs->getIType() == LST_FLOATINGPOINT))
         {
-            auto* rhs_const = static_cast<LSLConstantExpression*>(rhs);
+            auto* rhs_const = dynamic_cast<LSLConstantExpression*>(rhs);
             auto rhs_const_idx = addConstant(rhs_const->getConstantValue());
             // Constant index is low enough to fit
             if (rhs_const_idx >= 0 && rhs_const_idx <= 255)
@@ -1500,7 +1502,7 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
             lhs->getNodeSubType() == NODE_CONSTANT_EXPRESSION &&
             (lhs->getIType() == LST_INTEGER || lhs->getIType() == LST_FLOATINGPOINT))
         {
-            auto* lhs_const = static_cast<LSLConstantExpression*>(lhs);
+            auto* lhs_const = dynamic_cast<LSLConstantExpression*>(lhs);
             auto lhs_const_idx = addConstant(lhs_const->getConstantValue());
 
             // Constant index is low enough to fit
@@ -1717,7 +1719,7 @@ void LuauVisitor::pushArgument(LSLExpression* expr, bool want_float_cast)
     allocReg(expr);
 }
 
-bool LuauVisitor::needTruncateToFloat(Tailslide::LSLExpression* expr) const
+bool LuauVisitor::needTruncateToFloat(Tailslide::LSLExpression* expr)
 {
     // The LSL-on-Mono situation is very complicated. FP temporaries are generally
     // doubles, but doing some things with them can truncate them to float space.
@@ -1754,32 +1756,42 @@ bool LuauVisitor::needTruncateToFloat(Tailslide::LSLExpression* expr) const
 /// Add a constant to the constants list and return its ID
 int16_t LuauVisitor::addConstant(LSLConstant* cv) const
 {
+    int32_t constant_id = -1;
     switch(cv->getIType())
     {
         case LST_INTEGER:
-            return mBuilder->addConstantInteger(static_cast<LSLIntegerConstant*>(cv)->getValue());
+            constant_id = mBuilder->addConstantInteger(dynamic_cast<LSLIntegerConstant*>(cv)->getValue());
+            break;
         case LST_FLOATINGPOINT:
-            return mBuilder->addConstantNumber((float)static_cast<LSLFloatConstant*>(cv)->getValue());
+            constant_id = mBuilder->addConstantNumber((float)dynamic_cast<LSLFloatConstant*>(cv)->getValue());
+            break;
         case LST_KEY:
         case LST_STRING:
         {
-            const char *sv = static_cast<LSLStringConstant*>(cv)->getValue();
+            const char *sv = dynamic_cast<LSLStringConstant*>(cv)->getValue();
             // LSL strings cannot have embedded null due to how the interop layer works,
             // so this is fine. The only way to generate strings with such odd bytes would
             // be through library functions, but the interop layer implicitly strips them out.
             // The lexer itself also implicitly truncates string literals at the first null.
-            return mBuilder->addConstantString({sv, strlen(sv)});
+            constant_id = mBuilder->addConstantString({sv, strlen(sv)});
+            break;
         }
         case LST_VECTOR:
         {
-            auto *vv = static_cast<LSLVectorConstant *>(cv)->getValue();
-            return mBuilder->addConstantVector(vv->x, vv->y, vv->z, 0.0);
+            auto *vv = dynamic_cast<LSLVectorConstant *>(cv)->getValue();
+            constant_id = mBuilder->addConstantVector(vv->x, vv->y, vv->z, 0.0);
+            break;
         }
         default:
             LUAU_ASSERT(!"Unhandled constant type");
     }
 
-    return -1;
+    if (constant_id < 0 || constant_id > INT16_MAX)
+    {
+        throw Luau::CompileError(convertLoc(cv->getLoc()), "Too many constants!");
+    }
+
+    return (int16_t)constant_id;
 }
 
 int16_t LuauVisitor::addConstantUnder(LSLConstant *cv, size_t limit) const
@@ -1788,10 +1800,6 @@ int16_t LuauVisitor::addConstantUnder(LSLConstant *cv, size_t limit) const
     LUAU_ASSERT(limit <= INT16_MAX);
 
     auto const_id = addConstant(cv);
-    if (const_id < 0)
-    {
-        throw Luau::CompileError({{0, 0}, {0, 0}}, "Too many constants!");
-    }
     // We've already ruled out the negative case
     if ((size_t)const_id >= limit)
     {
@@ -1877,7 +1885,7 @@ int16_t LuauVisitor::addImport(Luau::BytecodeBuilder::StringRef str1, Luau::Byte
     {
         throw Luau::CompileError({{0, 0}, {0, 0}}, "Constant ID over limit!");
     }
-    return const_id_import;
+    return (int16_t)const_id_import;
 }
 
 unsigned int LuauVisitor::pushConstant(LSLConstant *cv)
@@ -1888,7 +1896,7 @@ unsigned int LuauVisitor::pushConstant(LSLConstant *cv)
         case LST_LIST:
         {
             // We only support the empty list as a fake constant, to improve API symmetry.
-            auto *lv = static_cast<LSLListConstant *>(cv);
+            auto *lv = dynamic_cast<LSLListConstant *>(cv);
             LUAU_ASSERT(!lv->getLength());
             mBuilder->emitABC(LOP_NEWTABLE, reg_id, 0, 0);
             mBuilder->emitAux(0);
@@ -1899,7 +1907,7 @@ unsigned int LuauVisitor::pushConstant(LSLConstant *cv)
             // Quaternions are special, they don't have a constant, really.
             [[maybe_unused]] RegScope quat_scope(this);
             auto quat_func_reg = allocReg(cv);
-            auto *qv = static_cast<LSLQuaternionConstant *>(cv)->getValue();
+            auto *qv = dynamic_cast<LSLQuaternionConstant *>(cv)->getValue();
             pushImport(quat_func_reg, "quaternion");
             // We can use LOADN if we know these are whole numbers, but that's unlikely for
             // a quaternion, they're 0.0-1.0 normalized.
@@ -2028,7 +2036,7 @@ uint8_t LuauVisitor::evalExprToSourceReg(LSLExpression* expr)
     // if what we're trying to shove in a register is already in a register!
     if (hoisted_expr->getNodeSubType() == NODE_LVALUE_EXPRESSION)
     {
-        auto *lv = static_cast<LSLLValueExpression *>(hoisted_expr);
+        auto *lv = dynamic_cast<LSLLValueExpression *>(hoisted_expr);
         auto *sym = lv->getSymbol();
         if (!lv->getMember())
         {
