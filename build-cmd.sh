@@ -65,6 +65,7 @@ pushd "$top"
                   -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$stage")" \
                   -DCMAKE_C_FLAGS="$(remove_cxxstd $opts)" \
                   -DCMAKE_CXX_FLAGS="$opts" \
+                  -DLUAU_USE_TAILSLIDE=ON \
                   "$top"
             cmake --build . -- /p:Configuration=Release
             cmake --build . --target Luau.Repl.CLI -- /p:Configuration=Release
@@ -85,6 +86,7 @@ pushd "$top"
             cmake -DCMAKE_INSTALL_PREFIX:STRING="${stage}" \
                   -DCMAKE_CXX_FLAGS="$LL_BUILD_RELEASE -m$AUTOBUILD_ADDRSIZE" \
                   -DCMAKE_C_FLAGS="$(remove_cxxstd $LL_BUILD_RELEASE) -m$AUTOBUILD_ADDRSIZE" \
+                  -DLUAU_USE_TAILSLIDE=ON \
                   "$top"
             cmake --build . -- -j8
 

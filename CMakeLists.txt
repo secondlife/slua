@@ -12,7 +12,7 @@ option(LUAU_BUILD_WEB "Build Web module" OFF)
 option(LUAU_WERROR "Warnings as errors" OFF)
 option(LUAU_STATIC_CRT "Link with the static CRT (/MT)" OFF)
 option(LUAU_EXTERN_C "Use extern C for all APIs" OFF)
-option(LUAU_USE_TAILSLIDE "Link against tailslide for LSL support" ON)
+option(LUAU_USE_TAILSLIDE "Link against tailslide for LSL support" OFF)
 
 cmake_policy(SET CMP0054 NEW)
 if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.15")

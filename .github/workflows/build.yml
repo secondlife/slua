@@ -101,7 +101,7 @@ jobs:
         run: |
           autobuild install -A64
       - name: cmake configure
-        run: cmake . -A x64 -DLUAU_WERROR=OFF -DLUAU_NATIVE=ON
+        run: cmake . -A x64 -DLUAU_WERROR=OFF -DLUAU_NATIVE=ON -DLUAU_USE_TAILSLIDE=ON
       - name: cmake build
         run: cmake --build . --target Luau.UnitTest Luau.Conformance --config RelWithDebInfo
       - name: run tests

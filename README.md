@@ -32,7 +32,7 @@ they aren't in SLua-specific code.
 
 ## Building
 
-If building with LSL support (the default), you must first install [`autobuild`](https://github.com/secondlife/autobuild),
+If building with LSL support, you must first install [`autobuild`](https://github.com/secondlife/autobuild),
 which will pull in the [`tailslide`](https://github.com/secondlife/tailslide) dependency:
 
 ```sh
@@ -44,7 +44,7 @@ On all platforms, you can use CMake to run the following commands to build Luau 
 
 ```sh
 mkdir cmake && cd cmake
-cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo  # add '-DLUAU_USE_TAILSLIDE=ON' if you want LSL support.
 cmake --build . --target Luau.Repl.CLI --config RelWithDebInfo
 cmake --build . --target Luau.Analyze.CLI --config RelWithDebInfo
 ```
