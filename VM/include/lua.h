@@ -25,6 +25,7 @@
 struct lua_State;
 
 typedef bool (*lua_mayCallHandleEventCallback)(lua_State *L);
+typedef bool (*lua_mayCallTickCallback)(lua_State *L);
 typedef bool (*lua_eventHandlerRegistrationCallback)(lua_State *L, const char *event_name, bool registered);
 typedef void (*lua_setTimerEventCallback)(lua_State *L, double interval);
 // Clock provider should return monotonic stopwatch time in seconds.
@@ -40,6 +41,7 @@ typedef struct lua_SLRuntimeState
     int uuidWeakTab = -1;
     int uuidCompressedWeakTab = -1;
     lua_mayCallHandleEventCallback mayCallHandleEventCb = nullptr;
+    lua_mayCallTickCallback mayCallTickCb = nullptr;
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
     lua_setTimerEventCallback setTimerEventCb = nullptr;
     // stopwatch timer

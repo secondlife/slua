@@ -608,9 +608,11 @@ TEST_CASE("LLEvents")
     });
 }
 
+static bool may_call_tick = true;
 static double test_clock_time = 0.0;
 TEST_CASE("LLTimers")
 {
+    may_call_tick = true;
     test_clock_time = 0.0;
     runConformance("lltimers.lua", nullptr, [](lua_State *L) {
         lua_pushcfunction(L, lua_break, "breaker");
@@ -630,6 +632,12 @@ TEST_CASE("LLTimers")
         }, "getclock");
         lua_setglobal(L, "getclock");
 
+        lua_pushcfunction(L, [](lua_State *L) {
+            may_call_tick = lua_toboolean(L, 1);
+            return 0;
+        }, "set_may_call_tick");
+        lua_setglobal(L, "set_may_call_tick");
+
         auto sl_state = LUAU_GET_SL_VM_STATE(L);
         // Set up clock callback to return our test time
         sl_state->clockProvider = [](lua_State *L) {
@@ -640,6 +648,7 @@ TEST_CASE("LLTimers")
             // In real usage, this would schedule a timer event
             // For tests, we manually call _tick()
         };
+        sl_state->mayCallTickCb = [](lua_State *L) { return may_call_tick; };
     });
 }
 

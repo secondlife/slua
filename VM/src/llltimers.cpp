@@ -238,6 +238,12 @@ static int lltimers_tick_init(lua_State *L)
 
     lua_settop(L, 1);
 
+    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+    if (sl_state->mayCallTickCb != nullptr && !sl_state->mayCallTickCb(L))
+    {
+        luaL_errorL(L, "Not allowed to call LLTimers:_tick()");
+    }
+
     // This reserves all the stack slots we need for the continuation
     for (int i = 2; i <= HANDLER_FUNC; i++)
         lua_pushnil(L);

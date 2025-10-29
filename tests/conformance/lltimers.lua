@@ -7,6 +7,16 @@ local function incrementclock(delta)
     setclock(getclock() + delta + 0.001)
 end
 
+local function assert_errors(func, expected_str)
+    local success, ret = pcall(func)
+    assert(not success)
+    local is_match = typeof(ret) == "string" and ret:find(expected_str) ~= nil
+    if not is_match then
+        print(ret, "!=", expected_str)
+    end
+    assert(is_match)
+end
+
 -- Test basic on() functionality
 local on_count = 0
 local on_handler = LLTimers:on(0.1, function()
@@ -228,5 +238,13 @@ assert(lljson.encode(yield_order) == "[1,2,3]")
 -- Clean up
 LLTimers:off(yield_timer1)
 LLTimers:off(yield_timer3)
+
+-- Run this last, check that we can block _tick() calls
+set_may_call_tick(false)
+LLTimers:on(0.1, function() assert(false) end)
+assert_errors(
+    function() LLTimers:_tick() end,
+    "Not allowed to call LLTimers:_tick()"
+)
 
 return "OK"
