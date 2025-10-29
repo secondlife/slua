@@ -608,25 +608,24 @@ TEST_CASE("LLEvents")
     });
 }
 
-static constexpr uint64_t MICROS_PER_SECOND = 1000000;
-static uint64_t test_clock_time = 0;
+static double test_clock_time = 0.0;
 TEST_CASE("LLTimers")
 {
-    test_clock_time = 0;
+    test_clock_time = 0.0;
     runConformance("lltimers.lua", nullptr, [](lua_State *L) {
         lua_pushcfunction(L, lua_break, "breaker");
         lua_setglobal(L, "breaker");
 
         // Provide a setclock function to control time in tests
         lua_pushcfunction(L, [](lua_State *L) {
-            test_clock_time = (uint64_t)(luaL_checknumber(L, 1) * MICROS_PER_SECOND);
+            test_clock_time = luaL_checknumber(L, 1);
             return 0;
         }, "setclock");
         lua_setglobal(L, "setclock");
 
         // Provide a getclock function to read time in tests
         lua_pushcfunction(L, [](lua_State *L) {
-            lua_pushnumber(L, (double)test_clock_time / MICROS_PER_SECOND);
+            lua_pushnumber(L, test_clock_time);
             return 1;
         }, "getclock");
         lua_setglobal(L, "getclock");
@@ -637,7 +636,7 @@ TEST_CASE("LLTimers")
             return test_clock_time;
         };
         // Set up timer event callback (no-op for tests)
-        sl_state->setTimerEventCb = [](lua_State *L, uint64_t interval_us) {
+        sl_state->setTimerEventCb = [](lua_State *L, double interval) {
             // In real usage, this would schedule a timer event
             // For tests, we manually call _tick()
         };
@@ -647,9 +646,9 @@ TEST_CASE("LLTimers")
 TEST_CASE("LLEvents and LLTimers interrupt between handlers")
 {
     static int yield_count = 0;
-    static uint64_t test_time = 0;
+    static double test_time = 0.0;
     yield_count = 0;
-    test_time = 0;
+    test_time = 0.0;
 
     runConformance(
         "llevents_interrupt.lua",
@@ -670,12 +669,12 @@ TEST_CASE("LLEvents and LLTimers interrupt between handlers")
             sl_state->clockProvider = [](lua_State *L) {
                 return test_time;
             };
-            sl_state->setTimerEventCb = [](lua_State *L, uint64_t interval_us) {
+            sl_state->setTimerEventCb = [](lua_State *L, double interval) {
                 // No-op for test
             };
 
             lua_pushcfunction(L, [](lua_State *L) {
-                test_time = (uint64_t)(luaL_checknumber(L, 1) * MICROS_PER_SECOND);
+                test_time = luaL_checknumber(L, 1);
                 return 0;
             }, "setclock");
             lua_setglobal(L, "setclock");
