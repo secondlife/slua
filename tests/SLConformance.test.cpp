@@ -640,7 +640,7 @@ TEST_CASE("LLTimers")
 
         auto sl_state = LUAU_GET_SL_VM_STATE(L);
         // Set up clock callback to return our test time
-        sl_state->clockProvider = [](lua_State *L) {
+        sl_state->performanceClockProvider = sl_state->clockProvider = [](lua_State *L) {
             return test_clock_time;
         };
         // Set up timer event callback (no-op for tests)
@@ -675,7 +675,7 @@ TEST_CASE("LLEvents and LLTimers interrupt between handlers")
             sl_state->mayCallHandleEventCb = [](lua_State *L) {
                 return true; // Allow calling handleEvent
             };
-            sl_state->clockProvider = [](lua_State *L) {
+            sl_state->performanceClockProvider = sl_state->clockProvider = [](lua_State *L) {
                 return test_time;
             };
             sl_state->setTimerEventCb = [](lua_State *L, double interval) {

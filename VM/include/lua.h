@@ -46,6 +46,7 @@ typedef struct lua_SLRuntimeState
     lua_setTimerEventCallback setTimerEventCb = nullptr;
     // stopwatch timer
     lua_clockProvider clockProvider = nullptr;
+    lua_clockProvider performanceClockProvider = nullptr;
     lua_randomProvider randomProvider = nullptr;
 } lua_SLRuntimeState;
 

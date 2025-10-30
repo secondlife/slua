@@ -66,7 +66,7 @@ static int os_clock(lua_State* L)
     if (LUAU_IS_SL_VM(L))
     {
         auto *runtime_state = LUAU_GET_SL_VM_STATE(L);
-        if (auto *clock_provider = runtime_state->clockProvider)
+        if (auto *clock_provider = runtime_state->performanceClockProvider)
         {
             lua_pushnumber(L, clock_provider(L));
             return 1;
