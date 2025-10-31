@@ -628,7 +628,12 @@ static void runRepl()
     if (sl)
     {
         luaSL_createeventmanager(L);
+        lua_ref(L, -1);
+        lua_pushvalue(L, -1);
         lua_setglobal(L, "LLEvents");
+        luaSL_createtimermanager(L);
+        lua_ref(L, -1);
+        lua_setglobal(L, "LLTimers");
     }
     runReplImpl(L);
 }
@@ -656,7 +661,12 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     if (sl)
     {
         luaSL_createeventmanager(L);
+        lua_ref(L, -1);
+        lua_pushvalue(L, -1);
         lua_setglobal(L, "LLEvents");
+        luaSL_createtimermanager(L);
+        lua_ref(L, -1);
+        lua_setglobal(L, "LLTimers");
     }
 
     std::string chunkname = "@" + normalizePath(name);
