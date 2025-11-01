@@ -20,8 +20,9 @@ end
 -- Test basic on() functionality
 setclock(0.0)
 local on_count = 0
-local on_handler = LLTimers:on(0.1, function()
+local on_handler = LLTimers:on(0.1, function(scheduled_time, interval)
     on_count += 1
+    assert(interval == 0.1, "on() timer should receive interval")
 end)
 
 assert(typeof(on_handler) == "function")
@@ -50,8 +51,9 @@ LLTimers:off(on_handler)
 -- Test once() functionality
 setclock(1.0)
 local once_count = 0
-local once_handler = LLTimers:once(0.1, function()
+local once_handler = LLTimers:once(0.1, function(scheduled_time, interval)
     once_count += 1
+    assert(interval == nil, "once() timer should receive nil interval")
 end)
 
 incrementclock(0.1) -- Should fire the once handler
@@ -519,5 +521,37 @@ assert(#repeat_scheduled_times == 3)
 assert(math.abs(repeat_scheduled_times[1] - 35.5) < 0.001)
 assert(math.abs(repeat_scheduled_times[2] - 36.0) < 0.001)
 assert(math.abs(repeat_scheduled_times[3] - 36.5) < 0.001)
+
+-- Test clamped catch-up: timers >2s late skip ahead instead of rapid-firing
+setclock(40.0)
+local catchup_fires = 0
+local catchup_scheduled_times = {}
+local catchup_handler = LLTimers:on(0.1, function(scheduled_time)
+    catchup_fires += 1
+    table.insert(catchup_scheduled_times, scheduled_time)
+end)
+
+-- Make timer VERY late (4.9 seconds, exceeds 2-second threshold)
+setclock(45.0)
+LLEvents:_handleEvent('timer')
+
+-- Should fire ONCE per _handleEvent call, not 49 times
+assert(catchup_fires == 1, "Timer should fire once per handleEvent call")
+
+-- scheduled_time parameter shows when it WAS scheduled (40.1), not when it got rescheduled to
+assert(math.abs(catchup_scheduled_times[1] - 40.1) < 0.001, "First fire shows original schedule time")
+
+-- Fire again to verify logical schedule syncs when clamping
+setclock(45.1)
+LLEvents:_handleEvent('timer')
+assert(catchup_fires == 2, "Should fire again on next handleEvent")
+-- When we clamp, we sync the logical schedule to the new reality
+-- This means handlers see the initial delay (first fire), then return to normal
+assert(catchup_scheduled_times[2] > 44.9, "Second fire shows synced schedule (~45.0)")
+assert(catchup_scheduled_times[2] < 45.2, "Second fire shows synced schedule (~45.0)")
+-- Handler sees normal delay now: getclock() - scheduled_time = 45.1 - 45.0 = ~0.1s
+
+-- Clean up
+LLTimers:off(catchup_handler)
 
 return "OK"
