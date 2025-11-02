@@ -1377,6 +1377,31 @@ int luaSL_checkindexlike(lua_State *L, int index)
     return val;
 }
 
+int luaSL_checkobjectindex(lua_State *L, int len, int stack_idx, bool compat_mode)
+{
+    int idx = luaL_checkinteger(L, stack_idx);
+
+    if (!compat_mode)
+    {
+        if (idx == 0)
+        {
+            luaL_error(L, "passed 0 when a 1-based index was expected");
+        }
+        else if (idx > 0)
+        {
+            // positive indices need to be shifted down to be 0-based.
+            // negative indices are handled later.
+            idx -= 1;
+        }
+    }
+
+    if(idx < 0)
+    {
+        return len + idx;
+    }
+    return idx;
+}
+
 void luaSL_pushboollike(lua_State *L, int val)
 {
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));

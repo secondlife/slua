@@ -80,6 +80,7 @@ LUA_API const float *luaSL_checkquaternion(lua_State *L, int num_arg);
 LUA_API int luaSL_pushnativeinteger(lua_State *L, int val);
 LUA_API void luaSL_pushindexlike(lua_State *L, int index);
 LUA_API int luaSL_checkindexlike(lua_State *L, int index);
+LUA_API int luaSL_checkobjectindex(lua_State *L, int len, int idx, bool compat_mode);
 LUA_API void luaSL_pushboollike(lua_State *L, int val);
 LUA_API uint8_t luaSL_lsl_type(lua_State *L, int idx);
 /// Should only be called in an interrupt handler!

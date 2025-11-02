@@ -32,36 +32,13 @@ static int ll_getlistlength(lua_State *L)
     return 1;
 }
 
-static int _to_positive_index(lua_State *L, int len, int idx, bool compat_mode)
-{
-    if (!compat_mode)
-    {
-        if (idx == 0)
-        {
-            luaL_error(L, "passed 0 when a 1-based index was expected");
-        }
-        else if (idx > 0)
-        {
-            // positive indices need to be shifted down to be 0-based.
-            // negative indices are handled later.
-            idx -= 1;
-        }
-    }
-
-    if(idx < 0)
-    {
-        return len + idx;
-    }
-    return idx;
-}
-
 static int _list_accessor_helper(lua_State *L, LSLIType type)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
-    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
+    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         lua_pushcfunction(L, lsl_cast_list_elem, "lsl_cast_list_elem");
@@ -121,7 +98,7 @@ static int ll_list2vector(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
+    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         // This accessor does NOT auto-cast!
@@ -144,7 +121,7 @@ static int ll_list2rot(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
+    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         // This accessor does NOT auto-cast!
@@ -167,7 +144,7 @@ static int ll_getlistentrytype(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int idx = _to_positive_index(L, len, luaL_checkinteger(L, 2), compat_mode);
+    int idx = luaSL_checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
         luaSL_pushinteger(L, lua_lsl_type(&h->array[idx]));
@@ -194,8 +171,8 @@ static int ll_list2list(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target1 = _to_positive_index(L, len, luaL_checkunsigned(L, 2), compat_mode);
-    int target2 = _to_positive_index(L, len, luaL_checkunsigned(L, 3), compat_mode);
+    int target1 = luaSL_checkobjectindex(L, len, 2, compat_mode);
+    int target2 = luaSL_checkobjectindex(L, len, 3, compat_mode);
 
     int wanted_len = 0;
 
@@ -337,8 +314,8 @@ static int ll_deletesublist(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target1 = _to_positive_index(L, len, luaL_checkunsigned(L, 2), compat_mode);
-    int target2 = _to_positive_index(L, len, luaL_checkunsigned(L, 3), compat_mode);
+    int target1 = luaSL_checkobjectindex(L, len, 2, compat_mode);
+    int target2 = luaSL_checkobjectindex(L, len, 3, compat_mode);
 
     if (target1 <= target2)
     {
@@ -420,7 +397,7 @@ static int ll_listinsertlist(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target = _to_positive_index(L, dest_len, luaL_checkunsigned(L, 3), compat_mode);
+    int target = luaSL_checkobjectindex(L, dest_len, 3, compat_mode);
 
     LuaTable *cloned_h = nullptr;
     TValue new_tv;
@@ -498,7 +475,7 @@ static int ll_listreplacelist(lua_State *L)
 
     bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    int target = _to_positive_index(L, orig_len, luaL_checkunsigned(L, 3), compat_mode);
+    int target = luaSL_checkobjectindex(L, orig_len, 3, compat_mode);
 
     LuaTable *cloned_h = nullptr;
     TValue new_tv;
@@ -813,7 +790,6 @@ static const luaL_Reg llcompateligiblelib[] = {
     {NULL, NULL},
 };
 
-
 // These are functions that may be used in tests or in the REPL,
 // but are not to be used in user-provided scripts
 static int ll_stringlength(lua_State *L)
@@ -824,14 +800,35 @@ static int ll_stringlength(lua_State *L)
 
 static int ll_getsubstring(lua_State* L)
 {
-    // Not even close to LSL semantics, also not memory-safe, but
-    //  useful for demo purposes. Should never be used outside of tests.
-    // TODO: Make this crap use the utf8 <-> codepoint stuff.
-    const auto *str_val = luaL_checkstring(L, 1);
-    const auto start_idx = luaL_checkinteger(L, 2);
-    const auto end_idx = luaL_checkinteger(L, 3);
+    // UTF-8 aware substring extraction with 1-based indexing (SLua mode)
+    // or 0-based indexing (LSL compat mode). Supports negative indices.
+    // For demo/test purposes only, as it doesn't truncate at null like the real one.
+    size_t str_len;
+    const char *str_val = luaL_checklstring(L, 1, &str_len);
+    bool compat_mode = lua_toboolean(L, lua_upvalueindex(1));
 
-    lua_pushlstring(L, str_val + start_idx, end_idx - start_idx + 1);
+    // Convert UTF-8 string to codepoints
+    CodepointString codepoints = utf8str_to_codepoints(str_val, str_len);
+    auto num_codes = (ptrdiff_t)codepoints.length();
+
+    // Normalize indices (handles 1-based vs 0-based and negative indices)
+    int start_idx = luaSL_checkobjectindex(L, (int)num_codes, 2, compat_mode);
+    int end_idx = luaSL_checkobjectindex(L, (int)num_codes, 3, compat_mode);
+
+    // Bounds checking - return empty string if out of bounds
+    if (start_idx < 0 || start_idx >= num_codes || end_idx < 0 || end_idx >= num_codes || start_idx > end_idx)
+    {
+        lua_pushstring(L, "");
+        return 1;
+    }
+
+    // Extract substring from codepoint array
+    ptrdiff_t substr_len = end_idx - start_idx + 1;
+    CodepointString substr = codepoints.substr(start_idx, substr_len);
+
+    // Convert back to UTF-8
+    std::string result = codepoints_to_utf8str(substr, substr.length());
+    lua_pushlstring(L, result.c_str(), result.length());
     return 1;
 }
 
@@ -893,9 +890,13 @@ static int ll_generatekey(lua_State *L)
     return 1;
 }
 
-static const luaL_Reg lltestlib[] = {
-    // This requires weird unicode semantics we shouldn't re-implement by hand.
+// Test functions that need compat mode handling for index semantics
+static const luaL_Reg lltestcompateligiblelib[] = {
     {"GetSubString", ll_getsubstring},
+    {NULL, NULL},
+};
+
+static const luaL_Reg lltestlib[] = {
     {"OwnerSay", ll_ownersay},
     // We have to use LL's internal implementation because there are unicode
     // semantics we need to consider here.
@@ -922,6 +923,8 @@ int luaopen_ll(lua_State* L, int testing_funcs)
             // Pepper in some extra functions if we're testing
             luaL_register_noclobber(L, LUA_LLLIBNAME, lltestlib);
             lua_pop(L, 1);
+            luaL_register_noclobber_compat(L, LUA_LLLIBNAME, lltestcompateligiblelib, true);
+            lua_pop(L, 1);
         }
     }
     else
@@ -940,7 +943,11 @@ int luaopen_ll(lua_State* L, int testing_funcs)
             // Pepper in some extra functions if we're testing
             luaL_register_noclobber(L, LUA_LLLIBNAME, lltestlib);
             lua_pop(L, 1);
+            luaL_register_noclobber_compat(L, LUA_LLLIBNAME, lltestcompateligiblelib, false);
+            lua_pop(L, 1);
             luaL_register_noclobber(L, LUA_LLCOMPATLIBNAME, lltestlib);
+            lua_pop(L, 1);
+            luaL_register_noclobber_compat(L, LUA_LLCOMPATLIBNAME, lltestcompateligiblelib, true);
             lua_pop(L, 1);
         }
     }

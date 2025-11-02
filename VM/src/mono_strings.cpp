@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "mono_strings.h"
 
 // Data table cribbed from Mono, see https://github.com/mono/mono/blob/mono-2.6.4/mono/metadata/char-conversions.h#L1589
 static const uint16_t ToLowerDataLow [] = {
@@ -474,10 +475,7 @@ static size_t wchar_to_utf8chars(uint32_t in_char, char* outchars)
     return outchars - base;
 }
 
-using CodepointString = std::basic_string<uint32_t>;
-
-
-static CodepointString utf8str_to_codepoints(const char *utf8str, size_t len)
+CodepointString utf8str_to_codepoints(const char *utf8str, size_t len)
 {
     CodepointString wout;
 
@@ -565,7 +563,7 @@ static CodepointString utf8str_to_codepoints(const char *utf8str, size_t len)
     return wout;
 }
 
-static std::string codepoints_to_utf8str(const CodepointString& utf32str, size_t len)
+std::string codepoints_to_utf8str(const CodepointString& utf32str, size_t len)
 {
     std::string out;
 
