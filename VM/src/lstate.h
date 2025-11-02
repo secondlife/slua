@@ -18,7 +18,6 @@
 // clang-format off
 typedef struct stringtable
 {
-
     TString** hash;
     uint32_t nuse; // number of elements
     int size;
@@ -56,7 +55,6 @@ typedef struct stringtable
 // clang-format off
 typedef struct CallInfo
 {
-
     StkId base;    // base for this function
     StkId func;    // function index in the stack
     StkId top;     // top for this function
@@ -167,15 +165,14 @@ typedef struct global_State
 {
     stringtable strt; // hash table for strings
 
-
     lua_Alloc frealloc;   // function to reallocate memory
-    void* ud;            // auxiliary data to `frealloc'
+    void* ud;             // auxiliary data to `frealloc'
+
     // ServerLua: This keeps tracks of user allocs that aren't currently
     //   rooted, but will be soon if the function succeeds. Only relevant
     //   when code makes multiple allocs in a row in a user memcat without
     //   a reference being reachable from the root.
     size_t unrooteduserallocs;
-
 
     uint8_t currentwhite;
     uint8_t gcstate; // state of garbage collector
@@ -186,14 +183,14 @@ typedef struct global_State
 
     GCObject* gray;      // list of gray objects
     GCObject* grayagain; // list of objects to be traversed atomically
-    GCObject* weak;     // list of weak tables (to be cleared)
+    GCObject* weak;      // list of weak tables (to be cleared)
 
     size_t GCthreshold;                       // when totalbytes > GCthreshold, run GC step
     size_t totalbytes;                        // number of bytes currently allocated
 
     int gcgoal;                               // see LUAI_GCGOAL
     int gcstepmul;                            // see LUAI_GCSTEPMUL
-    int gcstepsize;                          // see LUAI_GCSTEPSIZE
+    int gcstepsize;                           // see LUAI_GCSTEPSIZE
 
     struct lua_Page* freepages[LUA_SIZECLASSES]; // free page linked list for each size class for non-collectable objects
     struct lua_Page* freegcopages[LUA_SIZECLASSES]; // free page linked list for each size class for collectable objects
@@ -203,12 +200,12 @@ typedef struct global_State
 
     size_t memcatbytes[LUA_MEMORY_CATEGORIES]; // total amount of memory used by each memory category
 
-
     struct lua_State* mainthread;
-    UpVal uvhead;                                    // head of double-linked list of all open upvalues
-    struct LuaTable* mt[LUA_T_COUNT];                   // metatables for basic types
-    TString* ttname[LUA_TDEADKEY];       // names for basic types
-    TString* tmname[TM_N];             // array with tag-method names
+    UpVal uvhead; // head of double-linked list of all open upvalues
+    struct LuaTable* mt[LUA_T_COUNT]; // metatables for basic types
+    // ServerLua: We extend this to include _all_ types
+    TString* ttname[LUA_TDEADKEY]; // names for basic types
+    TString* tmname[TM_N]; // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr
 
@@ -251,31 +248,26 @@ struct lua_State
     bool isactive;   // thread is currently executing, stack may be mutated without barriers
     bool singlestep; // call debugstep hook after each instruction
 
-
     StkId top;                                        // first free slot in the stack
     StkId base;                                       // base of current function
     global_State* global;
     CallInfo* ci;                                     // call info for current function
     StkId stack_last;                                 // last free slot in the stack
-    StkId stack;                                     // stack base
-
+    StkId stack;                                      // stack base
 
     CallInfo* end_ci;                          // points after end of ci array
-    CallInfo* base_ci;                        // array of CallInfo's
-
+    CallInfo* base_ci;                         // array of CallInfo's
 
     int stacksize;
-    int size_ci;                              // size of array `base_ci'
-
+    int size_ci;                               // size of array `base_ci'
 
     unsigned short nCcalls;     // number of nested C calls
-    unsigned short baseCcalls; // nested C calls when resuming coroutine
+    unsigned short baseCcalls;  // nested C calls when resuming coroutine
 
     int cachedslot;    // when table operations or INDEX/NEWINDEX is invoked from Luau, what is the expected slot for lookup?
 
-
     LuaTable* gt;           // table of globals
-    UpVal* openupval;    // list of open upvalues in this stack
+    UpVal* openupval;       // list of open upvalues in this stack
     GCObject* gclist;
 
     TString* namecall; // when invoked from Luau using NAMECALL, what method do we need to invoke?
