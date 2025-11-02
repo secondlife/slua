@@ -195,9 +195,18 @@ public:
         Checked,
         Native,
         Deprecated,
+        Unknown
     };
 
-    AstAttr(const Location& location, Type type);
+    struct DeprecatedInfo
+    {
+        bool deprecated = false;
+        std::optional<std::string> use;
+        std::optional<std::string> reason;
+    };
+
+    AstAttr(const Location& location, Type type, AstArray<AstExpr*> args);
+    AstAttr(const Location& location, Type type, AstArray<AstExpr*> args, AstName name);
 
     AstAttr* asAttr() override
     {
@@ -206,7 +215,11 @@ public:
 
     void visit(AstVisitor* visitor) override;
 
+    DeprecatedInfo deprecatedInfo() const;
+
     Type type;
+    AstArray<AstExpr*> args;
+    AstName name;
 };
 
 class AstExpr : public AstNode
@@ -329,9 +342,28 @@ public:
 
     enum QuoteStyle
     {
+        // A string created using double quotes or an interpolated string,
+        // as in:
+        //
+        //  "foo", `My name is {protagonist}! / And I'm {antagonist}!`
+        //
         QuotedSimple,
+        // A string created using single quotes, as in:
+        //
+        //  'bar'
+        //
+        QuotedSingle,
+        // A string created using `[[ ... ]]` as in:
+        //
+        //   [[ Gee, this sure is a long string.
+        //   it even has a new line in it! ]]
+        //
         QuotedRaw,
-        Unquoted
+        // A "string" in the context of a table literal, as in:
+        //
+        //  { foo = 42 } -- `foo` here is a "constant string"
+        //
+        Unquoted,
     };
 
     AstExprConstantString(const Location& location, const AstArray<char>& value, QuoteStyle quoteStyle);
@@ -455,6 +487,7 @@ public:
 
     bool hasNativeAttribute() const;
     bool hasAttribute(AstAttr::Type attributeType) const;
+    AstAttr* getAttribute(AstAttr::Type attributeType) const;
 
     AstArray<AstAttr*> attributes;
     AstArray<AstGenericType*> generics;
@@ -498,6 +531,8 @@ public:
     AstExprTable(const Location& location, const AstArray<Item>& items);
 
     void visit(AstVisitor* visitor) override;
+
+    std::optional<AstExpr*> getRecord(const char* key) const;
 
     AstArray<Item> items;
 };
@@ -960,6 +995,7 @@ public:
 
     bool isCheckedFunction() const;
     bool hasAttribute(AstAttr::Type attributeType) const;
+    AstAttr* getAttribute(AstAttr::Type attributeType) const;
 
     AstArray<AstAttr*> attributes;
     AstName name;
@@ -1117,6 +1153,7 @@ public:
 
     bool isCheckedFunction() const;
     bool hasAttribute(AstAttr::Type attributeType) const;
+    AstAttr* getAttribute(AstAttr::Type attributeType) const;
 
     AstArray<AstAttr*> attributes;
     AstArray<AstGenericType*> generics;
@@ -1561,6 +1598,8 @@ public:
 };
 
 bool isLValue(const AstExpr*);
+bool isConstantLiteral(const AstExpr*);
+bool isLiteralTable(const AstExpr*);
 AstName getIdentifier(AstExpr*);
 Location getLocation(const AstTypeList& typeList);
 

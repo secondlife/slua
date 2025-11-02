@@ -16,7 +16,12 @@
 #include <memory>
 #include <string_view>
 
-LUAU_FASTFLAG(LuauCodeGenSimplifyImport2)
+LUAU_FASTFLAG(LuauCodeGenDirectBtest)
+LUAU_FASTFLAG(LuauVectorLerp)
+LUAU_FASTFLAG(LuauCompileVectorLerp)
+LUAU_FASTFLAG(LuauTypeCheckerVectorLerp)
+LUAU_FASTFLAG(LuauCodeGenVectorLerp)
+LUAU_FASTFLAG(LuauCodeGenFMA)
 
 static void luauLibraryConstantLookup(const char* library, const char* member, Luau::CompileConstant* constant)
 {
@@ -468,6 +473,85 @@ bb_bytecode_1:
     );
 }
 
+TEST_CASE("VectorLerp")
+{
+    ScopedFastFlag _[]{
+        {FFlag::LuauCompileVectorLerp, true},
+        {FFlag::LuauTypeCheckerVectorLerp, true},
+        {FFlag::LuauVectorLerp, true},
+        {FFlag::LuauCodeGenVectorLerp, true}
+    };
+    if (FFlag::LuauCodeGenFMA)
+    {
+      CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function vec3lerp(a: vector, b: vector, t: number)
+    return vector.lerp(a, b, t)
+end
+)"),
+        R"(
+; function vec3lerp($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  CHECK_TAG R1, tvector, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_SAFE_ENV exit(2)
+  %15 = LOAD_TVALUE R0
+  %16 = LOAD_TVALUE R1
+  %17 = LOAD_DOUBLE R2
+  %18 = NUM_TO_VEC %17
+  %19 = NUM_TO_VEC 1
+  %20 = SUB_VEC %16, %15
+  MULADD_VEC %20, %18, %15
+  SELECT_VEC %21, %16, %18, %19
+  %23 = TAG_VECTOR %22
+  STORE_TVALUE R3, %23
+  INTERRUPT 8u
+  RETURN R3, 1i
+)"
+        );
+    }
+    else
+    {
+      CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function vec3lerp(a: vector, b: vector, t: number)
+    return vector.lerp(a, b, t)
+end
+)"),
+        R"(
+; function vec3lerp($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  CHECK_TAG R1, tvector, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_SAFE_ENV exit(2)
+  %15 = LOAD_TVALUE R0
+  %16 = LOAD_TVALUE R1
+  %17 = LOAD_DOUBLE R2
+  %18 = NUM_TO_VEC %17
+  %19 = NUM_TO_VEC 1
+  %20 = SUB_VEC %16, %15
+  %21 = MUL_VEC %20, %18
+  %22 = ADD_VEC %15, %21
+  SELECT_VEC %22, %16, %18, %19
+  %24 = TAG_VECTOR %23
+  STORE_TVALUE R3, %24
+  INTERRUPT 8u
+  RETURN R3, 1i
+)"
+        );
+    }
+}
+
 TEST_CASE("ExtraMathMemoryOperands")
 {
     CHECK_EQ(
@@ -508,8 +592,6 @@ bb_bytecode_1:
 
 TEST_CASE("DseInitialStackState")
 {
-    ScopedFastFlag luauCodeGenSimplifyImport{FFlag::LuauCodeGenSimplifyImport2, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo()
@@ -1575,8 +1657,6 @@ end
 
 TEST_CASE("ForInManualAnnotation")
 {
-    ScopedFastFlag luauCodeGenSimplifyImport{FFlag::LuauCodeGenSimplifyImport2, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2209,6 +2289,37 @@ bb_bytecode_0:
   STORE_TVALUE R4, %7
   INTERRUPT 5u
   RETURN R0, 5i
+)"
+    );
+}
+
+TEST_CASE("Bit32BtestDirect")
+{
+    ScopedFastFlag luauCodeGenDirectBtest{FFlag::LuauCodeGenDirectBtest, true};
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(R"(
+local function foo(a: number)
+    return bit32.btest(a, 0x1f)
+end
+)"),
+        R"(
+; function foo($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_SAFE_ENV exit(2)
+  %7 = LOAD_DOUBLE R0
+  %8 = NUM_TO_UINT %7
+  %10 = BITAND_UINT %8, 31i
+  %11 = CMP_INT %10, 0i, not_eq
+  STORE_INT R1, %11
+  STORE_TAG R1, tboolean
+  INTERRUPT 7u
+  RETURN R1, 1i
 )"
     );
 }

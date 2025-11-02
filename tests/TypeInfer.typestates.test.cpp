@@ -4,8 +4,9 @@
 #include "doctest.h"
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
-LUAU_FASTFLAG(LuauTrackFreeInteriorTypePacks)
+LUAU_FASTFLAG(LuauRefineDistributesOverUnions)
+LUAU_FASTFLAG(LuauReduceSetTypeStackPressure)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 
 using namespace Luau;
 
@@ -361,6 +362,12 @@ TEST_CASE_FIXTURE(TypeStateFixture, "captured_locals_do_not_mutate_upvalue_type"
 
 TEST_CASE_FIXTURE(TypeStateFixture, "captured_locals_do_not_mutate_upvalue_type_2")
 {
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauRefineDistributesOverUnions, true},
+        {FFlag::LuauReduceSetTypeStackPressure, true},
+    };
+
     CheckResult result = check(R"(
         local t = {x = nil}
 
@@ -375,10 +382,9 @@ TEST_CASE_FIXTURE(TypeStateFixture, "captured_locals_do_not_mutate_upvalue_type_
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     auto err = get<TypeMismatch>(result.errors[0]);
-    CHECK_EQ("t | { x: number }", toString(err->wantedType));
-    CHECK_EQ("{ x: string }", toString(err->givenType));
-
-    CHECK("{ x: nil } | { x: number }" == toString(requireTypeAtPosition({4, 18}), {true}));
+    CHECK_EQ("number?", toString(err->wantedType));
+    CHECK_EQ("string", toString(err->givenType));
+    CHECK("{ x: number? }" == toString(requireTypeAtPosition({4, 18}), {true}));
     CHECK("number?" == toString(requireTypeAtPosition({4, 20})));
 }
 
@@ -401,8 +407,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "prototyped_recursive_functions_but_has_futur
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauEagerGeneralization4, true},
-        {FFlag::LuauTrackFreeInteriorTypePacks, true},
     };
 
     CheckResult result = check(R"(
@@ -580,6 +584,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_1547")
 
 TEST_CASE_FIXTURE(Fixture, "modify_captured_table_field")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     LUAU_REQUIRE_NO_ERRORS(check(R"(
         local state = { x = 0 }
         function incr()
@@ -589,7 +594,10 @@ TEST_CASE_FIXTURE(Fixture, "modify_captured_table_field")
 
     auto randTy = getType("state");
     REQUIRE(randTy);
-    CHECK_EQ("{ x: number }", toString(*randTy, {true}));
+    if (FFlag::LuauSolverV2)
+        CHECK_EQ("{ x: number }", toString(*randTy, {true}));
+    else
+        CHECK_EQ("{| x: number |}", toString(*randTy, {true}));
 }
 
 TEST_CASE_FIXTURE(Fixture, "oss_1561")

@@ -10,9 +10,9 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauRefineTablesWithReadType)
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
-LUAU_FASTFLAG(LuauPushFunctionTypesInFunctionStatement)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
+LUAU_FASTFLAG(LuauSubtypingGenericPacksDoesntUseVariance)
 
 TEST_SUITE_BEGIN("IntersectionTypes");
 
@@ -164,6 +164,7 @@ TEST_CASE_FIXTURE(Fixture, "propagates_name")
 
 TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_property_guaranteed_to_exist")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         type A = {x: {y: number}}
         type B = {x: {y: number}}
@@ -178,7 +179,7 @@ TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_property_guarante
     if (FFlag::LuauSolverV2)
         CHECK("(A & B) -> { y: number }" == toString(requireType("f")));
     else
-        CHECK("(A & B) -> {| y: number |} & {| y: number |}" == toString(requireType("f")));
+        CHECK("(A & B) -> { y: number } & { y: number }" == toString(requireType("f")));
 }
 
 TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_works_at_arbitrary_depth")
@@ -335,8 +336,6 @@ TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed")
 
 TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed_indirect")
 {
-    ScopedFastFlag sff{FFlag::LuauPushFunctionTypesInFunctionStatement, true};
-
     CheckResult result = check(R"(
         type X = { x: (number) -> number }
         type Y = { y: (string) -> string }
@@ -650,6 +649,7 @@ TEST_CASE_FIXTURE(Fixture, "union_saturate_overloaded_functions")
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         function f(x: { p : number?, q : string? } & { p : number?, q : number?, r : number? })
             local y : { p : number?, q : nil, r : number? } = x -- OK
@@ -675,16 +675,14 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
     else
     {
         const std::string expected =
-            R"(Type
-	'{| p: number?, q: number?, r: number? |} & {| p: number?, q: string? |}'
-could not be converted into
-	'{| p: nil |}'; none of the intersection parts are compatible)";
+            R"(Type '{ p: number?, q: number?, r: number? } & { p: number?, q: string? }' could not be converted into '{ p: nil }'; none of the intersection parts are compatible)";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
 }
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         function f(x : { p : number?, q : any } & { p : unknown, q : string? })
             local y : { p : number?, q : string? } = x -- OK
@@ -717,9 +715,9 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
     {
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         const std::string expected = R"(Type
-	'{| p: number?, q: any |} & {| p: unknown, q: string? |}'
+	'{ p: number?, q: any } & { p: unknown, q: string? }'
 could not be converted into
-	'{| p: string?, q: number? |}'; none of the intersection parts are compatible)";
+	'{ p: string?, q: number? }'; none of the intersection parts are compatible)";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
 }
@@ -738,6 +736,7 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_never_properties")
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_functions_returning_intersections")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         function f(x : ((number?) -> ({ p : number } & { q : number })) & ((string?) -> ({ p : number } & { r : number })))
             local y : (nil) -> { p : number, q : number, r : number} = x -- OK
@@ -795,9 +794,9 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_returning_intersections")
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         CHECK_EQ(
             R"(Type
-	'((number?) -> {| p: number |} & {| q: number |}) & ((string?) -> {| p: number |} & {| r: number |})'
+	'((number?) -> { p: number } & { q: number }) & ((string?) -> { p: number } & { r: number })'
 could not be converted into
-	'(number?) -> {| p: number, q: number, r: number |}'; none of the intersection parts are compatible)",
+	'(number?) -> { p: number, q: number, r: number }'; none of the intersection parts are compatible)",
             toString(result.errors[0])
         );
     }
@@ -857,17 +856,29 @@ could not be converted into
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
 {
+    ScopedFastFlag sff{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
+
     CheckResult result = check(R"(
         function f<a...,b...>()
             function g(x : ((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...)))
-                local y : ((nil, a...) -> (nil, b...)) = x -- OK
+                local y : ((nil, a...) -> (nil, b...)) = x -- OK in the old solver, not OK in the new
                 local z : ((nil, b...) -> (nil, a...)) = x -- Not OK
+                local w : ((number?, a...) -> (number?, b...)) = x -- OK in both solvers
             end
         end
     )");
-
     if (FFlag::LuauSolverV2)
     {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        const TypeMismatch* tm1 = get<TypeMismatch>(result.errors[0]);
+        CHECK(tm1);
+        CHECK_EQ(toString(tm1->wantedType), "(nil, a...) -> (nil, b...)");
+        CHECK_EQ(toString(tm1->givenType), "((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))");
+        const TypeMismatch* tm2 = get<TypeMismatch>(result.errors[1]);
+        CHECK(tm2);
+        CHECK_EQ(toString(tm2->wantedType), "(nil, b...) -> (nil, a...)");
+        CHECK_EQ(toString(tm2->givenType), "((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))");
+
         const std::string expected1 =
             "Type\n\t"
             "'((number?, a...) -> (number?, b...)) & ((string?, a...) -> (string?, b...))'"
@@ -885,10 +896,18 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_mentioning_generic_packs")
             "\ncould not be converted into\n\t"
             "'(nil, b...) -> (nil, a...)'; \n"
             "this is because \n\t"
+            " * in the 1st component of the intersection, the function returns a tail of `b...` and it returns a tail of `a...`, and `b...` is not a "
+            "subtype of `a...`\n\t"
             " * in the 1st component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the "
             "union as `number` and it returns the 1st entry in the type pack is `nil`, and `number` is not a subtype of `nil`\n\t"
+            " * in the 1st component of the intersection, the function takes a tail of `a...` and it takes a tail of `b...`, and `a...` is not a "
+            "supertype of `b...`\n\t"
+            " * in the 2nd component of the intersection, the function returns a tail of `b...` and it returns a tail of `a...`, and `b...` is not a "
+            "subtype of `a...`\n\t"
             " * in the 2nd component of the intersection, the function returns the 1st entry in the type pack which has the 1st component of the "
-            "union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`";
+            "union as `string` and it returns the 1st entry in the type pack is `nil`, and `string` is not a subtype of `nil`\n\t"
+            " * in the 2nd component of the intersection, the function takes a tail of `a...` and it takes a tail of `b...`, and `a...` is not a "
+            "supertype of `b...`";
 
         CHECK_EQ(expected1, toString(result.errors[0]));
         CHECK_EQ(expected2, toString(result.errors[1]));
@@ -1104,6 +1123,8 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_1")
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_2")
 {
+    ScopedFastFlag _{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
+
     CheckResult result = check(R"(
         function f<a...,b...>()
             function g(x : ((a...) -> ()) & ((b...) -> ()))
@@ -1115,7 +1136,11 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_2")
 
     if (FFlag::LuauSolverV2)
     {
-        LUAU_REQUIRE_NO_ERRORS(result);
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+        CHECK(tm);
+        CHECK_EQ(toString(tm->wantedType), "() -> ()");
+        CHECK_EQ(toString(tm->givenType), "((a...) -> ()) & ((b...) -> ())");
     }
     else
     {
@@ -1129,6 +1154,9 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_2")
 
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_3")
 {
+    ScopedFastFlag sff1{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
+    ScopedFastFlag sff2{FFlag::LuauReturnMappedGenericPacksFromSubtyping2, true};
+
     CheckResult result = check(R"(
         function f<a...>()
             function g(x : (() -> a...) & (() -> (number?,a...)))
@@ -1140,7 +1168,11 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_3")
 
     if (FFlag::LuauSolverV2)
     {
-        LUAU_REQUIRE_NO_ERRORS(result);
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+        CHECK(tm);
+        CHECK_EQ(toString(tm->wantedType), "() -> number");
+        CHECK_EQ(toString(tm->givenType), "(() -> (a...)) & (() -> (number?, a...))");
     }
     else
     {
@@ -1156,6 +1188,7 @@ could not be converted into
 TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
 {
     ScopedFastFlag _{FFlag::LuauReturnMappedGenericPacksFromSubtyping2, true};
+    ScopedFastFlag sff{FFlag::LuauSubtypingGenericPacksDoesntUseVariance, true};
 
     CheckResult result = check(R"(
         function f<a...>()
@@ -1170,17 +1203,24 @@ TEST_CASE_FIXTURE(Fixture, "overloadeded_functions_with_weird_typepacks_4")
 
     if (FFlag::LuauSolverV2)
     {
-        // TODO: CLI-159120 - this error message is bogus
+        const TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+        CHECK(tm);
+        CHECK_EQ(toString(tm->wantedType), "(number?) -> ()");
+        CHECK_EQ(toString(tm->givenType), "((a...) -> ()) & ((number, a...) -> number)");
         const std::string expected =
             "Type\n\t"
             "'((a...) -> ()) & ((number, a...) -> number)'"
             "\ncould not be converted into\n\t"
-            "'((a...) -> ()) & ((number, a...) -> number)'; \n"
+            "'(number?) -> ()'; \n"
             "this is because \n\t"
-            " * in the 1st component of the intersection, the function returns is `()` in the former type and `number` in "
-            "the latter type, and `()` is not a subtype of `number`\n\t"
-            " * in the 2nd component of the intersection, the function takes a tail of `number, a...` and in the 1st component of "
-            "the intersection, the function takes a tail of `number, a...`, and `number, a...` is not a supertype of `number, a...`";
+            " * in the 1st component of the intersection, the function takes a tail of `a...` and it takes the portion of the type pack starting at "
+            "index 0 to the end`number?`, and `a...` is not a supertype of `number?`\n\t"
+            " * in the 2nd component of the intersection, the function returns is `number` and it returns `()`, and `number` is not a subtype of "
+            "`()`\n\t"
+            " * in the 2nd component of the intersection, the function takes a tail of `a...` and it takes `number?`, and `a...` is not a supertype "
+            "of `number?`\n\t"
+            " * in the 2nd component of the intersection, the function takes the 1st entry in the type pack which is `number` and it takes the 1st "
+            "entry in the type pack has the 2nd component of the union as `nil`, and `number` is not a supertype of `nil`";
         CHECK(expected == toString(result.errors[0]));
     }
     else
@@ -1468,10 +1508,7 @@ TEST_CASE_FIXTURE(Fixture, "cli_80596_simplify_more_realistic_intersections")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "narrow_intersection_nevers")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauSolverV2, true},
-        {FFlag::LuauRefineTablesWithReadType, true},
-    };
+    ScopedFastFlag sffs{FFlag::LuauSolverV2, true};
 
     loadDefinition(R"(
         declare class Player

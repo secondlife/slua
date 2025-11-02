@@ -10,7 +10,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
 
-LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 
 TEST_SUITE_BEGIN("UnionTypes");
 
@@ -403,6 +403,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors")
 
 TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors_2")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
         type A = { x: number } & { y: number }
         function f(a: A?)
@@ -412,10 +413,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_assignment_errors_2")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     auto s = toString(result.errors[0]);
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("Value of type '({ x: number } & { y: number })?' could be nil", s);
-    else
-        CHECK_EQ("Value of type '({| x: number |} & {| y: number |})?' could be nil", s);
+    CHECK_EQ("Value of type '({ x: number } & { y: number })?' could be nil", s);
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_length_error")
@@ -526,6 +524,7 @@ local oh : boolean = t.y
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_union_part")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
 type X = { x: number }
 type Y = { y: number }
@@ -554,10 +553,10 @@ end
     }
     else
     {
-        CHECK_EQ(toString(result.errors[0]), R"(Type 'X | Y | Z' could not be converted into '{| w: number |}'
+        CHECK_EQ(toString(result.errors[0]), R"(Type 'X | Y | Z' could not be converted into '{ w: number }'
 caused by:
   Not all union options are compatible.
-Table type 'X' not compatible with type '{| w: number |}' because the former is missing field 'w')");
+Table type 'X' not compatible with type '{ w: number }' because the former is missing field 'w')");
     }
 }
 
@@ -629,13 +628,15 @@ TEST_CASE_FIXTURE(Fixture, "indexing_into_a_cyclic_union_doesnt_crash")
     UnionType u;
 
     u.options.push_back(badCyclicUnionTy);
-    u.options.push_back(arena.addType(TableType{
-        {},
-        TableIndexer{getBuiltins()->numberType, getBuiltins()->numberType},
-        TypeLevel{},
-        getFrontend().globals.globalScope.get(),
-        TableState::Sealed
-    }));
+    u.options.push_back(arena.addType(
+        TableType{
+            {},
+            TableIndexer{getBuiltins()->numberType, getBuiltins()->numberType},
+            TypeLevel{},
+            getFrontend().globals.globalScope.get(),
+            TableState::Sealed
+        }
+    ));
 
     asMutable(badCyclicUnionTy)->ty.emplace<UnionType>(std::move(u));
 
@@ -896,15 +897,9 @@ TEST_CASE_FIXTURE(Fixture, "less_greedy_unification_with_union_types")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization4)
-        CHECK_EQ(
-            "<a>(({ read x: a } & { x: number }) | ({ read x: a } & { x: string })) -> { x: number } | { x: string }", toString(requireType("f"))
-        );
-    else
-        CHECK_EQ(
-            "(({ read x: unknown } & { x: number }) | ({ read x: unknown } & { x: string })) -> { x: number } | { x: string }",
-            toString(requireType("f"))
-        );
+    CHECK_EQ(
+        "<a>(({ read x: a } & { x: number }) | ({ read x: a } & { x: string })) -> { x: number } | { x: string }", toString(requireType("f"))
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "less_greedy_unification_with_union_types_2")

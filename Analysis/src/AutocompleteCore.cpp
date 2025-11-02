@@ -17,6 +17,9 @@
 #include "Luau/TypePack.h"
 
 #include <algorithm>
+#include <array>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -24,10 +27,16 @@ LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
-LUAU_FASTFLAG(LuauImplicitTableIndexerKeys3)
+LUAU_FASTFLAGVARIABLE(LuauIncludeBreakContinueStatements)
+LUAU_FASTFLAGVARIABLE(LuauSuggestHotComments)
+LUAU_FASTFLAG(LuauAutocompleteAttributes)
 
-static const std::unordered_set<std::string> kStatementStartingKeywords =
+static constexpr std::array<std::string_view, 12> kStatementStartingKeywords =
     {"while", "if", "local", "repeat", "function", "do", "for", "return", "break", "continue", "type", "export"};
+
+static constexpr std::array<std::string_view, 6> kHotComments = {"nolint", "nocheck", "nonstrict", "strict", "optimize", "native"};
+
+static const std::string kKnownAttributes[] = {"checked", "deprecated", "native"};
 
 namespace Luau
 {
@@ -575,39 +584,21 @@ static void autocompleteStringSingleton(TypeId ty, bool addQuotes, AstNode* node
 
     ty = follow(ty);
 
-    if (FFlag::LuauImplicitTableIndexerKeys3)
+    if (auto ss = get<StringSingleton>(get<SingletonType>(ty)))
     {
-        if (auto ss = get<StringSingleton>(get<SingletonType>(ty)))
-        {
-            // This is purposefully `try_emplace` as we don't want to override any existing entries.
-            result.try_emplace(formatKey(ss->value), AutocompleteEntry{AutocompleteEntryKind::String, ty, false, false, TypeCorrectKind::Correct});
-        }
-        else if (auto uty = get<UnionType>(ty))
-        {
-            for (auto el : uty)
-            {
-                if (auto ss = get<StringSingleton>(get<SingletonType>(el)))
-                {
-                    // This is purposefully `try_emplace` as we don't want to override any existing entries.
-                    result.try_emplace(
-                        formatKey(ss->value), AutocompleteEntry{AutocompleteEntryKind::String, ty, false, false, TypeCorrectKind::Correct}
-                    );
-                }
-            }
-        }
+        // This is purposefully `try_emplace` as we don't want to override any existing entries.
+        result.try_emplace(formatKey(ss->value), AutocompleteEntry{AutocompleteEntryKind::String, ty, false, false, TypeCorrectKind::Correct});
     }
-    else
+    else if (auto uty = get<UnionType>(ty))
     {
-        if (auto ss = get<StringSingleton>(get<SingletonType>(ty)))
+        for (auto el : uty)
         {
-            result[formatKey(ss->value)] = AutocompleteEntry{AutocompleteEntryKind::String, ty, false, false, TypeCorrectKind::Correct};
-        }
-        else if (auto uty = get<UnionType>(ty))
-        {
-            for (auto el : uty)
+            if (auto ss = get<StringSingleton>(get<SingletonType>(el)))
             {
-                if (auto ss = get<StringSingleton>(get<SingletonType>(el)))
-                    result[formatKey(ss->value)] = AutocompleteEntry{AutocompleteEntryKind::String, ty, false, false, TypeCorrectKind::Correct};
+                // This is purposefully `try_emplace` as we don't want to override any existing entries.
+                result.try_emplace(
+                    formatKey(ss->value), AutocompleteEntry{AutocompleteEntryKind::String, ty, false, false, TypeCorrectKind::Correct}
+                );
             }
         }
     }
@@ -1210,6 +1201,28 @@ static bool isBindingLegalAtCurrentPosition(const Symbol& symbol, const Binding&
     return binding.location == Location() || !binding.location.containsClosed(pos);
 }
 
+static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, Position position)
+{
+    LUAU_ASSERT(FFlag::LuauIncludeBreakContinueStatements);
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        if ((*it)->is<AstStatFunction>() || (*it)->is<AstStatLocalFunction>() || (*it)->is<AstExprFunction>() || (*it)->is<AstStatTypeFunction>() ||
+            (*it)->is<AstTypeFunction>())
+            return false;
+
+        if (auto statWhile = (*it)->as<AstStatWhile>(); statWhile && statWhile->body->location.contains(position))
+            return true;
+        else if (auto statFor = (*it)->as<AstStatFor>(); statFor && statFor->body->location.contains(position))
+            return true;
+        else if (auto statForIn = (*it)->as<AstStatForIn>(); statForIn && statForIn->body->location.contains(position))
+            return true;
+        else if (auto statRepeat = (*it)->as<AstStatRepeat>(); statRepeat && statRepeat->body->location.contains(position))
+            return true;
+    }
+
+    return false;
+}
+
 static AutocompleteEntryMap autocompleteStatement(
     const Module& module,
     const std::vector<AstNode*>& ancestry,
@@ -1254,8 +1267,20 @@ static AutocompleteEntryMap autocompleteStatement(
         scope = scope->parent;
     }
 
-    for (const auto& kw : kStatementStartingKeywords)
-        result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
+    if (FFlag::LuauIncludeBreakContinueStatements)
+    {
+        bool shouldIncludeBreakAndContinue = isValidBreakContinueContext(ancestry, position);
+        for (const std::string_view kw : kStatementStartingKeywords)
+        {
+            if ((kw != "break" && kw != "continue") || shouldIncludeBreakAndContinue)
+                result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        }
+    }
+    else
+    {
+        for (const std::string_view kw : kStatementStartingKeywords)
+            result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
+    }
 
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
     {
@@ -1331,7 +1356,7 @@ static bool autocompleteIfElseExpression(
     if (node->is<AstExprIfElse>())
     {
         // Don't try to complete when the current node is an if-else expression (i.e. only try to complete when the node is a child of an if-else
-        // expression.
+        // expression).
         return true;
     }
 
@@ -1803,10 +1828,24 @@ AutocompleteResult autocomplete_(
     const ScopePtr& scopeAtPosition,
     Position position,
     FileResolver* fileResolver,
-    StringCompletionCallback callback
+    StringCompletionCallback callback,
+    bool isInHotComment
 )
 {
     LUAU_TIMETRACE_SCOPE("Luau::autocomplete_", "AutocompleteCore");
+
+    if (FFlag::LuauSuggestHotComments)
+    {
+        if (isInHotComment)
+        {
+            AutocompleteEntryMap result;
+
+            for (const std::string_view hc : kHotComments)
+                result.emplace(hc, AutocompleteEntry{AutocompleteEntryKind::HotComment});
+            return {std::move(result), ancestry, AutocompleteContext::HotComment};
+        }
+    }
+
     AstNode* node = ancestry.back();
 
     AstExprConstantNil dummy{Location{}};
@@ -2050,12 +2089,6 @@ AutocompleteResult autocomplete_(
     {
         AutocompleteEntryMap result;
 
-        if (!FFlag::LuauImplicitTableIndexerKeys3)
-        {
-            if (auto it = module->astExpectedTypes.find(node->asExpr()))
-                autocompleteStringSingleton(*it, false, node, position, result);
-        }
-
         if (ancestry.size() >= 2)
         {
             if (auto idxExpr = ancestry.at(ancestry.size() - 2)->as<AstExprIndexExpr>())
@@ -2073,11 +2106,8 @@ AutocompleteResult autocomplete_(
             }
         }
 
-        if (FFlag::LuauImplicitTableIndexerKeys3)
-        {
-            if (auto it = module->astExpectedTypes.find(node->asExpr()))
-                autocompleteStringSingleton(*it, false, node, position, result);
-        }
+        if (auto it = module->astExpectedTypes.find(node->asExpr()))
+            autocompleteStringSingleton(*it, false, node, position, result);
 
         return {std::move(result), ancestry, AutocompleteContext::String};
     }
@@ -2087,6 +2117,22 @@ AutocompleteResult autocomplete_(
         // can't know what to format to
         AutocompleteEntryMap map;
         return {std::move(map), ancestry, AutocompleteContext::String};
+    }
+    else if (AstExprFunction* func = node->as<AstExprFunction>())
+    {
+        if (FFlag::LuauAutocompleteAttributes)
+        {
+            for (AstAttr* attr : func->attributes)
+            {
+                if (attr->location.begin <= position && position <= attr->location.end && attr->type == AstAttr::Type::Unknown)
+                {
+                    AutocompleteEntryMap ret;
+                    for (const auto& attr : kKnownAttributes)
+                        ret[attr.c_str()] = {AutocompleteEntryKind::Keyword};
+                    return {std::move(ret), std::move(ancestry), AutocompleteContext::Keyword};
+                }
+            }
+        }
     }
 
     if (node->is<AstExprConstantNumber>())
@@ -2104,6 +2150,5 @@ AutocompleteResult autocomplete_(
 
     return {};
 }
-
 
 } // namespace Luau

@@ -17,6 +17,8 @@
 
 LUAU_FASTFLAG(LuauSolverV2);
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
+LUAU_FASTFLAG(LuauEmplaceNotPushBack)
+LUAU_FASTFLAG(LuauSubtypingGenericPacksDoesntUseVariance)
 
 // Maximum number of steps to follow when traversing a path. May not always
 // equate to the number of components in a path, depending on the traversal
@@ -62,6 +64,12 @@ bool PackSlice::operator==(const PackSlice& other) const
 bool Reduction::operator==(const Reduction& other) const
 {
     return resultType == other.resultType;
+}
+
+bool GenericPackMapping::operator==(const GenericPackMapping& other) const
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+    return mappedType == other.mappedType;
 }
 
 Path Path::append(const Path& suffix) const
@@ -146,6 +154,12 @@ size_t PathHash::operator()(const Reduction& reduction) const
     return std::hash<TypeId>()(reduction.resultType);
 }
 
+size_t PathHash::operator()(const GenericPackMapping& mapping) const
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+    return std::hash<TypePackId>()(mapping.mappedType);
+}
+
 size_t PathHash::operator()(const Component& component) const
 {
     return visit(*this, component);
@@ -168,91 +182,140 @@ Path PathBuilder::build()
 
 PathBuilder& PathBuilder::readProp(std::string name)
 {
-    components.push_back(Property{std::move(name), true});
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(Property{std::move(name), true});
+    else
+        components.push_back(Property{std::move(name), true});
     return *this;
 }
 
 PathBuilder& PathBuilder::writeProp(std::string name)
 {
-    components.push_back(Property{std::move(name), false});
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(Property{std::move(name), false});
+    else
+        components.push_back(Property{std::move(name), false});
     return *this;
 }
 
 PathBuilder& PathBuilder::prop(std::string name)
 {
-    components.push_back(Property{std::move(name)});
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(Property{std::move(name)});
+    else
+        components.push_back(Property{std::move(name)});
     return *this;
 }
 
 PathBuilder& PathBuilder::index(size_t i)
 {
-    components.push_back(Index{i});
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(Index{i});
+    else
+        components.push_back(Index{i});
     return *this;
 }
 
 PathBuilder& PathBuilder::mt()
 {
-    components.push_back(TypeField::Metatable);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::Metatable);
+    else
+        components.push_back(TypeField::Metatable);
     return *this;
 }
 
 PathBuilder& PathBuilder::lb()
 {
-    components.push_back(TypeField::LowerBound);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::LowerBound);
+    else
+        components.push_back(TypeField::LowerBound);
     return *this;
 }
 
 PathBuilder& PathBuilder::ub()
 {
-    components.push_back(TypeField::UpperBound);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::UpperBound);
+    else
+        components.push_back(TypeField::UpperBound);
     return *this;
 }
 
 PathBuilder& PathBuilder::indexKey()
 {
-    components.push_back(TypeField::IndexLookup);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::IndexLookup);
+    else
+        components.push_back(TypeField::IndexLookup);
     return *this;
 }
 
 PathBuilder& PathBuilder::indexValue()
 {
-    components.push_back(TypeField::IndexResult);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::IndexResult);
+    else
+        components.push_back(TypeField::IndexResult);
     return *this;
 }
 
 PathBuilder& PathBuilder::negated()
 {
-    components.push_back(TypeField::Negated);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::Negated);
+    else
+        components.push_back(TypeField::Negated);
     return *this;
 }
 
 PathBuilder& PathBuilder::variadic()
 {
-    components.push_back(TypeField::Variadic);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(TypeField::Variadic);
+    else
+        components.push_back(TypeField::Variadic);
     return *this;
 }
 
 PathBuilder& PathBuilder::args()
 {
-    components.push_back(PackField::Arguments);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(PackField::Arguments);
+    else
+        components.push_back(PackField::Arguments);
     return *this;
 }
 
 PathBuilder& PathBuilder::rets()
 {
-    components.push_back(PackField::Returns);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(PackField::Returns);
+    else
+        components.push_back(PackField::Returns);
     return *this;
 }
 
 PathBuilder& PathBuilder::tail()
 {
-    components.push_back(PackField::Tail);
+    if (FFlag::LuauEmplaceNotPushBack)
+        components.emplace_back(PackField::Tail);
+    else
+        components.push_back(PackField::Tail);
     return *this;
 }
 
 PathBuilder& PathBuilder::packSlice(size_t start_index)
 {
     components.emplace_back(PackSlice{start_index});
+    return *this;
+}
+
+PathBuilder& PathBuilder::mappedGenericPack(TypePackId mappedType)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+    components.emplace_back(GenericPackMapping{mappedType});
     return *this;
 }
 
@@ -263,13 +326,15 @@ namespace
 
 struct TraversalState
 {
+    // Clip the below two constructors with LuauSubtypingGenericPacksDoesntUseVariance
     TraversalState(TypeId root, NotNull<BuiltinTypes> builtinTypes, const DenseHashMap<TypePackId, TypePackId>* mappedGenericPacks, TypeArena* arena)
         : current(root)
         , builtinTypes(builtinTypes)
-        , mappedGenericPacks(mappedGenericPacks)
+        , mappedGenericPacks_DEPRECATED(mappedGenericPacks)
         , arena(arena)
     {
     }
+
     TraversalState(
         TypePackId root,
         NotNull<BuiltinTypes> builtinTypes,
@@ -278,16 +343,31 @@ struct TraversalState
     )
         : current(root)
         , builtinTypes(builtinTypes)
-        , mappedGenericPacks(mappedGenericPacks)
+        , mappedGenericPacks_DEPRECATED(mappedGenericPacks)
+        , arena(arena)
+    {
+    }
+
+    TraversalState(TypeId root, const NotNull<BuiltinTypes> builtinTypes, TypeArena* arena)
+        : current(root)
+        , builtinTypes(builtinTypes)
+        , arena(arena)
+    {
+    }
+
+    TraversalState(TypePackId root, NotNull<BuiltinTypes> builtinTypes, TypeArena* arena)
+        : current(root)
+        , builtinTypes(builtinTypes)
         , arena(arena)
     {
     }
 
     TypeOrPack current;
     NotNull<BuiltinTypes> builtinTypes;
-    // TODO: make these NotNull when LuauReturnMappedGenericPacksFromSubtyping2 is clipped
-    const DenseHashMap<TypePackId, TypePackId>* mappedGenericPacks;
-    TypeArena* arena;
+    // TODO: Clip with LuauSubtypingGenericPacksDoesntUseVariance
+    const DenseHashMap<TypePackId, TypePackId>* mappedGenericPacks_DEPRECATED = nullptr;
+    // TODO: make NotNull when LuauReturnMappedGenericPacksFromSubtyping2 is clipped
+    TypeArena* arena = nullptr;
     int steps = 0;
 
     void updateCurrent(TypeId ty)
@@ -417,7 +497,7 @@ struct TraversalState
         {
             auto currentPack = get<TypePackId>(current);
             LUAU_ASSERT(currentPack);
-            if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
+            if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2 && !FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
             {
                 if (const auto tp = get<TypePack>(*currentPack))
                 {
@@ -432,9 +512,9 @@ struct TraversalState
                         updateCurrent(*it);
                         return true;
                     }
-                    else if (tp->tail && mappedGenericPacks && mappedGenericPacks->contains(*tp->tail))
+                    else if (tp->tail && mappedGenericPacks_DEPRECATED && mappedGenericPacks_DEPRECATED->contains(*tp->tail))
                     {
-                        updateCurrent(*mappedGenericPacks->find(*tp->tail));
+                        updateCurrent(*mappedGenericPacks_DEPRECATED->find(*tp->tail));
                         LUAU_ASSERT(index.index >= i);
                         return traverse(TypePath::Index{index.index - i, TypePath::Index::Variant::Pack});
                     }
@@ -576,8 +656,10 @@ struct TraversalState
 
                 if (auto tail = it.tail())
                 {
-                    if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2 && mappedGenericPacks && mappedGenericPacks->contains(*tail))
-                        updateCurrent(*mappedGenericPacks->find(*tail));
+                    if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2 && !FFlag::LuauSubtypingGenericPacksDoesntUseVariance &&
+                        mappedGenericPacks_DEPRECATED && mappedGenericPacks_DEPRECATED->contains(*tail))
+                        updateCurrent(*mappedGenericPacks_DEPRECATED->find(*tail));
+
                     else
                         updateCurrent(*tail);
                     return true;
@@ -592,21 +674,37 @@ struct TraversalState
 
     bool traverse(const TypePath::PackSlice slice)
     {
+        // TODO: clip these checks once LuauReturnMappedGenericPacksFromSubtyping2 is clipped
+        // arena and mappedGenericPacks_DEPRECATED should be NonNull once that happens
+        LUAU_ASSERT(FFlag::LuauReturnMappedGenericPacksFromSubtyping2);
+        if (FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
+        {
+            LUAU_ASSERT(arena);
+
+            if (!arena)
+                return false;
+        }
+
         if (checkInvariants())
             return false;
 
         // TODO: clip this check once LuauReturnMappedGenericPacksFromSubtyping2 is clipped
         // arena and mappedGenericPacks should be NonNull once that happens
-        if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
-            LUAU_ASSERT(arena && mappedGenericPacks);
-        else if (!arena || !mappedGenericPacks)
-            return false;
+        if (!FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
+        {
+            if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
+                LUAU_ASSERT(arena && mappedGenericPacks_DEPRECATED);
+            else if (!arena || !mappedGenericPacks_DEPRECATED)
+                return false;
+        }
 
-        const auto currentPack = get<TypePackId>(current);
+        const TypePackId* currentPack = get<TypePackId>(current);
         if (!currentPack)
             return false;
 
-        auto [flatHead, flatTail] = flatten(*currentPack, *mappedGenericPacks);
+        auto [flatHead, flatTail] = FFlag::LuauSubtypingGenericPacksDoesntUseVariance
+                                        ? flatten(*currentPack)
+                                        : flatten_DEPRECATED(*currentPack, *mappedGenericPacks_DEPRECATED);
 
         if (flatHead.size() <= slice.start_index)
             return false;
@@ -627,6 +725,18 @@ struct TraversalState
         TypePackId packSlice = arena->addTypePack(headSlice, flatTail);
 
         updateCurrent(packSlice);
+
+        return true;
+    }
+
+    bool traverse(const TypePath::GenericPackMapping mapping)
+    {
+        LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+        if (checkInvariants())
+            return false;
+
+        updateCurrent(mapping.mappedType);
 
         return true;
     }
@@ -720,6 +830,11 @@ std::string toString(const TypePath::Path& path, bool prefixDot)
             // We need to rework the TypePath system to make subtyping failures easier to understand
             // https://roblox.atlassian.net/browse/CLI-104422
             result << "~~>";
+        }
+        else if constexpr (std::is_same_v<T, TypePath::GenericPackMapping>)
+        {
+            LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+            result << "~";
         }
         else
         {
@@ -937,6 +1052,11 @@ std::string toStringHuman(const TypePath::Path& path)
             result << "reduces to" << ' ';
             state = State::Normal;
         }
+        else if constexpr (std::is_same_v<T, TypePath::GenericPackMapping>)
+        {
+            LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+            result << "is a generic pack mapped to ";
+        }
         else
         {
             static_assert(always_false_v<T>, "Unhandled Component variant");
@@ -995,6 +1115,8 @@ static bool traverse(TraversalState& state, const Path& path)
 
 std::optional<TypeOrPack> traverse_DEPRECATED(TypeId root, const Path& path, NotNull<BuiltinTypes> builtinTypes)
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, nullptr, nullptr);
     if (traverse(state, path))
         return state.current;
@@ -1004,6 +1126,8 @@ std::optional<TypeOrPack> traverse_DEPRECATED(TypeId root, const Path& path, Not
 
 std::optional<TypeOrPack> traverse_DEPRECATED(TypePackId root, const Path& path, NotNull<BuiltinTypes> builtinTypes)
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, nullptr, nullptr);
     if (traverse(state, path))
         return state.current;
@@ -1011,7 +1135,18 @@ std::optional<TypeOrPack> traverse_DEPRECATED(TypePackId root, const Path& path,
         return std::nullopt;
 }
 
-std::optional<TypeOrPack> traverse(
+std::optional<TypeOrPack> traverse(const TypePackId root, const Path& path, const NotNull<BuiltinTypes> builtinTypes, const NotNull<TypeArena> arena)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, arena);
+    if (traverse(state, path))
+        return state.current;
+    else
+        return std::nullopt;
+}
+
+std::optional<TypeOrPack> traverse_DEPRECATED(
     TypeId root,
     const Path& path,
     NotNull<BuiltinTypes> builtinTypes,
@@ -1019,6 +1154,8 @@ std::optional<TypeOrPack> traverse(
     NotNull<TypeArena> arena
 )
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
     if (traverse(state, path))
         return state.current;
@@ -1026,7 +1163,7 @@ std::optional<TypeOrPack> traverse(
         return std::nullopt;
 }
 
-std::optional<TypeOrPack> traverse(
+std::optional<TypeOrPack> traverse_DEPRECATED(
     TypePackId root,
     const Path& path,
     NotNull<BuiltinTypes> builtinTypes,
@@ -1034,7 +1171,20 @@ std::optional<TypeOrPack> traverse(
     NotNull<TypeArena> arena
 )
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
+    if (traverse(state, path))
+        return state.current;
+    else
+        return std::nullopt;
+}
+
+std::optional<TypeOrPack> traverse(const TypeId root, const Path& path, const NotNull<BuiltinTypes> builtinTypes, const NotNull<TypeArena> arena)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, arena);
     if (traverse(state, path))
         return state.current;
     else
@@ -1043,6 +1193,8 @@ std::optional<TypeOrPack> traverse(
 
 std::optional<TypeId> traverseForType_DEPRECATED(TypeId root, const Path& path, NotNull<BuiltinTypes> builtinTypes)
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, nullptr, nullptr);
     if (traverse(state, path))
     {
@@ -1053,7 +1205,7 @@ std::optional<TypeId> traverseForType_DEPRECATED(TypeId root, const Path& path, 
         return std::nullopt;
 }
 
-std::optional<TypeId> traverseForType(
+std::optional<TypeId> traverseForType_DEPRECATED(
     TypeId root,
     const Path& path,
     NotNull<BuiltinTypes> builtinTypes,
@@ -1061,10 +1213,26 @@ std::optional<TypeId> traverseForType(
     NotNull<TypeArena> arena
 )
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
     if (traverse(state, path))
     {
         auto ty = get<TypeId>(state.current);
+        return ty ? std::make_optional(*ty) : std::nullopt;
+    }
+    else
+        return std::nullopt;
+}
+
+std::optional<TypeId> traverseForType(const TypeId root, const Path& path, const NotNull<BuiltinTypes> builtinTypes, const NotNull<TypeArena> arena)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, arena);
+    if (traverse(state, path))
+    {
+        const TypeId* ty = get<TypeId>(state.current);
         return ty ? std::make_optional(*ty) : std::nullopt;
     }
     else
@@ -1073,7 +1241,29 @@ std::optional<TypeId> traverseForType(
 
 std::optional<TypeId> traverseForType_DEPRECATED(TypePackId root, const Path& path, NotNull<BuiltinTypes> builtinTypes)
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, nullptr, nullptr);
+    if (traverse(state, path))
+    {
+        auto ty = get<TypeId>(state.current);
+        return ty ? std::make_optional(*ty) : std::nullopt;
+    }
+    else
+        return std::nullopt;
+}
+
+std::optional<TypeId> traverseForType_DEPRECATED(
+    TypePackId root,
+    const Path& path,
+    NotNull<BuiltinTypes> builtinTypes,
+    NotNull<const DenseHashMap<TypePackId, TypePackId>> mappedGenericPacks,
+    NotNull<TypeArena> arena
+)
+{
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
     if (traverse(state, path))
     {
         auto ty = get<TypeId>(state.current);
@@ -1084,17 +1274,18 @@ std::optional<TypeId> traverseForType_DEPRECATED(TypePackId root, const Path& pa
 }
 
 std::optional<TypeId> traverseForType(
-    TypePackId root,
+    const TypePackId root,
     const Path& path,
-    NotNull<BuiltinTypes> builtinTypes,
-    NotNull<const DenseHashMap<TypePackId, TypePackId>> mappedGenericPacks,
-    NotNull<TypeArena> arena
+    const NotNull<BuiltinTypes> builtinTypes,
+    const NotNull<TypeArena> arena
 )
 {
-    TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, arena);
     if (traverse(state, path))
     {
-        auto ty = get<TypeId>(state.current);
+        const TypeId* ty = get<TypeId>(state.current);
         return ty ? std::make_optional(*ty) : std::nullopt;
     }
     else
@@ -1103,6 +1294,8 @@ std::optional<TypeId> traverseForType(
 
 std::optional<TypePackId> traverseForPack_DEPRECATED(TypeId root, const Path& path, NotNull<BuiltinTypes> builtinTypes)
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, nullptr, nullptr);
     if (traverse(state, path))
     {
@@ -1113,7 +1306,7 @@ std::optional<TypePackId> traverseForPack_DEPRECATED(TypeId root, const Path& pa
         return std::nullopt;
 }
 
-std::optional<TypePackId> traverseForPack(
+std::optional<TypePackId> traverseForPack_DEPRECATED(
     TypeId root,
     const Path& path,
     NotNull<BuiltinTypes> builtinTypes,
@@ -1121,10 +1314,31 @@ std::optional<TypePackId> traverseForPack(
     NotNull<TypeArena> arena
 )
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
     if (traverse(state, path))
     {
         auto ty = get<TypePackId>(state.current);
+        return ty ? std::make_optional(*ty) : std::nullopt;
+    }
+    else
+        return std::nullopt;
+}
+
+std::optional<TypePackId> traverseForPack(
+    const TypeId root,
+    const Path& path,
+    const NotNull<BuiltinTypes> builtinTypes,
+    const NotNull<TypeArena> arena
+)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, arena);
+    if (traverse(state, path))
+    {
+        const TypePackId* ty = get<TypePackId>(state.current);
         return ty ? std::make_optional(*ty) : std::nullopt;
     }
     else
@@ -1133,6 +1347,8 @@ std::optional<TypePackId> traverseForPack(
 
 std::optional<TypePackId> traverseForPack_DEPRECATED(TypePackId root, const Path& path, NotNull<BuiltinTypes> builtinTypes)
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, nullptr, nullptr);
     if (traverse(state, path))
     {
@@ -1143,7 +1359,7 @@ std::optional<TypePackId> traverseForPack_DEPRECATED(TypePackId root, const Path
         return std::nullopt;
 }
 
-std::optional<TypePackId> traverseForPack(
+std::optional<TypePackId> traverseForPack_DEPRECATED(
     TypePackId root,
     const Path& path,
     NotNull<BuiltinTypes> builtinTypes,
@@ -1151,10 +1367,31 @@ std::optional<TypePackId> traverseForPack(
     NotNull<TypeArena> arena
 )
 {
+    LUAU_ASSERT(!FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
     TraversalState state(follow(root), builtinTypes, mappedGenericPacks, arena);
     if (traverse(state, path))
     {
         auto ty = get<TypePackId>(state.current);
+        return ty ? std::make_optional(*ty) : std::nullopt;
+    }
+    else
+        return std::nullopt;
+}
+
+std::optional<TypePackId> traverseForPack(
+    const TypePackId root,
+    const Path& path,
+    const NotNull<BuiltinTypes> builtinTypes,
+    const NotNull<TypeArena> arena
+)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    TraversalState state(follow(root), builtinTypes, arena);
+    if (traverse(state, path))
+    {
+        const TypePackId* ty = get<TypePackId>(state.current);
         return ty ? std::make_optional(*ty) : std::nullopt;
     }
     else
@@ -1186,6 +1423,104 @@ std::optional<size_t> traverseForIndex(const Path& path)
         return index;
     }
     return std::nullopt;
+}
+
+TypePack flattenPackWithPath(TypePackId root, const Path& path)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    std::vector<TypeId> flattened;
+
+    std::optional<TypePackId> curr = root;
+    auto pathIter = begin(path.components);
+    const auto pathEnd = end(path.components);
+
+    while (curr)
+    {
+        TypePackIterator it(*curr);
+        // Push back curr's head
+        for (; it != end(*curr); ++it)
+            flattened.emplace_back(*it);
+
+        // Check if curr has a tail, and if the next bit of path is Tail + GenericPackMapping
+        curr = it.tail();
+        if (!curr || !get<GenericTypePack>(*curr) || pathIter == pathEnd)
+            break;
+
+        if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&*pathIter); !pf || *pf != TypePath::PackField::Tail)
+            break;
+
+        ++pathIter;
+
+        const TypePath::GenericPackMapping* gpm = get_if<TypePath::GenericPackMapping>(&*pathIter);
+        if (!gpm)
+            break;
+
+        ++pathIter;
+        curr = gpm->mappedType;
+    }
+
+    return {flattened, curr};
+}
+
+TypePack traverseForFlattenedPack(const TypeId root, const Path& path, const NotNull<BuiltinTypes> builtinTypes, const NotNull<TypeArena> arena)
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingGenericPacksDoesntUseVariance);
+
+    // Iterate over path's components, and figure out when it turns into Tails and GenericPackMappings
+    // We want to split out the part of the path that contains the generic pack mappings we're interested in, so that we can flatten it
+    // path[splitIndex:] will contain only Tails and GenericPackMappings
+    size_t splitIndex = 0;
+    for (size_t i = path.components.size(); i > 0; --i)
+    {
+        const TypePath::Component& c = path.components[i - 1];
+
+        const TypePath::PackField* pf = get_if<TypePath::PackField>(&c);
+        const bool isNotTail = pf == nullptr || *pf != TypePath::PackField::Tail;
+        const bool isNotGPM = get_if<TypePath::GenericPackMapping>(&c) == nullptr;
+
+        if (isNotTail && isNotGPM)
+        {
+            splitIndex = i;
+            break;
+        }
+    }
+
+    // Root is a TypeId, not a TypePackId, so splitIndex should be > 0
+    LUAU_ASSERT(splitIndex > 0);
+    if (splitIndex == path.components.size() || splitIndex == 0)
+        return {{}, std::nullopt};
+
+    auto basePathIter = begin(path.components);
+    std::advance(basePathIter, splitIndex);
+    const std::optional<TypePackId> basePack = traverseForPack(root, Path(std::vector(begin(path.components), basePathIter)), builtinTypes, arena);
+
+    if (!basePack)
+    {
+        LUAU_ASSERT(!"Expected to be able to traverse to a TypePackId");
+        return {{}, std::nullopt};
+    }
+
+    return flattenPackWithPath(*basePack, Path(std::vector(basePathIter, end(path.components))));
+}
+
+bool matchesPrefix(const Path& prefix, const Path& full)
+{
+    auto prefixIter = begin(prefix.components);
+    auto fullIter = begin(full.components);
+    const auto prefixEnd = end(prefix.components);
+    const auto fullEnd = end(full.components);
+
+    while (prefixIter != prefixEnd)
+    {
+        if (fullIter == fullEnd)
+            return false;
+
+        if (*prefixIter++ != *fullIter++)
+            return false;
+    }
+
+    return true;
 }
 
 } // namespace Luau

@@ -237,6 +237,17 @@ end
 
 assert(pcall(fuzzfail23) == false)
 
+local function fuzzfail24(...)
+  local _ = l4
+  repeat
+  local function l0()
+  end
+  until (...)[_][_]:n16((_),_,l4,bit32.btest(0,_,_,_) / bit32.btest(0,_,_,_)(_,_,_,0,((_)),_))
+  do end
+end
+
+assert(pcall(fuzzfail24) == false)
+
 local function arraySizeInv1()
   local t = {1, 2, nil, nil, nil, nil, nil, nil, nil, true}
 
@@ -379,7 +390,7 @@ local function vec3compsum(a: vector)
   return a.X + a.Y + a.Z
 end
 
-assert(vec3compsum(vector(1, 2, 4)) == 7.0)
+assert(vec3compsum(vector.create(1, 2, 4)) == 7.0)
 
 local function vec3add(a: vector, b: vector) return a + b end
 local function vec3sub(a: vector, b: vector) return a - b end
@@ -387,17 +398,17 @@ local function vec3mul(a: vector, b: vector) return a * b end
 local function vec3div(a: vector, b: vector) return a / b end
 local function vec3neg(a: vector) return -a end
 
-assert(vec3add(vector(10, 20, 40), vector(1, 0, 2)) == vector(11, 20, 42))
-assert(vec3sub(vector(10, 20, 40), vector(1, 0, 2)) == vector(9, 20, 38))
-assert(vec3mul(vector(10, 20, 40), vector(1, 0, 2)) == vector(10, 0, 80))
-assert(vec3div(vector(10, 20, 40), vector(1, 0, 2)) == vector(10, math.huge, 20))
-assert(vec3neg(vector(10, 20, 40)) == vector(-10, -20, -40))
+assert(vec3add(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(11, 20, 42))
+assert(vec3sub(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(9, 20, 38))
+assert(vec3mul(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(10, 0, 80))
+assert(vec3div(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(10, math.huge, 20))
+assert(vec3neg(vector.create(10, 20, 40)) == vector.create(-10, -20, -40))
 
 local function vec3mulnum(a: vector, b: number) return a * b end
 local function vec3mulconst(a: vector) return a * 4 end
 
-assert(vec3mulnum(vector(10, 20, 40), 4) == vector(40, 80, 160))
-assert(vec3mulconst(vector(10, 20, 40), 4) == vector(40, 80, 160))
+assert(vec3mulnum(vector.create(10, 20, 40), 4) == vector.create(40, 80, 160))
+assert(vec3mulconst(vector.create(10, 20, 40), 4) == vector.create(40, 80, 160))
 
 local function bufferbounds(zero)
   local b1 = buffer.create(1)
@@ -514,12 +525,12 @@ assert(extramath3(2) == "number")
 assert(extramath3("2") == "number")
 
 local function scopedrestorefailurea(format: string, b: buffer): (string, buffer)
-	local H1F, H2F, H3F, H4F = buffer.readu32(b, 0), buffer.readu32(b, 8), buffer.readu32(b, 16), buffer.readu32(b, 24)
-	local H5F, H6F, _, _ = buffer.readu32(b, 32), buffer.readu32(b, 40), buffer.readu32(b, 48), buffer.readu32(b, 56)
-	local H1B, H2B, H3B, H4B = buffer.readu32(b, 4), buffer.readu32(b, 12), buffer.readu32(b, 20), buffer.readu32(b, 28)
-	local H5B, H6B, _, _ = buffer.readu32(b, 36), buffer.readu32(b, 44), buffer.readu32(b, 52), buffer.readu32(b, 60)
+  local H1F, H2F, H3F, H4F = buffer.readu32(b, 0), buffer.readu32(b, 8), buffer.readu32(b, 16), buffer.readu32(b, 24)
+  local H5F, H6F, _, _ = buffer.readu32(b, 32), buffer.readu32(b, 40), buffer.readu32(b, 48), buffer.readu32(b, 56)
+  local H1B, H2B, H3B, H4B = buffer.readu32(b, 4), buffer.readu32(b, 12), buffer.readu32(b, 20), buffer.readu32(b, 28)
+  local H5B, H6B, _, _ = buffer.readu32(b, 36), buffer.readu32(b, 44), buffer.readu32(b, 52), buffer.readu32(b, 60)
 
-	return string.format(format, H1F, H1B, H2F, H2B, H3F, H3B, H4F, H4B, H5F, H5B, H6F, H6B), b
+  return string.format(format, H1F, H1B, H2F, H2B, H3F, H3B, H4F, H4B, H5F, H5B, H6F, H6B), b
 end
 
 local function scopedrestorefailureb()
@@ -593,5 +604,74 @@ local function slotcachelimit2(foo, size)
 end
 
 slotcachelimit2(function(a) return -a end, vector.create(1, 2, 3))
+
+local function forcedregisterspill1(x, y, z)
+  local c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = (x + 1), (x + 2), (x + 3), (x + 4), (x + 5), (x + 6), (x + 7), (x + 8), (x + 9), (x + 10)
+  local d1, d2, d3, d4, d5, d6, d7, d8, d9, d10 = (y + 1), (y + 2), (y + 3), (y + 4), (y + 5), (y + 6), (y + 7), (y + 8), (y + 9), (y + 10)
+  local e1, e2, e3, e4, e5, e6, e7, e8, e9, e10 = (z * 1), (z * 2), (z * 3), (z * 4), (z * 5), (z * 6), (z * 7), (z * 8), (z * 9), (z * 10)
+
+  -- force store of all those values for a call and then bring all those registers back from VM slot spills
+  local t = {
+    c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + (x + 1) + (x + 2) + (x + 3) + (x + 4) + (x + 5) + (x + 6) + (x + 7) + (x + 8) + (x + 9) + (x + 10),
+    d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + d10 + (y + 1) + (y + 2) + (y + 3) + (y + 4) + (y + 5) + (y + 6) + (y + 7) + (y + 8) + (y + 9) + (y + 10),
+    e1 + e2 + e3 + e4 + e5 + e6 + e7 + e8 + e9 + e10 + (z * 1) + (z * 2) + (z * 3) + (z * 4) + (z * 5) + (z * 6) + (z * 7) + (z * 8) + (z * 9) + (z * 10),
+  }
+
+  -- bring them back once more time
+  local s1 = c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + (x + 1) + (x + 2) + (x + 3) + (x + 4) + (x + 5) + (x + 6) + (x + 7) + (x + 8) + (x + 9) + (x + 10)
+  local s2 = d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + d10 + (y + 1) + (y + 2) + (y + 3) + (y + 4) + (y + 5) + (y + 6) + (y + 7) + (y + 8) + (y + 9) + (y + 10)
+  local s3 = e1 + e2 + e3 + e4 + e5 + e6 + e7 + e8 + e9 + e10 + (z * 1) + (z * 2) + (z * 3) + (z * 4) + (z * 5) + (z * 6) + (z * 7) + (z * 8) + (z * 9) + (z * 10)
+
+  -- have not fallen back
+  assert(is_native())
+  return s1, s2, s3, t
+end
+
+do
+  local a, b, c, t = forcedregisterspill1(2, 20, 10)
+  assert(a == 150 and b == 510 and c == 1100)
+  assert(t[1] == 150 and t[2] == 510 and t[3] == 1100)
+end
+
+local function splitStoreRestore(x)
+  local c1; c1 = function() return 1 + x end
+  local c2; c2 = function() return 2 + x end
+  local c3; c3 = function() return 3 + x end
+  local c4; c4 = function() return 4 + x end
+  local c5; c5 = function() return 5 + x end
+  local c6; c6 = function() return 6 + x end
+  local c7; c7 = function() return 7 + x end
+  local c8; c8 = function() return 8 + x end
+  local c9; c9 = function() return 9 + x end
+  local ca; ca = function() return 10 + x end
+  local cb; cb = function() return 11 + x end
+  local cc; cc = function() return 12 + x end
+  local cd; cd = function() return 13 + x end
+  local ce; ce = function() return 14 + x end
+  local cf; cf = function() return 15 + x end
+
+  local t = {}
+
+  t.a1 = c1
+  t.a2 = c2
+  t.a3 = c3
+  t.a4 = c4
+  t.a5 = c5
+  t.a6 = c6
+  t.a7 = c7
+  t.a8 = c8
+  t.a9 = c9
+  t.aa = ca
+  t.ab = cb
+  t.ac = cc
+  t.ad = cd
+  t.ae = ce
+  t.af = cf
+
+  assert(is_native())
+  return t
+end
+
+assert(splitStoreRestore(2).ad() == 15)
 
 return('OK')

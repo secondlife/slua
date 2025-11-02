@@ -12,16 +12,15 @@
 #include "Luau/TypeFunction.h"
 
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
 
 LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
 
 LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 LUAU_FASTFLAGVARIABLE(LuauNewNonStrictReportsOneIndexedErrors)
+LUAU_FASTFLAG(LuauSubtypingReportGenericBoundMismatches2)
 
 static std::string wrongNumberOfArgsString(
     size_t expectedCount,
@@ -73,22 +72,6 @@ namespace Luau
 {
 
 // this list of binary operator type functions is used for better stringification of type functions errors
-static const std::unordered_map<std::string, const char*> DEPRECATED_kBinaryOps{
-    {"add", "+"},
-    {"sub", "-"},
-    {"mul", "*"},
-    {"div", "/"},
-    {"idiv", "//"},
-    {"pow", "^"},
-    {"mod", "%"},
-    {"concat", ".."},
-    {"and", "and"},
-    {"or", "or"},
-    {"lt", "< or >="},
-    {"le", "<= or >"},
-    {"eq", "== or ~="}
-};
-
 static const std::unordered_map<std::string, const char*> kBinaryOps{
     {"add", "+"},
     {"sub", "-"},
@@ -108,7 +91,6 @@ static const std::unordered_map<std::string, const char*> kUnaryOps{{"unm", "-"}
 
 // this list of type functions will receive a special error indicating that the user should file a bug on the GitHub repository
 // putting a type function in this list indicates that it is expected to _always_ reduce
-static const std::unordered_set<std::string> DEPRECATED_kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect"};
 static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect", "and", "or"};
 
 struct ErrorConverter
@@ -127,9 +109,10 @@ struct ErrorConverter
             return "'" + s + "'";
         };
 
-        auto constructErrorMessage =
-            [&](std::string givenType, std::string wantedType, std::optional<std::string> givenModule, std::optional<std::string> wantedModule
-            ) -> std::string
+        auto constructErrorMessage = [&](std::string givenType,
+                                         std::string wantedType,
+                                         std::optional<std::string> givenModule,
+                                         std::optional<std::string> wantedModule) -> std::string
         {
             std::string given = givenModule ? quote(givenType) + " from " + quote(*givenModule) : quote(givenType);
             std::string wanted = wantedModule ? quote(wantedType) + " from " + quote(*wantedModule) : quote(wantedType);
@@ -228,6 +211,11 @@ struct ErrorConverter
 
         LUAU_ASSERT(!"Unknown context");
         return "";
+    }
+
+    std::string operator()(const Luau::CannotCompareUnrelatedTypes& e) const
+    {
+        return "Cannot compare unrelated types '" + toString(e.left) + "' and '" + toString(e.right) + "' with '" + toString(e.op) + "'";
     }
 
     std::string operator()(const Luau::OnlyTablesCanHaveMethods& e) const
@@ -673,8 +661,7 @@ struct ErrorConverter
         }
 
         // binary operators
-        const auto binaryOps = FFlag::LuauEagerGeneralization4 ? kBinaryOps : DEPRECATED_kBinaryOps;
-        if (auto binaryString = binaryOps.find(tfit->function->name); binaryString != binaryOps.end())
+        if (auto binaryString = kBinaryOps.find(tfit->function->name); binaryString != kBinaryOps.end())
         {
             std::string result = "Operator '" + std::string(binaryString->second) + "' could not be applied to operands of types ";
 
@@ -728,7 +715,7 @@ struct ErrorConverter
                        "'";
         }
 
-        if ((FFlag::LuauEagerGeneralization4 ? kUnreachableTypeFunctions : DEPRECATED_kUnreachableTypeFunctions).count(tfit->function->name))
+        if (kUnreachableTypeFunctions.count(tfit->function->name))
         {
             return "Type function instance " + Luau::toString(e.ty) + " is uninhabited\n" +
                    "This is likely to be a bug, please report it at https://github.com/luau-lang/luau/issues";
@@ -890,6 +877,39 @@ struct ErrorConverter
     {
         return "None of the overloads for function that accept " + std::to_string(e.attemptedArgCount) + " arguments are compatible.";
     }
+
+    std::string operator()(const RecursiveRestraintViolation& e) const
+    {
+        return "Recursive type being used with different parameters.";
+    }
+
+    std::string operator()(const GenericBoundsMismatch& e) const
+    {
+        LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
+        std::string lowerBounds;
+        for (size_t i = 0; i < e.lowerBounds.size(); ++i)
+        {
+            if (i > 0)
+                lowerBounds += " | ";
+            lowerBounds += Luau::toString(e.lowerBounds[i]);
+        }
+        std::string upperBounds;
+        for (size_t i = 0; i < e.upperBounds.size(); ++i)
+        {
+            if (i > 0)
+                upperBounds += " & ";
+            upperBounds += Luau::toString(e.upperBounds[i]);
+        }
+
+        return "No valid instantiation could be inferred for generic type parameter " + std::string{e.genericName} +
+               ". It was expected to be at least:\n\t" + lowerBounds + "\nand at most:\n\t" + upperBounds +
+               "\nbut these types are not compatible with one another.";
+    }
+
+    std::string operator()(const UnappliedTypeFunction&) const
+    {
+        return "Type functions always require `<>` when referenced.";
+    }
 };
 
 struct InvalidNameChecker
@@ -995,6 +1015,11 @@ bool NotATable::operator==(const NotATable& rhs) const
 bool CannotExtendTable::operator==(const CannotExtendTable& rhs) const
 {
     return *tableType == *rhs.tableType && prop == rhs.prop && context == rhs.context;
+}
+
+bool CannotCompareUnrelatedTypes::operator==(const CannotCompareUnrelatedTypes& rhs) const
+{
+    return *left == *rhs.left && right == rhs.right && op == rhs.op;
 }
 
 bool OnlyTablesCanHaveMethods::operator==(const OnlyTablesCanHaveMethods& rhs) const
@@ -1293,6 +1318,25 @@ bool MultipleNonviableOverloads::operator==(const MultipleNonviableOverloads& rh
     return attemptedArgCount == rhs.attemptedArgCount;
 }
 
+GenericBoundsMismatch::GenericBoundsMismatch(const std::string_view genericName, TypeIds lowerBoundSet, TypeIds upperBoundSet)
+    : genericName(genericName)
+    , lowerBounds(lowerBoundSet.take())
+    , upperBounds(upperBoundSet.take())
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
+}
+
+bool GenericBoundsMismatch::operator==(const GenericBoundsMismatch& rhs) const
+{
+    LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
+    return genericName == rhs.genericName && lowerBounds == rhs.lowerBounds && upperBounds == rhs.upperBounds;
+}
+
+bool UnappliedTypeFunction::operator==(const UnappliedTypeFunction& rhs) const
+{
+    return true;
+}
+
 std::string toString(const TypeError& error)
 {
     return toString(error, TypeErrorToStringOptions{});
@@ -1347,6 +1391,11 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, CannotExtendTable>)
     {
         e.tableType = clone(e.tableType);
+    }
+    else if constexpr (std::is_same_v<T, CannotCompareUnrelatedTypes>)
+    {
+        e.left = clone(e.left);
+        e.right = clone(e.right);
     }
     else if constexpr (std::is_same_v<T, OnlyTablesCanHaveMethods>)
     {
@@ -1514,6 +1563,20 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     {
     }
     else if constexpr (std::is_same_v<T, MultipleNonviableOverloads>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, RecursiveRestraintViolation>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, GenericBoundsMismatch>)
+    {
+        LUAU_ASSERT(FFlag::LuauSubtypingReportGenericBoundMismatches2);
+        for (auto& lowerBound : e.lowerBounds)
+            lowerBound = clone(lowerBound);
+        for (auto& upperBound : e.upperBounds)
+            upperBound = clone(upperBound);
+    }
+    else if constexpr (std::is_same_v<T, UnappliedTypeFunction>)
     {
     }
     else

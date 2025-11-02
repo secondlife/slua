@@ -9,8 +9,9 @@
 
 using namespace Luau;
 
+LUAU_FASTFLAG(LuauNoMoreComparisonTypeFunctions)
+
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
-LUAU_FASTFLAG(LuauSimplifyOutOfLine2)
 
 TEST_SUITE_BEGIN("DefinitionTests");
 
@@ -571,9 +572,9 @@ TEST_CASE_FIXTURE(Fixture, "recursive_redefinition_reduces_rightfully")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cli_142285_reduce_minted_union_func")
 {
-    ScopedFastFlag sffs[] = {
+    ScopedFastFlag sff[] = {
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauSimplifyOutOfLine2, true},
+        {FFlag::LuauNoMoreComparisonTypeFunctions, true},
     };
 
     CheckResult result = check(R"(
@@ -594,7 +595,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cli_142285_reduce_minted_union_func")
         return nil
         end
     )");
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
     // There are three errors in the above snippet, but they should all be where
     // clause needed errors.
     for (const auto& e : result.errors)

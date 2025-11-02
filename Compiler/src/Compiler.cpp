@@ -26,10 +26,6 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineThreshold, 25)
 LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
-LUAU_FASTFLAGVARIABLE(LuauSeparateCompilerTypeInfo)
-
-LUAU_FASTFLAGVARIABLE(LuauCompileCli162537)
-
 namespace Luau
 {
 
@@ -95,7 +91,7 @@ struct Compiler
 {
     struct RegScope;
 
-    Compiler(BytecodeBuilder& bytecode, const CompileOptions& options)
+    Compiler(BytecodeBuilder& bytecode, const CompileOptions& options, AstNameTable& names)
         : bytecode(bytecode)
         , options(options)
         , functions(nullptr)
@@ -111,6 +107,7 @@ struct Compiler
         , localTypes(nullptr)
         , exprTypes(nullptr)
         , builtinTypes(options.vectorType)
+        , names(names)
     {
         // preallocate some buffers that are very likely to grow anyway; this works around std::vector's inefficient growth policy for small arrays
         localStack.reserve(16);
@@ -740,7 +737,7 @@ struct Compiler
         inlineFrames.push_back({func, oldLocals, target, targetCount});
 
         // fold constant values updated above into expressions in the function body
-        foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, func->body);
+        foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, func->body, names);
 
         bool usedFallthrough = false;
 
@@ -788,7 +785,7 @@ struct Compiler
                 lv->init = nullptr;
         }
 
-        foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, func->body);
+        foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, func->body, names);
     }
 
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
@@ -1937,10 +1934,7 @@ struct Compiler
 
                 LUAU_ASSERT(shape.length < BytecodeBuilder::TableShape::kMaxLength);
 
-                if (FFlag::LuauCompileCli162537)
-                    shape.keys[shape.length++] = cid;
-                else
-                    shape.keys[shape.length++] = int16_t(cid);
+                shape.keys[shape.length++] = cid;
             }
 
             int32_t tid = bytecode.addConstantTable(shape);
@@ -3086,7 +3080,7 @@ struct Compiler
             locstants[var].type = Constant::Type_Number;
             locstants[var].valueNumber = from + iv * step;
 
-            foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, stat);
+            foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, stat, names);
 
             size_t iterJumps = loopJumps.size();
 
@@ -3114,7 +3108,7 @@ struct Compiler
         // clean up fold state in case we need to recompile - normally we compile the loop body once, but due to inlining we may need to do it again
         locstants[var].type = Constant::Type_Unknown;
 
-        foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, stat);
+        foldConstants(constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, stat, names);
     }
 
     void compileStatFor(AstStatFor* stat)
@@ -4180,6 +4174,7 @@ struct Compiler
     DenseHashMap<AstExpr*, LuauBytecodeType> exprTypes;
 
     BuiltinAstTypes builtinTypes;
+    AstNameTable& names;
 
     const DenseHashMap<AstExprCall*, int>* builtinsFold = nullptr;
     bool builtinsFoldLibraryK = false;
@@ -4208,7 +4203,7 @@ static void setCompileOptionsForNativeCompilation(CompileOptions& options)
     options.typeInfoLevel = 1;
 }
 
-void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, const AstNameTable& names, const CompileOptions& inputOptions)
+void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, AstNameTable& names, const CompileOptions& inputOptions)
 {
     LUAU_TIMETRACE_SCOPE("compileOrThrow", "Compiler");
 
@@ -4241,7 +4236,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, c
     if (functionVisitor.hasNativeFunction)
         setCompileOptionsForNativeCompilation(options);
 
-    Compiler compiler(bytecode, options);
+    Compiler compiler(bytecode, options, names);
 
     // since access to some global objects may result in values that change over time, we block imports from non-readonly tables
     assignMutable(compiler.globals, names, options.mutableGlobals);
@@ -4291,7 +4286,8 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, c
             compiler.builtinsFold,
             compiler.builtinsFoldLibraryK,
             options.libraryMemberConstantCb,
-            root
+            root,
+            names
         );
 
         // this pass analyzes table assignments to estimate table shapes for initially empty tables

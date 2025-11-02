@@ -17,6 +17,8 @@
 LUAU_FASTFLAG(LuauSolverV2);
 LUAU_FASTFLAG(LuauUseWorkspacePropToChooseSolver)
 LUAU_FASTFLAG(LuauLimitDynamicConstraintSolving3)
+LUAU_FASTFLAGVARIABLE(LuauEmplaceNotPushBack)
+LUAU_FASTFLAG(LuauSuggestHotComments)
 
 namespace Luau
 {
@@ -91,6 +93,27 @@ bool isWithinComment(const SourceModule& sourceModule, Position pos)
 bool isWithinComment(const ParseResult& result, Position pos)
 {
     return isWithinComment(result.commentLocations, pos);
+}
+
+bool isWithinHotComment(const std::vector<HotComment>& hotComments, Position pos)
+{
+    for (const HotComment& hotComment : hotComments)
+    {
+        if (hotComment.location.containsClosed(pos))
+            return true;
+    }
+
+    return false;
+}
+
+bool isWithinHotComment(const SourceModule& sourceModule, Position pos)
+{
+    return isWithinHotComment(sourceModule.hotcomments, pos);
+}
+
+bool isWithinHotComment(const ParseResult& result, Position pos)
+{
+    return isWithinHotComment(result.hotcomments, pos);
 }
 
 struct ClonePublicInterface : Substitution
@@ -253,7 +276,6 @@ struct ClonePublicInterface : Substitution
             else if (auto gtp = getMutable<GenericTypePack>(clonedTp))
                 gtp->scope = nullptr;
             return clonedTp;
-
         }
         else
         {
@@ -270,7 +292,11 @@ struct ClonePublicInterface : Substitution
         }
         else
         {
-            module->errors.push_back(TypeError{module->scopes[0].first, UnificationTooComplex{}});
+
+            if (FFlag::LuauEmplaceNotPushBack)
+                module->errors.emplace_back(module->scopes[0].first, UnificationTooComplex{});
+            else
+                module->errors.push_back(TypeError{module->scopes[0].first, UnificationTooComplex{}});
             return builtinTypes->errorType;
         }
     }
@@ -284,7 +310,10 @@ struct ClonePublicInterface : Substitution
         }
         else
         {
-            module->errors.push_back(TypeError{module->scopes[0].first, UnificationTooComplex{}});
+            if (FFlag::LuauEmplaceNotPushBack)
+                module->errors.emplace_back(module->scopes[0].first, UnificationTooComplex{});
+            else
+                module->errors.push_back(TypeError{module->scopes[0].first, UnificationTooComplex{}});
             return builtinTypes->errorTypePack;
         }
     }
@@ -370,7 +399,7 @@ void Module::clonePublicInterface_DEPRECATED(NotNull<BuiltinTypes> builtinTypes,
             Location{}, // Not amazing but the best we can do.
             name,
             InternalError{"An internal type is escaping this module; please report this bug at "
-                "https://github.com/luau-lang/luau/issues"}
+                          "https://github.com/luau-lang/luau/issues"}
         );
     }
 
@@ -421,7 +450,7 @@ void Module::clonePublicInterface(NotNull<BuiltinTypes> builtinTypes, InternalEr
             Location{}, // Not amazing but the best we can do.
             name,
             InternalError{"An internal type is escaping this module; please report this bug at "
-                "https://github.com/luau-lang/luau/issues"}
+                          "https://github.com/luau-lang/luau/issues"}
         );
     }
 

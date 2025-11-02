@@ -22,9 +22,7 @@
 #include <algorithm>
 #include <vector>
 
-LUAU_FASTFLAG(DebugCodegenNoOpt)
 LUAU_FASTFLAG(DebugCodegenOptSize)
-LUAU_FASTFLAG(DebugCodegenSkipNumbering)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_FASTINT(CodegenHeuristicsBlockLimit)
 LUAU_FASTINT(CodegenHeuristicsBlockInstructionLimit)
@@ -114,6 +112,7 @@ inline bool lowerImpl(
 
     // Make sure entry block is first
     CODEGEN_ASSERT(sortedBlocks[0] == 0);
+    CODEGEN_ASSERT(function.entryBlock == 0);
 
     for (size_t i = 0; i < sortedBlocks.size(); ++i)
     {
@@ -125,6 +124,7 @@ inline bool lowerImpl(
 
         CODEGEN_ASSERT(block.start != ~0u);
         CODEGEN_ASSERT(block.finish != ~0u);
+        CODEGEN_ASSERT(!seenFallback || block.kind == IrBlockKind::Fallback);
 
         // If we want to skip fallback code IR/asm, we'll record when those blocks start once we see them
         if (block.kind == IrBlockKind::Fallback && !seenFallback)
@@ -335,35 +335,30 @@ inline bool lowerFunction(
 
     computeCfgInfo(ir.function);
 
-    if (!FFlag::DebugCodegenNoOpt)
+    constPropInBlockChains(ir);
+
+    if (!FFlag::DebugCodegenOptSize)
     {
-        bool useValueNumbering = !FFlag::DebugCodegenSkipNumbering;
+        double startTime = 0.0;
+        unsigned constPropInstructionCount = 0;
 
-        constPropInBlockChains(ir, useValueNumbering);
-
-        if (!FFlag::DebugCodegenOptSize)
+        if (stats)
         {
-            double startTime = 0.0;
-            unsigned constPropInstructionCount = 0;
-
-            if (stats)
-            {
-                constPropInstructionCount = getInstructionCount(ir.function.instructions, IrCmd::SUBSTITUTE);
-                startTime = lua_clock();
-            }
-
-            createLinearBlocks(ir, useValueNumbering);
-
-            if (stats)
-            {
-                stats->blockLinearizationStats.timeSeconds += lua_clock() - startTime;
-                constPropInstructionCount = getInstructionCount(ir.function.instructions, IrCmd::SUBSTITUTE) - constPropInstructionCount;
-                stats->blockLinearizationStats.constPropInstructionCount += constPropInstructionCount;
-            }
+            constPropInstructionCount = getInstructionCount(ir.function.instructions, IrCmd::SUBSTITUTE);
+            startTime = lua_clock();
         }
 
-        markDeadStoresInBlockChains(ir);
+        createLinearBlocks(ir);
+
+        if (stats)
+        {
+            stats->blockLinearizationStats.timeSeconds += lua_clock() - startTime;
+            constPropInstructionCount = getInstructionCount(ir.function.instructions, IrCmd::SUBSTITUTE) - constPropInstructionCount;
+            stats->blockLinearizationStats.constPropInstructionCount += constPropInstructionCount;
+        }
     }
+
+    markDeadStoresInBlockChains(ir);
 
     std::vector<uint32_t> sortedBlocks = getSortedBlockOrder(ir.function);
 

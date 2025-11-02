@@ -4,6 +4,7 @@
 #include "Luau/Error.h"
 #include "Luau/Location.h"
 #include "Luau/Type.h"
+#include "Luau/TypeIds.h"
 #include "Luau/TypePack.h"
 
 #include <memory>
@@ -257,18 +258,6 @@ std::optional<Ty> follow(std::optional<Ty> ty)
 bool isLiteral(const AstExpr* expr);
 
 /**
- * Given a table literal and a mapping from expression to type, determine
- * whether any literal expression in this table depends on any blocked types.
- * This is used as a precondition for bidirectional inference: be warned that
- * the behavior of this algorithm is tightly coupled to that of bidirectional
- * inference.
- * @param expr Expression to search
- * @param astTypes Mapping from AST node to TypeID
- * @returns A vector of blocked types
- */
-std::vector<TypeId> findBlockedTypesIn(AstExprTable* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes);
-
-/**
  * Given a function call and a mapping from expression to type, determine
  * whether the type of any argument in said call in depends on a blocked types.
  * This is used as a precondition for bidirectional inference: be warned that
@@ -362,6 +351,39 @@ inline constexpr char kLuauForceConstraintSolvingIncomplete[] = "_luau_force_con
 // `_luau_blocked_type` will cause us to always mint a blocked type that does
 // not get emplaced by constraint solving.
 inline constexpr char kLuauBlockedType[] = "_luau_blocked_type";
+
+struct UnionBuilder
+{
+    UnionBuilder(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes);
+    void add(TypeId ty);
+    TypeId build();
+    size_t size() const;
+    void reserve(size_t size);
+
+private:
+    NotNull<TypeArena> arena;
+    NotNull<BuiltinTypes> builtinTypes;
+    TypeIds options;
+    bool isTop = false;
+};
+
+struct IntersectionBuilder
+{
+    IntersectionBuilder(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes);
+    void add(TypeId ty);
+    TypeId build();
+    size_t size() const;
+    void reserve(size_t size);
+
+private:
+    NotNull<TypeArena> arena;
+    NotNull<BuiltinTypes> builtinTypes;
+    TypeIds parts;
+    bool isBottom = false;
+};
+
+TypeId addIntersection(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes, std::initializer_list<TypeId> list);
+TypeId addUnion(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes, std::initializer_list<TypeId> list);
 
 
 } // namespace Luau

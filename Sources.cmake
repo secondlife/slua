@@ -7,6 +7,7 @@ if(NOT ${CMAKE_VERSION} VERSION_LESS "3.19")
         Common/include/Luau/BytecodeUtils.h
         Common/include/Luau/DenseHash.h
         Common/include/Luau/ExperimentalFlags.h
+        Common/include/Luau/HashUtil.h
         Common/include/Luau/Variant.h
         Common/include/Luau/VecDeque.h
     )
@@ -179,6 +180,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/ApplyTypeFunction.h
     Analysis/include/Luau/AstJsonEncoder.h
     Analysis/include/Luau/AstQuery.h
+    Analysis/include/Luau/AstUtils.h
     Analysis/include/Luau/Autocomplete.h
     Analysis/include/Luau/AutocompleteTypes.h
     Analysis/include/Luau/BuiltinDefinitions.h
@@ -264,6 +266,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/ApplyTypeFunction.cpp
     Analysis/src/AstJsonEncoder.cpp
     Analysis/src/AstQuery.cpp
+    Analysis/src/AstUtils.cpp
     Analysis/src/Autocomplete.cpp
     Analysis/src/AutocompleteCore.cpp
     Analysis/src/BuiltinDefinitions.cpp

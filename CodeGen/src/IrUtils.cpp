@@ -16,6 +16,8 @@
 #include <limits.h>
 #include <math.h>
 
+LUAU_FASTFLAG(LuauCodeGenDirectBtest)
+
 namespace Luau
 {
 namespace CodeGen
@@ -182,17 +184,21 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::ABS_NUM:
     case IrCmd::SIGN_NUM:
     case IrCmd::SELECT_NUM:
+    case IrCmd::MULADD_NUM:
         return IrValueKind::Double;
     case IrCmd::ADD_VEC:
     case IrCmd::SUB_VEC:
     case IrCmd::MUL_VEC:
     case IrCmd::DIV_VEC:
     case IrCmd::UNM_VEC:
+    case IrCmd::SELECT_VEC:
+    case IrCmd::MULADD_VEC:
         return IrValueKind::Tvalue;
     case IrCmd::DOT_VEC:
         return IrValueKind::Double;
     case IrCmd::NOT_ANY:
     case IrCmd::CMP_ANY:
+    case IrCmd::CMP_INT:
         return IrValueKind::Int;
     case IrCmd::JUMP:
     case IrCmd::JUMP_IF_TRUTHY:
@@ -239,7 +245,6 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::DO_LEN:
     case IrCmd::GET_TABLE:
     case IrCmd::SET_TABLE:
-    case IrCmd::GET_IMPORT:
     case IrCmd::GET_CACHED_IMPORT:
     case IrCmd::CONCAT:
     case IrCmd::GET_UPVALUE:
@@ -788,6 +793,17 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
                 substitute(function, inst, build.constInt(0));
             else if (inst.b.kind == IrOpKind::Constant)
                 substitute(function, inst, build.constInt(function.intOp(inst.b) == 1 ? 0 : 1));
+        }
+        break;
+    case IrCmd::CMP_INT:
+        CODEGEN_ASSERT(FFlag::LuauCodeGenDirectBtest);
+
+        if (inst.a.kind == IrOpKind::Constant && inst.b.kind == IrOpKind::Constant)
+        {
+            if (compare(function.intOp(inst.a), function.intOp(inst.b), conditionOp(inst.c)))
+                substitute(function, inst, build.constInt(1));
+            else
+                substitute(function, inst, build.constInt(0));
         }
         break;
     case IrCmd::JUMP_EQ_TAG:

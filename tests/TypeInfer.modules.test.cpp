@@ -8,15 +8,18 @@
 
 #include "Fixture.h"
 
+#include "Luau/VisitType.h"
 #include "doctest.h"
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAG(LuauLimitDynamicConstraintSolving3)
 LUAU_FASTINT(LuauSolverConstraintLimit)
+LUAU_FASTFLAG(LuauNameConstraintRestrictRecursiveTypes)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
+LUAU_FASTFLAG(LuauSolverAgnosticSetType)
 
 using namespace Luau;
 
@@ -159,6 +162,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_a_variadic_function")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cross_module_table_freeze")
 {
+    ScopedFastFlag sff = {FFlag::LuauSolverAgnosticStringification, true};
     fileResolver.source["game/A"] = R"(
         --!strict
         return {
@@ -180,10 +184,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_module_table_freeze")
     ModulePtr a = getFrontend().moduleResolver.getModule("game/A");
     REQUIRE(a != nullptr);
     // confirm that no cross-module mutation happened here!
-    if (FFlag::LuauSolverV2)
-        CHECK(toString(a->returnType) == "{ a: number }");
-    else
-        CHECK(toString(a->returnType) == "{| a: number |}");
+    CHECK(toString(a->returnType) == "{ a: number }");
 
     ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
     REQUIRE(b != nullptr);
@@ -191,7 +192,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_module_table_freeze")
     if (FFlag::LuauSolverV2)
         CHECK(toString(b->returnType) == "{ read a: number }");
     else
-        CHECK(toString(b->returnType) == "{| a: number |}");
+        CHECK(toString(b->returnType) == "{ a: number }");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_error_of_unknown_qualified_type")
@@ -269,6 +270,7 @@ a = tbl.abc.def
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "general_require_type_mismatch")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     fileResolver.source["game/A"] = R"(
 return { def = 4 }
     )";
@@ -279,10 +281,7 @@ local tbl: string = require(game.A)
 
     CheckResult result = getFrontend().check("game/B");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ("Type '{ def: number }' could not be converted into 'string'", toString(result.errors[0]));
-    else
-        CHECK_EQ("Type '{| def: number |}' could not be converted into 'string'", toString(result.errors[0]));
+    CHECK_EQ("Type '{ def: number }' could not be converted into 'string'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "bound_free_table_export_is_ok")
@@ -779,10 +778,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "leaky_generics")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization4)
-    {
-        CHECK_EQ("(unknown) -> unknown", toString(requireTypeAtPosition({13, 23})));
-    }
+    CHECK("(unknown) -> unknown" == toString(requireTypeAtPosition({13, 23})));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cycles_dont_make_everything_any")
@@ -855,7 +851,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "internal_types_are_scrubbed_from_module")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
         {FFlag::DebugLuauMagicTypes, true},
-        {FFlag::LuauLimitDynamicConstraintSolving3, true}
+        {FFlag::LuauLimitDynamicConstraintSolving3, true},
     };
 
     fileResolver.source["game/A"] = R"(
@@ -863,8 +859,9 @@ return function(): _luau_blocked_type return nil :: any end
     )";
 
     CheckResult result = getFrontend().check("game/A");
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(get<InternalError>(result.errors[0]));
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<ConstraintSolvingIncompleteError>(result.errors[0]));
+    CHECK(get<InternalError>(result.errors[1]));
     CHECK("(...any) -> *error-type*" == toString(getFrontend().moduleResolver.getModule("game/A")->returnType));
 }
 
@@ -873,7 +870,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "internal_type_errors_are_only_reported_once"
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
         {FFlag::DebugLuauMagicTypes, true},
-        {FFlag::LuauLimitDynamicConstraintSolving3, true}
+        {FFlag::LuauLimitDynamicConstraintSolving3, true},
     };
 
     fileResolver.source["game/A"] = R"(
@@ -881,17 +878,15 @@ return function(): { X: _luau_blocked_type, Y: _luau_blocked_type } return nil :
     )";
 
     CheckResult result = getFrontend().check("game/A");
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(get<InternalError>(result.errors[0]));
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<ConstraintSolvingIncompleteError>(result.errors[0]));
+    CHECK(get<InternalError>(result.errors[1]));
     CHECK("(...any) -> { X: *error-type*, Y: *error-type* }" == toString(getFrontend().moduleResolver.getModule("game/A")->returnType));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "scrub_unsealed_tables")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauSolverV2, true},
-        {FFlag::LuauLimitDynamicConstraintSolving3, true}
-    };
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuauLimitDynamicConstraintSolving3, true}};
 
     ScopedFastInt sfi{FInt::LuauSolverConstraintLimit, 5};
 
@@ -917,6 +912,62 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "scrub_unsealed_tables")
     LUAU_CHECK_ERROR(result, ConstraintSolvingIncompleteError);
     LUAU_CHECK_ERROR(result, InternalError);
     LUAU_CHECK_ERROR(result, CannotExtendTable);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "invalid_local_alias_shouldnt_shadow_imported_type")
+{
+    ScopedFastFlag _{FFlag::LuauNameConstraintRestrictRecursiveTypes, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type bad<T> = {T}
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        local a_mod = require(game.A)
+        type bad<T> = {bad<{T}>}
+        type fine<T> = a_mod.bad<T>
+        local f: fine<number>
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<RecursiveRestraintViolation>(result.errors[0]));
+
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
+    REQUIRE(b != nullptr);
+    std::optional<TypeId> fType = requireType(b, "f");
+    REQUIRE(fType);
+    // The important thing here is that it isn't *error-type*, since that would mean that the local definition of `bad` is shadowing the imported one
+    CHECK(toString(*fType) == "fine<number>");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "invalid_alias_should_export_as_error_type")
+{
+    ScopedFastFlag _{FFlag::LuauNameConstraintRestrictRecursiveTypes, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type bad<T> = {bad<{T}>}
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        local a_mod = require(game.A)
+        local f: a_mod.bad<number>
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<RecursiveRestraintViolation>(result.errors[0]));
+
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
+    REQUIRE(b != nullptr);
+    std::optional<TypeId> fType = requireType(b, "f");
+    REQUIRE(fType);
+    if (FFlag::LuauSolverV2)
+        CHECK(toString(*fType) == "*error-type*");
+    else
+        CHECK(toString(*fType) == "bad<number>");
 }
 
 TEST_SUITE_END();

@@ -6,7 +6,6 @@
 #include "Luau/Common.h"
 #include "Luau/Simplify.h"
 #include "Luau/Type.h"
-#include "Luau/Simplify.h"
 #include "Luau/Subtyping.h"
 #include "Luau/Normalize.h"
 #include "Luau/Error.h"
@@ -17,7 +16,6 @@
 #include "Luau/ToString.h"
 #include "Luau/TypeUtils.h"
 
-#include <iostream>
 #include <iterator>
 
 LUAU_FASTFLAG(DebugLuauMagicTypes)
@@ -25,6 +23,8 @@ LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAGVARIABLE(LuauNewNonStrictMoreUnknownSymbols)
 LUAU_FASTFLAGVARIABLE(LuauNewNonStrictNoErrorsPassingNever)
 LUAU_FASTFLAGVARIABLE(LuauNewNonStrictSuppressesDynamicRequireErrors)
+LUAU_FASTFLAG(LuauEmplaceNotPushBack)
+LUAU_FASTFLAGVARIABLE(LuauUnreducedTypeFunctionsDontTriggerWarnings)
 
 namespace Luau
 {
@@ -42,7 +42,10 @@ struct StackPusher
         : stack(&stack)
         , scope(scope)
     {
-        stack.push_back(NotNull{scope});
+        if (FFlag::LuauEmplaceNotPushBack)
+            stack.emplace_back(scope);
+        else
+            stack.push_back(NotNull{scope});
     }
 
     ~StackPusher()
@@ -715,13 +718,18 @@ struct NonStrictTypeChecker
                 AstExpr* arg = arguments[i];
                 if (auto runTimeFailureType = willRunTimeError(arg, fresh))
                 {
-                    if (FFlag::LuauNewNonStrictNoErrorsPassingNever)
+                    if (FFlag::LuauUnreducedTypeFunctionsDontTriggerWarnings)
+                        reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
+                    else
                     {
-                        if (!get<NeverType>(follow(*runTimeFailureType)))
+                        if (FFlag::LuauNewNonStrictNoErrorsPassingNever)
+                        {
+                            if (!get<NeverType>(follow(*runTimeFailureType)))
+                                reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
+                        }
+                        else
                             reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
                     }
-                    else
-                        reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
                 }
             }
 
@@ -1185,6 +1193,8 @@ struct NonStrictTypeChecker
             {
 
                 TypeId actualType = lookupType(fragment);
+                if (FFlag::LuauUnreducedTypeFunctionsDontTriggerWarnings && shouldSkipRuntimeErrorTesting(actualType))
+                    continue;
                 SubtypingResult r = subtyping.isSubtype(actualType, *contextTy, scope);
                 if (r.normalizationTooComplex)
                     reportError(NormalizationTooComplex{}, fragment->location);
@@ -1225,6 +1235,12 @@ private:
         if (!cachedResult)
             cachedResult = arena->addType(NegationType{baseType});
         return cachedResult;
+    }
+
+    bool shouldSkipRuntimeErrorTesting(TypeId test)
+    {
+        TypeId t = follow(test);
+        return is<NeverType, TypeFunctionInstanceType>(t);
     }
 };
 

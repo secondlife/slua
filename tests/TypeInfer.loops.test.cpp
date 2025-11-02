@@ -15,7 +15,8 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauSimplifyOutOfLine2)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
+LUAU_FASTFLAG(LuauNoScopeShallNotSubsumeAll)
 
 TEST_SUITE_BEGIN("TypeInferLoops");
 
@@ -182,8 +183,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_loop_with_next")
 }
 TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_loop_with_next_and_multiple_elements")
 {
-    ScopedFastFlag _{FFlag::LuauSimplifyOutOfLine2, true};
-
     CheckResult result = check(R"(
         local n
         local s
@@ -760,6 +759,10 @@ TEST_CASE_FIXTURE(Fixture, "fuzz_fail_missing_instantitation_follow")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_with_generic_next")
 {
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauNoScopeShallNotSubsumeAll, true},
+    };
+
     CheckResult result = check(R"(
         for k: number, v: number in next, {1, 2, 3} do
         end
@@ -867,11 +870,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "loop_iter_metamethod_not_enough_returns")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK(
-        result.errors[0] ==
-        TypeError{
-            Location{{2, 36}, {2, 37}},
-            GenericError{"__iter must return at least one value"},
-        }
+        result.errors[0] == TypeError{
+                                Location{{2, 36}, {2, 37}},
+                                GenericError{"__iter must return at least one value"},
+                            }
     );
 }
 
@@ -945,6 +947,7 @@ TEST_CASE_FIXTURE(Fixture, "for_loop_lower_bound_is_string_3")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cli_68448_iterators_need_not_accept_nil")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     // CLI-116500
     if (FFlag::LuauSolverV2)
         return;
@@ -962,7 +965,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cli_68448_iterators_need_not_accept_nil")
     LUAU_REQUIRE_NO_ERRORS(result);
     // HACK (CLI-68453): We name this inner table `enum`. For now, use the
     // exhaustive switch to see past it.
-    CHECK(toString(requireType("makeEnum"), {true}) == "<a>({a}) -> {| [a]: a |}");
+    CHECK(toString(requireType("makeEnum"), {true}) == "<a>({a}) -> { [a]: a }");
 }
 
 TEST_CASE_FIXTURE(Fixture, "iterate_over_free_table")

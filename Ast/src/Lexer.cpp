@@ -8,6 +8,8 @@
 
 #include <limits.h>
 
+LUAU_FASTFLAG(LuauParametrizedAttributeSyntax)
+
 namespace Luau
 {
 
@@ -147,6 +149,9 @@ std::string Lexeme::toString() const
     case Attribute:
         return name ? format("'%s'", name) : "attribute";
 
+    case AttributeOpen:
+        return "'@['";
+
     case BrokenString:
         return "malformed string";
 
@@ -246,6 +251,11 @@ std::pair<AstName, Lexeme::Type> AstNameTable::getWithType(const char* name, siz
         return std::make_pair(entry->value, entry->type);
     }
     return std::make_pair(AstName(), Lexeme::Name);
+}
+
+AstName AstNameTable::getOrAdd(const char* name, size_t len)
+{
+    return getOrAddWithType(name, len).first;
 }
 
 AstName AstNameTable::getOrAdd(const char* name)
@@ -981,8 +991,36 @@ Lexeme Lexer::readNext()
     }
     case '@':
     {
-        std::pair<AstName, Lexeme::Type> attribute = readName();
-        return Lexeme(Location(start, position()), Lexeme::Attribute, attribute.first.value);
+        if (FFlag::LuauParametrizedAttributeSyntax)
+        {
+            if (peekch(1) == '[')
+            {
+                consume();
+                consume();
+
+                return Lexeme(Location(start, 2), Lexeme::AttributeOpen);
+            }
+            else
+            {
+                // consume @ first
+                consume();
+
+                if (isAlpha(peekch()) || peekch() == '_')
+                {
+                    std::pair<AstName, Lexeme::Type> attribute = readName();
+                    return Lexeme(Location(start, position()), Lexeme::Attribute, attribute.first.value);
+                }
+                else
+                {
+                    return Lexeme(Location(start, position()), Lexeme::Attribute, "");
+                }
+            }
+        }
+        else
+        {
+            std::pair<AstName, Lexeme::Type> attribute = readName();
+            return Lexeme(Location(start, position()), Lexeme::Attribute, attribute.first.value);
+        }
     }
     default:
         if (isDigit(peekch()))

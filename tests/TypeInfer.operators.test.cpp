@@ -2,9 +2,10 @@
 
 #include "Luau/AstQuery.h"
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/Error.h"
 #include "Luau/Scope.h"
-#include "Luau/TypeInfer.h"
 #include "Luau/Type.h"
+#include "Luau/TypeInfer.h"
 #include "Luau/VisitType.h"
 
 #include "Fixture.h"
@@ -17,7 +18,10 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauNoScopeShallNotSubsumeAll)
+LUAU_FASTFLAG(LuauTrackUniqueness)
+LUAU_FASTFLAG(LuauNoMoreComparisonTypeFunctions)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 
 TEST_SUITE_BEGIN("TypeInferOperators");
 
@@ -29,7 +33,7 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types")
     )");
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization4)
+    if (FFlag::LuauSolverV2)
     {
         // FIXME: Regression
         CHECK("(string & ~(false?)) | number" == toString(*requireType("s")));
@@ -51,7 +55,7 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_extras")
     )");
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization4)
+    if (FFlag::LuauSolverV2)
     {
         // FIXME: Regression.
         CHECK("(string & ~(false?)) | number" == toString(*requireType("s")));
@@ -72,7 +76,7 @@ TEST_CASE_FIXTURE(Fixture, "or_joins_types_with_no_superfluous_union")
     )");
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization4)
+    if (FFlag::LuauSolverV2)
     {
         // FIXME: Regression
         CHECK("(string & ~(false?)) | string" == toString(requireType("s")));
@@ -634,7 +638,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_unary_minus_error")
         local a = -foo
     )");
 
-    if (FFlag::LuauEagerGeneralization4 && FFlag::LuauSolverV2)
+    if (FFlag::LuauSolverV2)
     {
         LUAU_REQUIRE_ERROR_COUNT(1, result);
 
@@ -646,15 +650,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_unary_minus_error")
         // FIXME: This error is a bit weird.
         CHECK("({ @metatable { __unm: (boolean) -> string }, { value: number } }) -> string" == toString(tm->wantedType, {true}));
         CHECK("(boolean) -> string" == toString(tm->givenType));
-    }
-    else if (FFlag::LuauSolverV2)
-    {
-        LUAU_REQUIRE_ERROR_COUNT(2, result);
-
-        CHECK(get<UninhabitedTypeFunction>(result.errors[0]));
-
-        // This second error is spurious.  We should not be reporting it.
-        CHECK(get<TypeMismatch>(result.errors[1]));
     }
     else
     {
@@ -1325,11 +1320,17 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "unrelated_extern_types_cannot_be_compared"
 
 TEST_CASE_FIXTURE(Fixture, "unrelated_primitives_cannot_be_compared")
 {
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauSolverV2, true},
+        {FFlag::LuauNoMoreComparisonTypeFunctions, true},
+    };
+
     CheckResult result = check(R"(
         local c = 5 == true
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    LUAU_CHECK_ERROR_COUNT(1, result);
+    LUAU_CHECK_ERROR(result, CannotCompareUnrelatedTypes);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "mm_comparisons_must_return_a_boolean")
@@ -1443,7 +1444,15 @@ local function foo(arg: {name: string}?)
 end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // FIXME(CLI-165431): fixing subtyping revealed an overload selection problems
+    if (FFlag::LuauSolverV2 && FFlag::LuauNoScopeShallNotSubsumeAll && FFlag::LuauTrackUniqueness)
+        LUAU_REQUIRE_NO_ERRORS(result);
+    else if (FFlag::LuauSolverV2 && FFlag::LuauNoScopeShallNotSubsumeAll)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+    }
+    else
+        LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "luau_polyfill_is_array_simplified")

@@ -276,6 +276,7 @@ LUA_API int luau_load(lua_State* L, const char* chunkname, const char* data, siz
 LUA_API void luau_interruptoncalltail(lua_State *L);
 LUA_API void lua_call(lua_State* L, int nargs, int nresults);
 LUA_API int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc);
+LUA_API int lua_cpcall(lua_State* L, lua_CFunction func, void* ud);
 
 /*
 ** coroutine functions
