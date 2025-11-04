@@ -341,7 +341,7 @@ static StateRef runConformance(
     }
     else
     {
-        std::string error = (status == LUA_YIELD) ? "thread yielded unexpectedly" : lua_tostring(L, -1);
+        std::string error = (status == LUA_YIELD || status == LUA_BREAK) ? "thread yielded unexpectedly" : lua_tostring(L, -1);
         error += "\nstacktrace:\n";
         error += lua_debugtrace(L);
 
@@ -726,6 +726,9 @@ TEST_CASE("Ares forkserver")
         funcs.push_back({"print", lua_silence});
     }
 
+    // Add breaker function for testing C closures with upvalues
+    funcs.push_back({"breaker", lua_break});
+
     // "null" terminate the list of functions to register
     funcs.push_back({nullptr, nullptr});
 
@@ -767,25 +770,26 @@ TEST_CASE("Ares forkserver")
         CHECK_EQ(lua_gettop(Lforker), old_top);
 
         int status = lua_resume(Lchild, nullptr, 0);
-        REQUIRE(status == LUA_YIELD);
+        while (status == LUA_BREAK || status == LUA_YIELD)
+        {
+            // serialized string is now on the Lforker stack
+            eris_serialize_thread(Lforker, Lchild);
 
-        // serialized string is now on the Lforker stack
-        eris_serialize_thread(Lforker, Lchild);
+            // Pop the original thread
+            lua_pop(GL, 1);
 
-        // Pop the original thread
-        lua_pop(GL, 1);
+            // Do a full GC to keep us honest
+            lua_gc(Lforker, LUA_GCCOLLECT, 0);
 
-        // Do a full GC to keep us honest
-        lua_gc(Lforker, LUA_GCCOLLECT, 0);
+            // spawn a new thread from the serialized version still on the stack
+            old_top = lua_gettop(Lforker);
+            Lchild = eris_fork_thread(Lforker, false, 2);
+            // Should have gotten rid of the serialized string and moved the child to GL
+            CHECK_EQ(lua_gettop(Lforker), old_top - 1);
+            REQUIRE_NE(Lchild, nullptr);
 
-        // spawn a new thread from the serialized version still on the stack
-        old_top = lua_gettop(Lforker);
-        Lchild = eris_fork_thread(Lforker, false, 2);
-        // Should have gotten rid of the serialized string and moved the child to GL
-        CHECK_EQ(lua_gettop(Lforker), old_top - 1);
-        REQUIRE_NE(Lchild, nullptr);
-
-        status = lua_resume(Lchild, nullptr, 0);
+            status = lua_resume(Lchild, nullptr, 0);
+        }
         REQUIRE(status == 0);
 
         REQUIRE(lua_isstring(Lchild, -1));

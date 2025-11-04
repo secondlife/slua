@@ -1822,23 +1822,33 @@ p_closure(Info *info) {                              /* perms reftbl ... func */
      * practice this shouldn't matter because a C closure with the same
      * pointer but different continuation pointer seems to be unusual.
      */
+    eris_ifassert(const int pre_cfunc_top = lua_gettop(info->L));
+    eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
     info->u.pi.persistingCFunc = true;
     lua_pushlightuserdata(info->L, (void *)cl->c.f);
                                               /* perms reftbl ... ccl cfunc */
     persist_keyed(info, LUA_TFUNCTION);             /* perms reftbl ... ccl */
     info->u.pi.persistingCFunc = false;
+    eris_assert(lua_gettop(info->L) == pre_cfunc_top);
+    eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
 
     /* Persist the upvalues. Since for C closures all upvalues are always
      * closed we can just write the actual values. */
     pushpath(info, ".upvalues");
     for (nup = 1; nup <= cl->nupvalues; ++nup) {
+      eris_ifassert(const int pre_upval_top = lua_gettop(info->L));
       pushpath(info, "[%d]", nup);
       lua_getupvalue(info->L, -1, nup);         /* perms reftbl ... ccl obj */
+      eris_assert(lua_gettop(info->L) == pre_upval_top + 1);
       persist(info);                            /* perms reftbl ... ccl obj */
+      eris_assert(lua_gettop(info->L) == pre_upval_top + 1);
       lua_pop(info->L, 1);                          /* perms reftbl ... ccl */
+      eris_assert(lua_gettop(info->L) == pre_upval_top);
       poppath(info);
     }
     poppath(info);
+    eris_assert(lua_gettop(info->L) == pre_cfunc_top);
+    eris_assert(lua_type(info->L, -1) == LUA_TFUNCTION);
   }
   /* Lua function */
   else {               /* perms reftbl ... lcl */
@@ -2244,11 +2254,13 @@ p_thread(Info *info) {                                          /* ... thread */
       // Unlike eris, we don't write a status here. I'm assuming that
       // only _threads_ have statuses now, which I guess makes sense.
       // When would you ever expect them to differ anyway?
-      const Closure *lcl = eris_ci_func(ci);
-      const char *debugname = lcl->c.debugname;
-      eris_ifassert(int pre_closure_top = lua_gettop(info->L));
-      lua_pushcclosurek(info->L, lcl->c.f, debugname, lcl->nupvalues, lcl->c.cont);
-                                                         /* ... thread func */
+      eris_ifassert(const int pre_closure_top = lua_gettop(info->L));
+      // Copy the original closure from ci->func to info->L's stack for serialization.
+      // The closure is already on the thread's stack at ci->func, and will be
+      // loaded from there during unpersist. We expect we're really only
+      // serializing a reference here and that the actual closure was serialized
+      // when Ares was handling the stack.
+      luaA_pushobject(info->L, ci->func);                     /* ... thread func */
       persist(info);
       lua_pop(info->L, 1);                                    /* ... thread */
       eris_assert(lua_gettop(info->L) == pre_closure_top);
@@ -2639,7 +2651,9 @@ persist_keyed(Info *info, int type) {          /* perms reftbl ... obj refkey */
   lua_rawset(info->L, REFTIDX);                /* perms reftbl ... obj refkey */
 
   /* At this point, we'll give the permanents table a chance to play. */
+  eris_ifassert(const int pre_permtable_top = lua_gettop(info->L));
   lua_gettable(info->L, PERMIDX);            /* perms reftbl ... obj permkey? */
+  eris_assert(lua_gettop(info->L) == pre_permtable_top);
   if (!lua_isnil(info->L, -1)) {              /* perms reftbl ... obj permkey */
     type = lua_type(info->L, -2);
     /* Prepend permanent "type" so that we know it's a permtable key. This will
@@ -2648,8 +2662,11 @@ persist_keyed(Info *info, int type) {          /* perms reftbl ... obj refkey */
      * the same kind we had when persisting. */
     WRITE_VALUE(ERIS_PERMANENT, uint8_t);
     WRITE_VALUE(type, uint8_t);
+    eris_ifassert(const int pre_persist_top = lua_gettop(info->L));
     persist(info);                            /* perms reftbl ... obj permkey */
+    eris_assert(lua_gettop(info->L) == pre_persist_top);
     lua_pop(info->L, 1);                              /* perms reftbl ... obj */
+    eris_assert(lua_gettop(info->L) == pre_permtable_top - 1);
   }
   else {                                          /* perms reftbl ... obj nil */
     /* No entry in the permtable for this object, persist it directly. */
