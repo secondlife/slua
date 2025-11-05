@@ -1686,7 +1686,8 @@ static int json_protect_conversion(lua_State *l)
     if (!err)
         return 1;
 
-    if (err == LUA_ERRRUN) {
+    // ServerLua: Handle both runtime and termination errors by returning nil + error
+    if (err == LUA_ERRRUN || err == LUA_ERRKILL) {
         lua_pushnil(l);
         lua_insert(l, -2);
         return 2;

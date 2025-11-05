@@ -499,7 +499,7 @@ path(Info *info) {                               /* perms reftbl var path ... */
 }
 
 /* Generates an error message with the appended path, if available. */
-static int
+static l_noret
 eris_error(Info *info, const char *fmt, ...) {                         /* ... */
     va_list argp;
     eris_checkstack(info->L, 5);
@@ -518,7 +518,6 @@ eris_error(Info *info, const char *fmt, ...) {                         /* ... */
       lua_concat(info->L, 2);                                      /* ... msg */
     }
     lua_error(info->L);
-    return 0;
 }
 
 /** ======================================================================== */
@@ -3727,8 +3726,8 @@ eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat) {
     eris_assert(lua_isthread(Lforker, -1));
     eris_assert(lua_getmemcat(lua_tothread(Lforker, -1)) == memcat);
   } else {
-    // Make sure the error message is included
-    eris_assert(status == LUA_ERRRUN);
+    // ServerLua: Make sure the error message is included (error types with messages on stack)
+    eris_assert(status == LUA_ERRRUN || status == LUA_ERRKILL);
     eris_assert(lua_gettop(Lforker) == start_top + 2);
     // remove uperms table
     lua_remove(Lforker, -2);

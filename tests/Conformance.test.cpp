@@ -3271,6 +3271,94 @@ TEST_CASE("Interrupt")
     }
 }
 
+TEST_CASE("KillError")
+{
+    // ServerLua: Test uncatchable termination errors (LUA_ERRKILL)
+    StateRef globalState = runConformance("killerror.lua");
+    lua_State* L = globalState.get();
+
+    // Test 1: lua_killerror bypasses pcall
+    {
+        static int interruptCount;
+
+        lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+        {
+            if (gc >= 0)
+                return;
+            if (++interruptCount >= 10)
+            {
+                interruptCount = 0;
+                lua_killerror(L, "Script terminated");
+            }
+        };
+
+        lua_State* T = lua_newthread(L);
+        lua_getglobal(T, "testpcall");
+
+        interruptCount = 0;
+        int status = lua_resume(T, nullptr, 0);
+        CHECK(status == LUA_ERRKILL);
+        CHECK(lua_isstring(T, -1));
+        CHECK(std::string(lua_tostring(T, -1)).find("Script terminated") != std::string::npos);
+
+        lua_pop(L, 1);
+    }
+
+    // Test 2: lua_killerror bypasses nested pcalls
+    {
+        static int interruptCount;
+
+        lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+        {
+            if (gc >= 0)
+                return;
+            if (++interruptCount >= 10)
+            {
+                interruptCount = 0;
+                lua_killerror(L, "Script terminated");
+            }
+        };
+
+        lua_State* T = lua_newthread(L);
+        lua_getglobal(T, "testnested");
+
+        interruptCount = 0;
+        int status = lua_resume(T, nullptr, 0);
+        CHECK(status == LUA_ERRKILL);
+        CHECK(lua_isstring(T, -1));
+        CHECK(std::string(lua_tostring(T, -1)).find("Script terminated") != std::string::npos);
+
+        lua_pop(L, 1);
+    }
+
+    // Test 3: Normal errors are still caught by pcall
+    {
+        static int interruptCount;
+
+        lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+        {
+            if (gc >= 0)
+                return;
+            if (++interruptCount >= 10)
+            {
+                interruptCount = 0;
+                luaL_error(L, "timeout");
+            }
+        };
+
+        lua_State* T = lua_newthread(L);
+        lua_getglobal(T, "testpcall");
+
+        interruptCount = 0;
+        int status = lua_resume(T, nullptr, 0);
+        CHECK(status == LUA_OK);
+        CHECK(lua_isstring(T, -1));
+        CHECK(std::string(lua_tostring(T, -1)) == "timeout");
+
+        lua_pop(L, 1);
+    }
+}
+
 TEST_CASE("UserdataApi")
 {
     static int dtorhits = 0;

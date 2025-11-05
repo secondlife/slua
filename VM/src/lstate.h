@@ -276,6 +276,17 @@ struct lua_State
 };
 // clang-format on
 
+// ServerLua: RAII guard to temporarily set memcat
+struct MemcatGuard
+{
+    lua_State* L;
+    uint8_t oldmemcat;
+    MemcatGuard(lua_State* L_, uint8_t memcat) : L(L_), oldmemcat(L_->activememcat) { L->activememcat = memcat; }
+    ~MemcatGuard() { L->activememcat = oldmemcat; }
+};
+
+#define LUAU_MEMCAT_GUARD(memcat) [[maybe_unused]] MemcatGuard _memcatGuard{L, memcat};
+
 /*
 ** Union of all collectible objects
 */

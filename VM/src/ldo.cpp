@@ -85,7 +85,8 @@ public:
     const char* what() const throw() override
     {
         // LUA_ERRRUN passes error object on the stack
-        if (status == LUA_ERRRUN)
+        // ServerLua: LUA_ERRKILL also passes error object on the stack
+        if (status == LUA_ERRRUN || status == LUA_ERRKILL)
             if (const char* str = lua_tostring(L, -1))
                 return str;
 
@@ -99,6 +100,8 @@ public:
             return "lua_exception: " LUA_MEMERRMSG;
         case LUA_ERRERR:
             return "lua_exception: " LUA_ERRERRMSG;
+        case LUA_ERRKILL: // ServerLua: Uncatchable termination error
+            return "lua_exception: script terminated";
         default:
             return "lua_exception: unexpected exception status";
         }
@@ -137,6 +140,10 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
         LUAU_ASSERT(e.getThread() == L);
 
         status = e.getStatus();
+
+        // ServerLua: Re-throw uncatchable termination errors - they must propagate to top level
+        if (status == LUA_ERRKILL)
+            throw;
     }
     catch (std::exception& e)
     {
@@ -376,6 +383,7 @@ void luaD_seterrorobj(lua_State* L, int errcode, StkId oldtop)
     }
     case LUA_ERRSYNTAX:
     case LUA_ERRRUN:
+    case LUA_ERRKILL: // ServerLua: Handle uncatchable termination errors
     {
         setobj2s(L, oldtop, L->top - 1); // error message on current top
         break;
@@ -530,6 +538,10 @@ static void resume(lua_State* L, void* ud)
 
 static CallInfo* resume_findhandler(lua_State* L)
 {
+    // ServerLua: Don't find handlers for uncatchable termination errors
+    if (L->status == LUA_ERRKILL)
+        return NULL;
+
     CallInfo* ci = L->ci;
 
     while (ci > L->base_ci)
@@ -575,7 +587,8 @@ static void resume_handle(lua_State* L, void* ud)
     L->status = LUA_OK;
 
     // push error object to stack top if it's not already there
-    if (status != LUA_ERRRUN)
+    // ServerLua: Extended to also skip LUA_ERRKILL (has error on stack)
+    if (status != LUA_ERRRUN && status != LUA_ERRKILL)
         luaD_seterrorobj(L, status, L->top);
 
     // adjust the stack frame for ci to prepare for cont call
@@ -633,7 +646,8 @@ static int resume_start(lua_State* L, lua_State* from, int nargs)
 static int resume_finish(lua_State* L, int status)
 {
     CallInfo* ch = NULL;
-    while (status != LUA_OK && (ch = resume_findhandler(L)) != NULL)
+    // ServerLua: Don't find handlers for uncatchable termination errors
+    while (status != LUA_OK && status != LUA_ERRKILL && (ch = resume_findhandler(L)) != NULL)
     {
         if (FFlag::LuauStacklessPcall && lua_isyieldable(L) != 0 && L->global->cb.debugprotectederror)
         {
@@ -678,7 +692,17 @@ int lua_resume(lua_State* L, lua_State* from, int nargs)
     if (int starterror = resume_start(L, from, nargs))
         return starterror;
 
-    int status = luaD_rawrunprotected(L, resume, L->top - nargs);
+    int status;
+    try
+    {
+        status = luaD_rawrunprotected(L, resume, L->top - nargs);
+    }
+    catch (lua_exception& e)
+    {
+        // ServerLua: Catch re-thrown uncatchable errors at API boundary
+        LUAU_ASSERT(e.getStatus() == LUA_ERRKILL);
+        status = e.getStatus();
+    }
 
     return resume_finish(L, status);
 }
@@ -747,7 +771,8 @@ int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t e
         if (ef)
         {
             // push error object to stack top if it's not already there
-            if (status != LUA_ERRRUN)
+            // ServerLua: Extended to also skip LUA_ERRKILL (has error on stack)
+            if (status != LUA_ERRRUN && status != LUA_ERRKILL)
                 luaD_seterrorobj(L, status, L->top);
 
             // if errfunc fails, we fail with "error in error handling" or "not enough memory"

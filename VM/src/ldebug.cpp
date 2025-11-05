@@ -343,6 +343,17 @@ void luaG_pusherror(lua_State* L, const char* error)
     pusherror(L, error);
 }
 
+// ServerLua: Throw uncatchable termination error
+l_noret lua_killerror(lua_State* L, const char* msg)
+{
+    lua_rawcheckstack(L, 1);
+
+    [[maybe_unused]] MemcatGuard guard(L, 0);
+
+    pusherror(L, msg);
+    luaD_throw(L, LUA_ERRKILL);
+}
+
 void luaG_breakpoint(lua_State* L, Proto* p, int line, bool enable)
 {
     void (*ondisable)(lua_State*, Proto*) = L->global->ecb.disable;

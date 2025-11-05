@@ -75,6 +75,7 @@ enum lua_Status
     LUA_ERRMEM,
     LUA_ERRERR,
     LUA_BREAK, // yielded for a debug breakpoint
+    LUA_ERRKILL, // ServerLua: uncatchable script termination error
 };
 
 enum lua_CoStatus
@@ -378,6 +379,7 @@ LUA_API size_t lua_totalbytes(lua_State* L, int category);
 */
 
 LUA_API l_noret lua_error(lua_State* L);
+LUA_API l_noret lua_killerror(lua_State* L, const char* msg); // ServerLua: Throw uncatchable termination error
 
 LUA_API int lua_next(lua_State* L, int idx);
 LUA_API int lua_rawiter(lua_State* L, int idx, int iter);
