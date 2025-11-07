@@ -77,6 +77,3 @@ jobs:
     runs-on: "ubuntu-22.04"
     steps:
       - uses: secondlife/action-autobuild-release@v3
-        with:
-          # This requires github creds for now
-          public: false
