@@ -260,15 +260,16 @@ void lua_close(lua_State* L)
 }
 
 // ServerLua: Do an interrupt check on the tail of the current LOP_CALL instruction handler.
-void luau_interruptoncalltail(lua_State *L)
+int luau_interruptoncalltail(lua_State *L)
 {
     // Don't set the flag if it's unlikely we're in a Lua function's LOP_CALL handler.
     // If somehow this is getting invoked within a metamethod, definitely don't set it.
     if (L->nCcalls > L->baseCcalls)
-        return;
+        return 0;
     if (L->ci == nullptr)
-        return;
+        return 0;
     L->global->calltailinterruptcheck = 1;
+    return 1;
 }
 
 // ServerLua: Call the interrupt handler directly if one is registered.

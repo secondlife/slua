@@ -273,7 +273,7 @@ LUA_API int lua_setfenv(lua_State* L, int idx);
 */
 LUA_API int luau_load(lua_State* L, const char* chunkname, const char* data, size_t size, int env);
 // ServerLua: Do an interrupt check on the tail of the current LOP_CALL instruction handler.
-LUA_API void luau_interruptoncalltail(lua_State *L);
+LUA_API int luau_interruptoncalltail(lua_State *L);
 // ServerLua: Call the interrupt handler directly if one is registered.
 // The code parameter is passed to the interrupt handler (must be < 0).
 LUA_API void luau_callinterrupthandler(lua_State* L, int code);
