@@ -517,7 +517,7 @@ static const std::unordered_set<std::string> MULTI_EVENT_NAMES = {
     "collision",
     "collision_end",
     "sensor",
-    "damage",
+    "on_damage",
     "final_damage"
 };
 
@@ -680,7 +680,7 @@ static int llevents_handle_event_init(lua_State *L)
         // Create DetectedEvent wrappers table
         lua_createtable(L, num_detected, 0);
 
-        bool can_adjust_damage = (strcmp(event_name, "damage") == 0);
+        bool can_adjust_damage = (strcmp(event_name, "on_damage") == 0);
         for (int i = 1; i <= num_detected; i++)
         {
             luaSL_pushdetectedevent(L, i, true, can_adjust_damage);
