@@ -1822,10 +1822,10 @@ void BytecodeBuilder::tagYieldPoints()
 
     Function& func = functions[currentFunction];
 
-    for (size_t i = 0; i < insns.size();)
+    for (int i = 0; i < insns.size();)
     {
         uint32_t insn = insns[i];
-        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(insn));
+        auto op = LuauOpcode(LUAU_INSN_OP(insn));
 
         if (luau_is_preemptible(op))
         {

@@ -42,7 +42,8 @@ typedef struct SLTestRuntimeState : lua_SLRuntimeState
 {
     int yield_num = 0;
     int break_num = 0;
-    int skip_next_break = 0;
+    const Instruction* last_break_pc = nullptr;
+    int interrupt_call_count = 0;
 
     // Memory limiting state for reachability-based accounting
     lua_OpaqueGCObjectSet free_objects;
@@ -647,40 +648,46 @@ TEST_CASE("Can break at tail of LOP_CALL")
         lua_callbacks(L)->interrupt = [](lua_State *L, int gc) {
             if (gc >= 0)
                 return;
+
+            auto *ud = ((SLTestRuntimeState*)L->userdata);
+            ud->interrupt_call_count++;
+
             auto may_yield = luaSL_may_interrupt(L);
             if (may_yield != YieldableStatus::OK && must_break)
             {
                 LUAU_ASSERT(!"Unexpected may_interrupt return code");
             }
 
-            auto *ud = ((SLTestRuntimeState*)L->userdata);
-            if (ud->skip_next_break && !must_break)
+            // Get the current PC to check if this is a re-trigger after resume
+            const Instruction* current_pc = L->ci->savedpc;
+            bool is_tail_call = L->global->calltailinterruptcheck;
+
+            // If this is the same PC as the last break AND it's not a tail call check,
+            // then this is a re-trigger after resume, so skip it
+            if (current_pc == ud->last_break_pc && !is_tail_call && !must_break)
             {
-                // Don't break twice in a row.
-                ud->skip_next_break = 0;
+                // This is a re-trigger after resume, skip it
                 return;
             }
-
-            // Don't set this flag if we're doing the break on the tail of a LOP_CALL
-            // This makes sure we'll still break for the following LOP_RETURN.
-            // You can't actually check this flag in user code, but it's necessary for
-            // our test to make sure our interrupt behavior is correct.
-            if (!L->global->calltailinterruptcheck)
-                ud->skip_next_break = 1;
 
             if (must_break || may_yield == YieldableStatus::OK)
             {
                 ud->break_num++;
                 must_break = false;
+                ud->last_break_pc = current_pc;
                 lua_break(L);
             }
         };
     });
     // Make sure the function actually ran
-    CHECK_EQ(breakable_count, 2);
-    // We should have broken 3 times, once at the start of LOP_CALL,
-    // one at the end, and one at the LOP_RETURN.
-    CHECK_EQ(((SLTestRuntimeState*)state->userdata)->break_num, 5);
+    CHECK_EQ(breakable_count, 3);
+    // Expected breaks: 3 breakable() calls (each with call + tail = 6),
+    // LLEvents:on call, nothing(m[1]) call, m:foo call, return = 10 total
+    // Note: NAMECALL is no longer preemptible - only the following CALL interrupts
+    CHECK_EQ(((SLTestRuntimeState*)state->userdata)->break_num, 10);
+    // Total interrupts: 10 breaks + 6 re-triggers (CALL only, not tail checks)
+    // + 5 non-breaking (setmetatable, 2 NAMECALL __index, m[1] __index, m[2] __newindex) = 21
+    CHECK_EQ(((SLTestRuntimeState*)state->userdata)->interrupt_call_count, 21);
 }
 
 TEST_CASE("String comparisons work with a non-default memcat")
