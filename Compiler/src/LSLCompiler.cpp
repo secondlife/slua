@@ -1125,27 +1125,7 @@ bool LuauVisitor::visit(LSLUnaryExpression *un_expr)
     }
     else
     {
-        // replace_axis(coord, axis_name, new_val)
-        uint8_t replace_axis_reg = allocReg(un_expr);
-        pushImport(replace_axis_reg, "lsl", "replace_axis");
-        pushLValue(lvalue, false);
-        const auto member_const_idx = addConstantString(sref(member->getName()), INT16_MAX);
-        mBuilder->emitAD(LOP_LOADK, allocReg(un_expr), member_const_idx);
-
-        // Copy it into place in the arguments
-        maybeMove(allocReg(un_expr), source_reg);
-
-        mBuilder->emitABC(LOP_CALL, replace_axis_reg, 3 + 1, 1 + 1);
-
-        // Set the lvalue to the new constructed coord
-        if (lvalue_sym->getSubType() == SYM_GLOBAL)
-        {
-            setGlobal(replace_axis_reg, lvalue);
-        }
-        else
-        {
-            mBuilder->emitABC(LOP_MOVE, _mSymbolMap[lvalue_sym].index, replace_axis_reg, 0);
-        }
+        emitReplaceAxisAndStore(un_expr, lvalue, source_reg);
     }
 
     return false;
@@ -1193,25 +1173,7 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
                 mBuilder->emitABC(LOP_LSL_DOUBLE2FLOAT, source_reg, source_reg, 0);
             }
 
-            // replace_axis(coord, axis_name, new_val)
-            uint8_t replace_axis_reg = allocReg(bin_expr);
-            pushImport(replace_axis_reg, "lsl", "replace_axis");
-            pushLValue(lval, false);
-            const auto member_const_idx = addConstantString(sref(member->getName()), INT16_MAX);
-            mBuilder->emitAD(LOP_LOADK, allocReg(bin_expr), member_const_idx);
-            // No need to cast, we already did it and replace_axis would do it anyway.
-            pushArgument(rhs, false);
-            mBuilder->emitABC(LOP_CALL, replace_axis_reg, 3 + 1, 1 + 1);
-
-            // Set the lvalue to the new constructed coord
-            if (lval_sym->getSubType() == SYM_GLOBAL)
-            {
-                setGlobal(replace_axis_reg, lval);
-            }
-            else
-            {
-                mBuilder->emitABC(LOP_MOVE, _mSymbolMap[lval_sym].index, replace_axis_reg, 0);
-            }
+            emitReplaceAxisAndStore(bin_expr, lval, source_reg);
         }
         else
         {
@@ -1697,6 +1659,34 @@ void LuauVisitor::setGlobal(uint8_t source_reg, LSLASTNode *glob_node)
     auto glob_sref = sref(glob_name);
     mBuilder->emitABC(LOP_SETGLOBAL, source_reg, 0, srefHash(glob_sref));
     mBuilder->emitAux(const_idx);
+}
+
+void LuauVisitor::emitReplaceAxisAndStore(LSLASTNode* node, LSLLValueExpression* lvalue_expr, uint8_t value_reg)
+{
+    auto* lvalue_sym = lvalue_expr->getSymbol();
+    auto* member = lvalue_expr->getMember();
+
+    // replace_axis(coord, axis_name, new_val)
+    uint8_t replace_axis_reg = allocReg(node);
+    pushImport(replace_axis_reg, "lsl", "replace_axis");
+    pushLValue(lvalue_expr, false);
+    const auto member_const_idx = addConstantString(sref(member->getName()), INT16_MAX);
+    mBuilder->emitAD(LOP_LOADK, allocReg(node), member_const_idx);
+
+    // Copy the value into place in the arguments
+    maybeMove(allocReg(node), value_reg);
+
+    mBuilder->emitABC(LOP_CALL, replace_axis_reg, 3 + 1, 1 + 1);
+
+    // Set the lvalue to the new constructed coord
+    if (lvalue_sym->getSubType() == SYM_GLOBAL)
+    {
+        setGlobal(replace_axis_reg, lvalue_expr);
+    }
+    else
+    {
+        mBuilder->emitABC(LOP_MOVE, _mSymbolMap[lvalue_sym].index, replace_axis_reg, 0);
+    }
 }
 
 /// Push the result of an expression that's part of a function call's arguments.

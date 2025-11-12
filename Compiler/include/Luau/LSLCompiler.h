@@ -111,6 +111,7 @@ protected:
     void setGlobal(uint8_t source_reg, LSLASTNode* glob_node);
     void pushImport(uint8_t target_reg, const char* import1, const char* import2) const;
     void pushImport(uint8_t target_reg, const char* import1) const;
+    void emitReplaceAxisAndStore(LSLASTNode* node, LSLLValueExpression* lvalue_expr, uint8_t value_reg);
     void patchJumpOrThrow(size_t jumpLabel, size_t targetLabel);
     static bool needTruncateToFloat(Tailslide::LSLExpression* expr) ;
     int16_t addConstantUnder(LSLConstant* cv, size_t limit) const;
