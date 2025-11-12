@@ -908,8 +908,15 @@ TEST_CASE("Metamethods and library callbacks receive interrupt checks")
     runConformance("metamethod_and_callback_interrupts.lua", nullptr, [](lua_State* L) {
         // Set up interrupt handler that clears the flag for metamethod (-3) and library callback (-4) interrupts
         lua_callbacks(L)->interrupt = [](lua_State* L, int gc) {
-            if (gc != -3 && gc != -4)
+            switch(gc)
+            {
+            case LUA_INTERRUPT_METAMETHOD:
+            case LUA_INTERRUPT_LLLIB:
+            case LUA_INTERRUPT_STDLIB:
+                break;
+            default:
                 return;
+            }
 
             RuntimeState* state = (RuntimeState*)L->userdata;
             state->interrupt_should_clear = false;

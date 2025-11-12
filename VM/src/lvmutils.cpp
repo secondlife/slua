@@ -74,7 +74,7 @@ static StkId callTMres(lua_State* L, StkId res, const TValue* f, const TValue* p
     luaD_checkstack(L, 3);
     L->top += 3;
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-    luau_callinterrupthandler(L, -3);
+    luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
     luaD_call(L, L->top - 3, 1);
     res = restorestack(L, result);
     L->top--;
@@ -99,7 +99,7 @@ static void callTM(lua_State* L, const TValue* f, const TValue* p1, const TValue
     luaD_checkstack(L, 4);
     L->top += 4;
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-    luau_callinterrupthandler(L, -3);
+    luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
     luaD_call(L, L->top - 4, 0);
 }
 
@@ -620,7 +620,7 @@ LUAU_NOINLINE void luaV_callTM(lua_State* L, int nparams, int res)
     LUAU_ASSERT(L->top == L->base + nparams);
 
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling C function metamethod
-    luau_callinterrupthandler(L, -3);
+    luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
 
     lua_CFunction func = clvalue(fun)->c.f;
     int n = func(L);

@@ -438,7 +438,8 @@ static const char* match(MatchState* ms, const char* s, const char* p)
     {
         // this interrupt is not yieldable
         L->nCcalls++;
-        interrupt(L, -1);
+        // ServerLua: blame this directly.
+        interrupt(L, LUA_INTERRUPT_STDLIB);
         L->nCcalls--;
     }
 
@@ -809,7 +810,7 @@ static void add_value(MatchState* ms, luaL_Strbuf* b, const char* s, const char*
         lua_pushvalue(L, 3);
         n = push_captures(ms, s, e);
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling replacement function
-        luau_callinterrupthandler(L, -4);
+        luau_callinterrupthandler(L, LUA_INTERRUPT_STDLIB);
         lua_call(L, n, 1);
         break;
     }

@@ -672,7 +672,7 @@ static int lltimers_tick_cont(lua_State *L, [[maybe_unused]]int status)
         // Check for interrupts between timers to prevent abuse
         if (LUAU_LIKELY(!!interrupt))
         {
-            interrupt(L, -2);  // -2 indicates "handler interrupt check"
+            interrupt(L, LUA_INTERRUPT_EVENTS);
             if (L->status != LUA_OK)
                 return -1;
         }

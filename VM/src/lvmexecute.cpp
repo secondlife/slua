@@ -77,12 +77,15 @@
 #define VM_PATCH_C(pc, slot) *const_cast<Instruction*>(pc) = ((uint8_t(slot) << 24) | (0x00ffffffu & *(pc)))
 #define VM_PATCH_E(pc, slot) *const_cast<Instruction*>(pc) = ((uint32_t(slot) << 8) | (0x000000ffu & *(pc)))
 
-#define VM_INTERRUPT() \
+// ServerLua: Allow interrupting with different codes.
+#define VM_INTERRUPT() VM_INTERRUPT_WITHCODE(LUA_INTERRUPT_NORMAL)
+#define VM_INTERRUPT_WITHCODE(code) \
     { \
         void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
         if (LUAU_UNLIKELY(!!interrupt)) \
         { /* the interrupt hook is called right before we advance pc */ \
-            VM_PROTECT(L->ci->savedpc++; interrupt(L, -1)); \
+            static_assert((code) < 0, "code is negative");              \
+            VM_PROTECT(L->ci->savedpc++; interrupt(L, (code))); \
             if (L->status != 0) \
             { \
                 L->ci->savedpc--; \
@@ -1102,7 +1105,7 @@ reentry:
                         // We're not doing this because the interrupt might fail, we're doing this because
                         // we need to remember that we're _past_ the LOP_CALL if we interrupt.
                         VM_PROTECT_PC();
-                        VM_INTERRUPT();
+                        VM_INTERRUPT_WITHCODE(LUA_INTERRUPT_CALLTAIL);
                         L->global->calltailinterruptcheck = 0;
                     }
 

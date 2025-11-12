@@ -607,7 +607,7 @@ int llevents_handle_event_cont(lua_State *L, int status)
         // Check for interrupts between handlers to prevent abuse
         if (LUAU_LIKELY(!!interrupt))
         {
-            interrupt(L, -2);  // -2 indicates "handler interrupt check"
+            interrupt(L, LUA_INTERRUPT_EVENTS);
             if (L->status != LUA_OK)
                 return -1;
         }

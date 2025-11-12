@@ -280,7 +280,7 @@ int luaL_callmeta(lua_State* L, int obj, const char* event)
         return 0;
     lua_pushvalue(L, obj);
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-    luau_callinterrupthandler(L, -3);
+    luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
     lua_call(L, 1, 1);
     return 1;
 }

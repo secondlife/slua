@@ -25,7 +25,7 @@ static int foreachi(lua_State* L)
         lua_pushinteger(L, i); // 1st argument
         lua_rawgeti(L, 1, i);  // 2nd argument
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling user iterator function
-        luau_callinterrupthandler(L, -4);
+        luau_callinterrupthandler(L, LUA_INTERRUPT_STDLIB);
         lua_call(L, 2, 1);
         if (!lua_isnil(L, -1))
             return 1;
@@ -45,7 +45,7 @@ static int foreach (lua_State* L)
         lua_pushvalue(L, -3); // key
         lua_pushvalue(L, -3); // value
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling user iterator function
-        luau_callinterrupthandler(L, -4);
+        luau_callinterrupthandler(L, LUA_INTERRUPT_STDLIB);
         lua_call(L, 2, 1);
         if (!lua_isnil(L, -1))
             return 1;
@@ -334,7 +334,7 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
     setobj2s(L, L->top + 2, r);
     L->top += 3; // safe because of LUA_MINSTACK guarantee
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling user comparison function
-    luau_callinterrupthandler(L, -4);
+    luau_callinterrupthandler(L, LUA_INTERRUPT_STDLIB);
     luaD_call(L, L->top - 3, 1);
     L->top -= 1; // maintain stack depth
 

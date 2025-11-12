@@ -135,6 +135,18 @@ enum lua_Type
     // the count of TValue type tags
     LUA_T_COUNT = LUA_TPROTO
 };
+
+// ServerLua: so we can figure out _why_ an interrupt happened to track
+// whether the trail of interrupts is what we'd expect.
+enum lua_InterruptReason
+{
+    LUA_INTERRUPT_NORMAL = -1,
+    LUA_INTERRUPT_EVENTS = -2,
+    LUA_INTERRUPT_LLLIB = -3,
+    LUA_INTERRUPT_STDLIB = -4,
+    LUA_INTERRUPT_METAMETHOD = -5,
+    LUA_INTERRUPT_CALLTAIL = -6,
+};
 // clang-format on
 
 // type of numbers in Luau
