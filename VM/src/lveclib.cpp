@@ -467,7 +467,7 @@ int luaopen_vector(lua_State* L)
     // This is confusing at first, but we want a unique function identity
     // when this shows up anywhere other than globals, otherwise we can
     // muck up Ares serialization.
-    luaA_dupcclosure(L, -1, "__iter");
+    luau_dupcclosure(L, -1, "__iter");
     lua_replace(L, -2);
     lua_rawsetfield(L, -2, "__iter");
 

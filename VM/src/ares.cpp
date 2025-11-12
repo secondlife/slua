@@ -2874,7 +2874,7 @@ static void scavenge_global_cfuncs_internal(lua_State *L, bool forUnpersist, con
                     } else {
                         new_name = key_name;
                     }
-                    luaL_error(L, "Duplicate closure registration in Ares permanents: closure already registered as '%s', attempting to register as '%s'. Use luaA_dupcclosure() to create distinct identities.",
+                    luaL_error(L, "Duplicate closure registration in Ares permanents: closure already registered as '%s', attempting to register as '%s'. Use luau_dupcclosure() to create distinct identities.",
                               existing_name ? existing_name : "(unknown)", new_name);
                 }
                 lua_pop(L, 1);  /* ... perms glob_tab k v */

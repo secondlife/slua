@@ -2223,7 +2223,7 @@ lua_OpaqueGCObjectSet lua_collectfreeobjects(lua_State *L)
     return luaC_collectfreeobjects(L);
 }
 
-LUAI_FUNC void luaA_dupcclosure(lua_State *L, int idx, const char *debugname)
+LUA_API void luau_dupcclosure(lua_State *L, int idx, const char *debugname)
 {
     idx = lua_absindex(L, idx);
     auto *cl = clvalue(luaA_toobject(L, idx));

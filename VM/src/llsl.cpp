@@ -1434,7 +1434,7 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
 
     // Load these into the global namespace
     lua_pushcfunction(L, lsl_quaternion_ctor, "quaternion");
-    luaA_dupcclosure(L, -1, "rotation");
+    luau_dupcclosure(L, -1, "rotation");
     // Alias it as "rotation"
     lua_setglobal(L, "rotation");
     lua_setglobal(L, "quaternion");
@@ -1447,7 +1447,7 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     {
         lua_pushcfunction(L, lua_uuid_ctor, "uuid");
     }
-    luaA_dupcclosure(L, -1, "touuid");
+    luau_dupcclosure(L, -1, "touuid");
     lua_setglobal(L, "touuid");
     lua_setglobal(L, "uuid");
 
@@ -1455,7 +1455,7 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     lua_setglobal(L, "tovector");
 
     lua_pushcfunction(L, lsl_to_quaternion, "toquaternion");
-    luaA_dupcclosure(L, -1, "torotation");
+    luau_dupcclosure(L, -1, "torotation");
     lua_setglobal(L, "torotation");
     lua_setglobal(L, "toquaternion");
 
