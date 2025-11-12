@@ -1054,7 +1054,8 @@ bool LuauVisitor::visit(LSLUnaryExpression *un_expr)
 
     // This is a post-op that assigns to itself directly. What? That's a no-op!
     // For ex. `foo = foo++`
-    if (!pre && target_reg == _mSymbolMap[lvalue_sym].index && !member)
+    // Note: Only applies to locals, since _mSymbolMap[].index is meaningless for globals
+    if (!pre && lvalue_sym->getSubType() != SYM_GLOBAL && target_reg == _mSymbolMap[lvalue_sym].index && !member)
     {
         // okay, do nothing. bye!
         return false;

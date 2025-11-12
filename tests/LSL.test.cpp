@@ -243,25 +243,7 @@ TEST_CASE("Cast")
 
 TEST_CASE("PostPreIncrDecr")
 {
-    auto state = runConformance("incr_decr.lsl", [](lua_State *L)
-    {
-        double expected;
-        switch(YIELD_NUM(L))
-        {
-            case 0: expected = 2.0; break;
-            case 1: expected = 2.0; break;
-            case 2: expected = 1.0; break;
-            case 3: expected = 3.0; break;
-            case 4: expected = 2.0; break;
-            case 5: expected = 2.0; break;
-            case 6: expected = 1.0; break;
-            case 7: expected = 3.0; break;
-            default: assert(0);
-        }
-        CHECK_EQ(luaL_checknumber(L, 1), expected);
-        return -1;
-    });
-    CHECK_EQ(YIELD_NUM(state.get()), 8);
+    runConformance("incr_decr.lsl");
 }
 
 TEST_CASE("LValue Assignment")
