@@ -145,6 +145,34 @@ LLTimers:_tick()
 assert(timer1_count == 1)
 LLTimers:off(zero_interval_handler)
 
+-- Test zero interval continues firing over multiple seconds (regression test for division-by-zero bug)
+setclock(50.0)
+local zero_continuous_count = 0
+local zero_continuous_handler = LLTimers:on(0, function()
+    zero_continuous_count += 1
+end)
+
+-- Fire several times with small time advances
+for i = 1, 5 do
+    incrementclock(0.01)
+    LLTimers:_tick()
+end
+assert(zero_continuous_count == 5, "Zero-interval timer should fire 5 times")
+
+-- Now advance past what would be the 2-second clamping threshold for interval>0 timers
+-- For interval=0, this just schedules for "now" (ASAP semantics)
+-- This used to trigger division by zero: ceil(time_behind / 0)
+setclock(53.0)  -- More than 2 seconds later
+LLTimers:_tick()
+assert(zero_continuous_count == 6, "Zero-interval timer should continue after large time jump")
+
+-- Verify it continues working normally
+incrementclock(0.01)
+LLTimers:_tick()
+assert(zero_continuous_count == 7, "Zero-interval timer should still work after clamp")
+
+LLTimers:off(zero_continuous_handler)
+
 -- Test invalid handler type
 success, err = pcall(function()
     LLTimers:on(1, "not a function")

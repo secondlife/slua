@@ -585,25 +585,36 @@ static int lltimers_tick_cont(lua_State *L, [[maybe_unused]]int status)
             // Note that we do this BEFORE the timer is ever run.
             // This ensures that handler runtime has no effect on
             // when the handler will be invoked next.
-            const double MAX_CATCHUP_TIME = 2.0;
-            double next_scheduled = next_run + interval;
             double new_next_run;
             bool did_clamp = false;
 
-            // Check if the next scheduled time would still be >2s behind current time
-            if (start_time - next_scheduled > MAX_CATCHUP_TIME)
+            // For ASAP timers, always schedule for current time.
+            // There's no schedule to fall behind - they just want to run "ASAP"
+            if (interval == 0)
             {
-                // Skip ahead to next interval after current time
-                // This prevents spiral of death from excessive catch-up
-                double time_behind = start_time - next_run;
-                double intervals_to_skip = ceil(time_behind / interval);
-                new_next_run = next_run + (intervals_to_skip * interval);
-                did_clamp = true;
+                new_next_run = start_time;
             }
             else
             {
-                // Normal absolute scheduling - maintain rhythm
-                new_next_run = next_scheduled;
+                // Normal scheduling with clamping logic for defined intervals.
+                const double MAX_CATCHUP_TIME = 2.0;
+                double next_scheduled = next_run + interval;
+
+                // Check if the next scheduled time would still be >2s behind current time
+                if (start_time - next_scheduled > MAX_CATCHUP_TIME)
+                {
+                    // Skip ahead to next interval after current time
+                    // This prevents spiral of death from excessive catch-up
+                    double time_behind = start_time - next_run;
+                    double intervals_to_skip = ceil(time_behind / interval);
+                    new_next_run = next_run + (intervals_to_skip * interval);
+                    did_clamp = true;
+                }
+                else
+                {
+                    // Normal absolute scheduling - maintain rhythm
+                    new_next_run = next_scheduled;
+                }
             }
 
             // Update actual next run time (may be clamped)
