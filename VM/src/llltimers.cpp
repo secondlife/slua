@@ -733,11 +733,8 @@ void luaSL_setup_llltimers_metatable(lua_State *L, int expose_internal_funcs)
     lua_setfield(L, -2, "__tostring");
 
     // Add methods
-    lua_pushcfunction(L, lltimers_on, "on");
-    luau_dupcclosure(L, -1, "every");
-    // Either :every() or :on() is fine
-    lua_setfield(L, -3, "every");
-    lua_setfield(L, -2, "on");
+    lua_pushcfunction(L, lltimers_on, "every");
+    lua_setfield(L, -2, "every");
 
     lua_pushcfunction(L, lltimers_once, "once");
     lua_setfield(L, -2, "once");

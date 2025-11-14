@@ -12,9 +12,9 @@ assert(call_count == 3)
 
 -- Test LLTimers interrupt between handlers
 call_count = 0
-LLTimers:on(0.1, function() call_count += 1 end)
-LLTimers:on(0.1, function() call_count += 1 end)
-LLTimers:on(0.1, function() call_count += 1 end)
+LLTimers:every(0.1, function() call_count += 1 end)
+LLTimers:every(0.1, function() call_count += 1 end)
+LLTimers:every(0.1, function() call_count += 1 end)
 
 setclock(1.0)
 LLTimers:_tick()

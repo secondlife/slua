@@ -17,12 +17,12 @@ local function assert_errors(func, expected_str)
     assert(is_match)
 end
 
--- Test basic on() functionality
+-- Test basic every() functionality
 setclock(0.0)
 local on_count = 0
-local on_handler = LLTimers:on(0.1, function(scheduled_time, interval)
+local on_handler = LLTimers:every(0.1, function(scheduled_time, interval)
     on_count += 1
-    assert(interval == 0.1, "on() timer should receive interval")
+    assert(interval == 0.1, "every() timer should receive interval")
 end)
 
 assert(typeof(on_handler) == "function")
@@ -45,7 +45,7 @@ incrementclock(0.1) -- Advance by interval, should fire again
 LLTimers:_tick()
 assert(on_count == 2)
 
--- Clean up on() timer before testing once()
+-- Clean up every() timer before testing once()
 LLTimers:off(on_handler)
 
 -- Test once() functionality
@@ -67,7 +67,7 @@ assert(once_count == 1)
 -- Test off() functionality
 setclock(2.0)
 -- Create a new timer to test removal
-local new_on_handler = LLTimers:on(0.1, function()
+local new_on_handler = LLTimers:every(0.1, function()
     on_count += 1
 end)
 
@@ -88,11 +88,11 @@ local timer1_count = 0
 local timer2_count = 0
 
 setclock(0.5)
-local timer1 = LLTimers:on(0.1, function()
+local timer1 = LLTimers:every(0.1, function()
     timer1_count += 1
 end)
 
-local timer2 = LLTimers:on(0.05, function()
+local timer2 = LLTimers:every(0.05, function()
     timer2_count += 1
 end)
 
@@ -131,7 +131,7 @@ assert(cancelled_count == 0)
 
 -- Test negative interval
 local success, err = pcall(function()
-    LLTimers:on(-1, function() end)
+    LLTimers:every(-1, function() end)
 end)
 assert(success == false)
 
@@ -140,7 +140,7 @@ timer1_count = 0
 local function zero_interval_handler()
     timer1_count += 1
 end
-LLTimers:on(0, zero_interval_handler)
+LLTimers:every(0, zero_interval_handler)
 LLTimers:_tick()
 assert(timer1_count == 1)
 LLTimers:off(zero_interval_handler)
@@ -148,7 +148,7 @@ LLTimers:off(zero_interval_handler)
 -- Test zero interval continues firing over multiple seconds (regression test for division-by-zero bug)
 setclock(50.0)
 local zero_continuous_count = 0
-local zero_continuous_handler = LLTimers:on(0, function()
+local zero_continuous_handler = LLTimers:every(0, function()
     zero_continuous_count += 1
 end)
 
@@ -179,7 +179,7 @@ LLTimers:off(zero_continuous_handler)
 -- Test very small non-zero intervals use nextafter (no clamping)
 setclock(60.0)
 local tiny_count = 0
-local tiny_handler = LLTimers:on(1e-308, function(scheduled_time)
+local tiny_handler = LLTimers:every(1e-308, function(scheduled_time)
     tiny_count += 1
 end)
 
@@ -208,7 +208,7 @@ LLTimers:off(tiny_handler)
 
 -- Test invalid handler type
 success, err = pcall(function()
-    LLTimers:on(1, "not a function")
+    LLTimers:every(1, "not a function")
 end)
 assert(success == false)
 
@@ -221,7 +221,7 @@ assert(string.find(str, "LLTimers"))
 local removal_test_count = 0
 local remover = nil
 setclock(1.2)
-remover = LLTimers:on(0.1, function()
+remover = LLTimers:every(0.1, function()
     removal_test_count += 1
     if removal_test_count >= 2 then
         LLTimers:off(remover)
@@ -244,7 +244,7 @@ assert(removal_test_count == 2) -- Should not increment
 local breaker_call_order = {}
 setclock(2.0)
 
-local breaker_timer1 = LLTimers:on(0.01, function()
+local breaker_timer1 = LLTimers:every(0.01, function()
     table.insert(breaker_call_order, 1)
     breaker()
 end)
@@ -255,7 +255,7 @@ local breaker_timer2 = LLTimers:once(0.01, function()
     table.insert(breaker_call_order, 2)
 end)
 
-local breaker_timer3 = LLTimers:on(0.01, function()
+local breaker_timer3 = LLTimers:every(0.01, function()
     table.insert(breaker_call_order, 3)
     breaker()
     table.insert(breaker_call_order, 4)
@@ -275,7 +275,7 @@ breaker_call_order = {}
 local yield_order = {}
 setclock(3.0)
 
-local yield_timer1 = LLTimers:on(0.01, function()
+local yield_timer1 = LLTimers:every(0.01, function()
     table.insert(breaker_call_order, 1)
     coroutine.yield(1)
 end)
@@ -286,7 +286,7 @@ local yield_timer2 = LLTimers:once(0.01, function()
     table.insert(breaker_call_order, 2)
 end)
 
-local yield_timer3 = LLTimers:on(0.01, function()
+local yield_timer3 = LLTimers:every(0.01, function()
     table.insert(breaker_call_order, 3)
     coroutine.yield(3)
     table.insert(breaker_call_order, 4)
@@ -314,7 +314,7 @@ LLTimers:off(yield_timer3)
 
 -- Test reentrancy detection
 setclock(0.0)
-local reentrant_handler = LLTimers:on(0.1, function()
+local reentrant_handler = LLTimers:every(0.1, function()
     -- This should error because we're already inside _tick()
     LLTimers:_tick()
 end)
@@ -332,11 +332,11 @@ LLTimers:off(reentrant_handler)
 setclock(4.0)
 assert(#LLEvents:listeners("timer") == 0)
 
-local auto_reg_timer1 = LLTimers:on(1.0, function() end)
+local auto_reg_timer1 = LLTimers:every(1.0, function() end)
 assert(#LLEvents:listeners("timer") == 1)
 
 -- Adding second timer should not add another listener
-local auto_reg_timer2 = LLTimers:on(2.0, function() end)
+local auto_reg_timer2 = LLTimers:every(2.0, function() end)
 assert(#LLEvents:listeners("timer") == 1)
 
 -- Removing first timer should keep listener (still have timer2)
@@ -348,7 +348,7 @@ LLTimers:off(auto_reg_timer2)
 assert(#LLEvents:listeners("timer") == 0)
 
 -- Test that timer wrapper in listeners() cannot be called directly
-local guard_timer = LLTimers:on(1.0, function() end)
+local guard_timer = LLTimers:every(1.0, function() end)
 local timer_listeners = LLEvents:listeners("timer")
 assert(#timer_listeners == 1)
 
@@ -366,7 +366,7 @@ LLTimers:off(guard_timer)
 -- Test that LLEvents:_handleEvent('timer') drives LLTimers:_tick()
 setclock(5.0)
 local integration_count = 0
-local integration_timer = LLTimers:on(0.5, function()
+local integration_timer = LLTimers:every(0.5, function()
     integration_count += 1
 end)
 
@@ -395,7 +395,7 @@ callable_table = setmetatable({}, {
 })
 
 -- Register callable table as timer handler
-local callable_timer = LLTimers:on(0.3, callable_table)
+local callable_timer = LLTimers:every(0.3, callable_table)
 assert(callable_timer ~= nil)
 
 -- Advance time and trigger timer
@@ -421,7 +421,7 @@ assert(callable_count == 2)
 setclock(0)
 -- error() is the poor man's long-return.
 local function throw_error() error("called!") end
-LLTimers:on(0.5, throw_error)
+LLTimers:every(0.5, throw_error)
 
 -- In reality you wouldn't give users primitives to clone these, but just for testing!
 local timers_clone = ares.unpersist(ares.persist(LLTimers))
@@ -444,11 +444,11 @@ local interval_timer1 = LLTimers:every(0.5, function() end)
 assert(math.abs(get_last_interval() - 0.5) < 0.001)
 
 -- Adding an earlier timer should reschedule to shorter interval
-local interval_timer2 = LLTimers:on(0.3, function() end)
+local interval_timer2 = LLTimers:every(0.3, function() end)
 assert(math.abs(get_last_interval() - 0.3) < 0.001)
 
 -- Adding a later timer should not change the interval
-local interval_timer3 = LLTimers:on(1.0, function() end)
+local interval_timer3 = LLTimers:every(1.0, function() end)
 -- Should still be 0.3 (the earliest timer)
 assert(math.abs(get_last_interval() - 0.3) < 0.001)
 
@@ -470,7 +470,7 @@ assert(math.abs(get_last_interval() - 0.5) < 0.001)
 -- Basic parameter passing
 setclock(10.0)
 local received_scheduled_time = nil
-local test_handler = LLTimers:on(0.5, function(scheduled_time)
+local test_handler = LLTimers:every(0.5, function(scheduled_time)
     received_scheduled_time = scheduled_time
 end)
 
@@ -483,7 +483,7 @@ LLTimers:off(test_handler)
 -- Verify it's scheduled time, not current time
 setclock(15.0)
 local scheduled_vs_current = {}
-local timing_handler = LLTimers:on(0.3, function(scheduled_time)
+local timing_handler = LLTimers:every(0.3, function(scheduled_time)
     local current_time = getclock()
     table.insert(scheduled_vs_current, {
         scheduled = scheduled_time,
@@ -507,7 +507,7 @@ LLTimers:off(timing_handler)
 -- Test diff calculation for delay detection
 setclock(20.0)
 local delays = {}
-local delay_handler = LLTimers:on(0.1, function(scheduled_time)
+local delay_handler = LLTimers:every(0.1, function(scheduled_time)
     local current_time = getclock()
     local delay = current_time - scheduled_time
     table.insert(delays, delay)
@@ -543,10 +543,10 @@ assert(math.abs(once_scheduled_time - 25.7) < 0.001, "once() scheduled time shou
 -- Test multiple timers receive correct individual scheduled times
 setclock(30.0)
 local timer_results = {}
-local handler1 = LLTimers:on(0.2, function(scheduled_time)
+local handler1 = LLTimers:every(0.2, function(scheduled_time)
     table.insert(timer_results, {id = 1, scheduled = scheduled_time})
 end)
-local handler2 = LLTimers:on(0.3, function(scheduled_time)
+local handler2 = LLTimers:every(0.3, function(scheduled_time)
     table.insert(timer_results, {id = 2, scheduled = scheduled_time})
 end)
 
@@ -564,11 +564,11 @@ assert(math.abs(result2.scheduled - 30.3) < 0.001)
 LLTimers:off(handler1)
 LLTimers:off(handler2)
 
--- Test that on() timers get new scheduled_time for each invocation
+-- Test that every() timers get new scheduled_time for each invocation
 setclock(35.0)
 local repeat_scheduled_times = {}
 local repeat_handler = nil
-repeat_handler = LLTimers:on(0.5, function(scheduled_time)
+repeat_handler = LLTimers:every(0.5, function(scheduled_time)
     table.insert(repeat_scheduled_times, scheduled_time)
     if #repeat_scheduled_times >= 3 then
         LLTimers:off(repeat_handler)
@@ -591,7 +591,7 @@ assert(math.abs(repeat_scheduled_times[3] - 36.5) < 0.001)
 setclock(40.0)
 local catchup_fires = 0
 local catchup_scheduled_times = {}
-local catchup_handler = LLTimers:on(0.1, function(scheduled_time)
+local catchup_handler = LLTimers:every(0.1, function(scheduled_time)
     catchup_fires += 1
     table.insert(catchup_scheduled_times, scheduled_time)
 end)
