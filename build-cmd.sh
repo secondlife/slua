@@ -77,6 +77,7 @@ pushd "$top"
             cp -v "Release/Luau.Compiler.lib" "$stage/lib/release/"
             cp -v "Release/Luau.Config.lib" "$stage/lib/release/"
             cp -v "Release/Luau.VM.lib" "$stage/lib/release/"
+            cp -v "Release/Luau.Common.lib" "$stage/lib/release/"
 
             cp -v Release/luau.exe "$stage/bin/"
         ;;
@@ -94,6 +95,7 @@ pushd "$top"
 
             cp -v "libLuau.Ast.a" "$stage/lib/release"
             cp -v "libLuau.CodeGen.a" "$stage/lib/release"
+            cp -v "libLuau.Common.a" "$stage/lib/release"
             cp -v "libLuau.Compiler.a" "$stage/lib/release"
             cp -v "libLuau.Config.a" "$stage/lib/release"
             cp -v "libLuau.VM.a" "$stage/lib/release"
