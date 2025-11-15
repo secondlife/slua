@@ -3076,7 +3076,8 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
             lua_pushvalue(L, -1);                     /* ... perms type_mt mt */
             lua_pushstring(L, mt_name.c_str());  /* ... perms type_mt mt name */
         }
-        register_perm_checked(L, top, mt_name.c_str());  /* ... perms type_mt */
+        register_perm_checked(L, perms_idx, mt_name.c_str());
+                                                         /* ... perms type_mt */
 
         // Scan its contents
         scavenge_general_perms_internal(L, forUnpersist, mt_name);
