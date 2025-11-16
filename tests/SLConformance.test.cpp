@@ -717,6 +717,19 @@ TEST_CASE("llcompat")
     runConformance("llcompat.lua");
 }
 
+TEST_CASE("callsandboxedrequire")
+{
+    runConformance("callsandboxedrequire.lua");
+}
+
+TEST_CASE("callsandboxedrequire with breaks")
+{
+    runConformance("callsandboxedrequire_breaks.lua", nullptr, [](lua_State *L) {
+        lua_pushcfunction(L, lua_break, "breaker");
+        lua_setglobal(L, "breaker");
+    });
+}
+
 TEST_CASE("SL Ares")
 {
     runConformance("sl_ares.lua");

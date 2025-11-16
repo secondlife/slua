@@ -4,6 +4,10 @@
 #include "lualib.h"
 
 #include "ldebug.h"
+#include "lfunc.h"
+#include "lapi.h"
+#include "lgc.h"
+#include "lobject.h"
 #include "lstate.h"
 #include "lvm.h"
 
@@ -266,6 +270,72 @@ static int coclose(lua_State* L)
     }
 }
 
+// ServerLua: For mimicking sandboxing semantics of `require()`
+static int auxsandboxedfinish(lua_State* L, lua_State* co, int r)
+{
+    if (r >= 0 && co->status == LUA_YIELD)
+        luaL_error(L, "attempt to yield from sandboxed require");
+
+    if (r == CO_STATUS_BREAK)
+        return interruptThread(L, co);
+
+    if (r < 0)
+    {
+        if (lua_isstring(L, -1))
+        {
+            luaL_where(L, 1);
+            lua_insert(L, -2);
+            lua_concat(L, 2);
+        }
+        lua_error(L);
+    }
+
+    lua_remove(L, 2);
+    lua_remove(L, 1);
+    return r;
+}
+
+static int callsandboxedrequire(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+
+    if (!lua_isLfunction(L, 1))
+        luaL_error(L, "Lua function expected");
+
+    const TValue* o = luaA_toobject(L, 1);
+    Closure* cl = clvalue(o);
+    if (cl->nupvalues != 0)
+        luaL_error(L, "function with upvalues not allowed");
+
+    // We need a thread that wraps the globals of the caller.
+    lua_State* co = lua_newthread(L);
+    luaL_sandboxthread(co);
+
+    // Copy the closure that was passed in but give it our new environment
+    Proto* p = cl->l.p;
+    Closure* newcl = luaF_newLclosure(co, 0, co->gt, p);
+
+    // push it onto the new thread's stack
+    setclvalue(co, co->top, newcl);
+    incr_top(co);
+
+    int r = auxresume(L, co, 0);
+    return auxsandboxedfinish(L, co, r);
+}
+
+static int callsandboxedrequirecont(lua_State* L, int status)
+{
+    lua_State* co = lua_tothread(L, 2);
+
+    int r;
+    if (co->status == LUA_BREAK)
+        r = auxresume(L, co, 0);
+    else
+        r = auxresumecont(L, co);
+
+    return auxsandboxedfinish(L, co, r);
+}
+
 static const luaL_Reg co_funcs[] = {
     {"create", cocreate},
     {"running", corunning},
@@ -283,6 +353,10 @@ int luaopen_coroutine(lua_State* L)
 
     lua_pushcclosurek(L, coresumey, "resume", 0, coresumecont);
     lua_setfield(L, -2, "resume");
+
+    // ServerLua: For mimicking sandboxing semantics of `require()`
+    lua_pushcclosurek(L, callsandboxedrequire, "callsandboxedrequire", 0, callsandboxedrequirecont);
+    lua_setglobal(L, "callsandboxedrequire");
 
     return 1;
 }
