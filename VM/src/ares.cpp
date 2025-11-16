@@ -3555,6 +3555,9 @@ static void gatherfunctions(std::vector<Proto*>& results, Proto* proto) {
   if (results[proto->bytecodeid])
     return;
 
+  // We need to know where it came from to give it a unique name
+  LUAU_ASSERT(proto->source);
+
   results[proto->bytecodeid] = proto;
 
   for (int i = 0; i < proto->sizep; i++)
@@ -3597,7 +3600,7 @@ eris_make_forkserver(lua_State *L) {
   lua_newtable(Lforker);                              /* Lforker: state perms */
   for (auto *proto : protos) {
     lua_pushlightuserdata(Lforker, proto);      /* Lforker: state perms proto */
-    lua_pushfstring(Lforker, "proto/%d", proto->bytecodeid);
+    lua_pushfstring(Lforker, "proto/%s/%d", getstr(proto->source), proto->bytecodeid);
                                        /* Lforker: state perms proto proto_id */
     lua_rawset(Lforker, -3);                          /* Lforker: state perms */
   }
@@ -3635,7 +3638,7 @@ eris_make_forkserver(lua_State *L) {
 
   // rebuild the perms table to work for deserialization
   for (auto *proto : protos) {
-    lua_pushfstring(Lforker, "proto/%d", proto->bytecodeid);
+    lua_pushfstring(Lforker, "proto/%s/%d", getstr(proto->source), proto->bytecodeid);
                                             /* Lforker: state uperms proto_id */
     lua_pushlightuserdata(Lforker, proto);
                                       /* Lforker: state uperms proto_id proto */
