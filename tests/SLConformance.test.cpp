@@ -722,6 +722,11 @@ TEST_CASE("SL Ares")
     runConformance("sl_ares.lua");
 }
 
+TEST_CASE("Ares Scavenger")
+{
+    runConformance("ares_scavenger.lua");
+}
+
 TEST_CASE("LLEvents")
 {
     runConformance("llevents.lua", nullptr, [](lua_State *L) {
