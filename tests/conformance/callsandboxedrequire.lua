@@ -16,14 +16,14 @@ local no_result = callsandboxedrequire(function()
 end)
 assert(no_result == nil, "Should return nil when function returns nothing")
 
--- Global sandboxing - modifications don't affect caller
+-- Global sandboxing - clean globals, isolated from caller
 test_value = "original"
 callsandboxedrequire(function()
-    assert(test_value == "original", "Should initially see parent's value")
+    assert(test_value == nil, "Should have clean globals, not see caller's values")
     test_value = "modified"
-    assert(test_value == "modified", "Should see own modified value after write")
+    assert(test_value == "modified", "Should see own modified value")
 end)
-assert(test_value == "original", "Caller's view should remain unchanged")
+assert(test_value == "original", "Caller's value should remain unchanged")
 
 -- Error propagation
 local success, err = pcall(function()
@@ -98,7 +98,7 @@ end)
 assert(not upvalue_success, "Should error on function with upvalues")
 assert(string.match(upvalue_err, "upvalues not allowed"), "Should have upvalue error message")
 
--- Returned functions should keep sandboxed env after being returned
+-- Returned functions should keep sandboxed env (isolated from caller)
 a_global = "1"
 good_global = "1"
 local get_sandboxed_env = callsandboxedrequire(function()
@@ -106,21 +106,24 @@ local get_sandboxed_env = callsandboxedrequire(function()
     good_global = "2"
     return function()
         -- Return the function's view of the globals as a table
-        local view = {inner_global, a_global, new_global, good_global}
+        local view = {inner_global, a_global, new_global, good_global, LLEvents}
         -- Drop the reference to that table
         good_global = nil
         return view
     end
 end)
 
--- Make sure the returned environment matches what we'd expect
+-- Make sure the returned environment matches what we'd expect (clean globals)
 local v = get_sandboxed_env()
-assert(v[1] == "1" and v[2] == "1" and v[3] == nil and v[4] == "2")
+assert(v[1] == "1" and v[2] == nil and v[3] == nil and v[4] == "2" and v[5] == LLEvents)
 assert(good_global == "1")
 
--- Change our env and see if the function notices
+local old_llevents = LLEvents
+LLEvents = nil
+
+-- Change our env and see if the function notices (it shouldn't - isolated)
 new_global = "1"
 v = get_sandboxed_env()
-assert(v[1] == "1" and v[2] == "1" and v[3] == "1" and v[4] == "1")
+assert(v[1] == "1" and v[2] == nil and v[3] == nil and v[4] == nil and v[5] == old_llevents)
 
 return "OK"

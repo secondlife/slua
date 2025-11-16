@@ -10,6 +10,9 @@
 #include "lobject.h"
 #include "lstate.h"
 #include "lvm.h"
+#include "llsl.h"
+
+#include <vector>
 
 #define CO_STATUS_ERROR -1
 #define CO_STATUS_BREAK -2
@@ -307,9 +310,45 @@ static int callsandboxedrequire(lua_State* L)
     if (cl->nupvalues != 0)
         luaL_error(L, "function with upvalues not allowed");
 
-    // We need a thread that wraps the globals of the caller.
-    lua_State* co = lua_newthread(L);
+    // Intentionally creating this on the main thread so that we
+    // don't automatically inherit the globals of the caller.
+    // This is somewhat unlike the REPL, since it will inherit
+    // mutable globals on the main thread, but that seems to
+    // have been a mistake.
+    lua_State* GL = lua_mainthread(L);
+    lua_State* co = lua_newthread(GL);
+    lua_xmove(GL, L, 1);
     luaL_sandboxthread(co);
+
+    // SL needs some special logic for things that don't live on _G
+    if (LUAU_IS_SL_VM(L))
+    {
+        // Limit the globals we let `require()`d inherit to limit shenanigans
+        // Some of these objects conventionally live on the user globals object.
+        static const std::vector<std::pair<const char *, int>> SL_GLOBALS = {
+            {"LLEvents", UTAG_LLEVENTS},
+            {"LLTimers", UTAG_LLTIMERS},
+        };
+        for (auto &to_inherit : SL_GLOBALS)
+        {
+            // We intentionally do not look at __index,
+            // it should be on the globals, we're not digging for it.
+            lua_rawgetfield(L, LUA_GLOBALSINDEX, to_inherit.first);
+            lua_xmove(L, co, 1);
+
+            // And it better be something I'd expect to be there.
+            if (!lua_touserdatatagged(co, -1, to_inherit.second))
+            {
+                luaL_errorL(
+                    L,
+                    "cannot call callsandboxedrequire() with an invalid '%s' global",
+                    to_inherit.first
+                );
+            }
+
+            lua_rawsetfield(co, LUA_GLOBALSINDEX, to_inherit.first);
+        }
+    }
 
     // Copy the closure that was passed in but give it our new environment
     Proto* p = cl->l.p;
