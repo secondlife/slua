@@ -339,16 +339,19 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
         for (const auto &to_inherit : SL_GLOBALS)
         {
             // Try pristine copy first
-            std::string pristine_name = std::string("/$ require_sandbox ") + to_inherit.name + " $";
+            // The stupid name is so that people can't access it through normal means, since
+            // this isn't a legal identifier and we don't allow `getfenv()` or `setfenv()`
+            // in prod.
+            std::string pristine_name = std::string("/$ require_sandbox $ ") + to_inherit.name;
             lua_rawgetfield(L, LUA_GLOBALSINDEX, pristine_name.c_str());
 
             if (lua_isnil(L, -1))
             {
                 lua_pop(L, 1);
                 // Fall back to normal version
-                // We intentionally do not look at __index,
-                // it should be on the globals, we're not digging for it.
-                lua_rawgetfield(L, LUA_GLOBALSINDEX, to_inherit.name);
+                // We intentionally look at the globals including `_G` as a fallback in case
+                // `require()` and friends were provided for us by the implementation on `_G`.
+                lua_getfield(L, LUA_GLOBALSINDEX, to_inherit.name);
 
                 if (lua_isnil(L, -1))
                 {
@@ -375,7 +378,7 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
             lua_pushvalue(co, -1);  // Duplicate the value
             lua_rawsetfield(co, LUA_GLOBALSINDEX, to_inherit.name);
 
-            // Set with prefixed name (for nested calls)
+            // Set with prefixed name (for nested `require()` calls)
             lua_rawsetfield(co, LUA_GLOBALSINDEX, pristine_name.c_str());
         }
     }

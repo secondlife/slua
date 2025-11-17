@@ -730,6 +730,11 @@ TEST_CASE("dangerouslyexecuterequiredmodule with breaks")
     });
 }
 
+TEST_CASE("Fake require()")
+{
+    runConformance("fake_require.lua");
+}
+
 TEST_CASE("SL Ares")
 {
     runConformance("sl_ares.lua");
