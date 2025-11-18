@@ -358,6 +358,7 @@ static int ll_list2list(lua_State *L)
 static int ll_dumplist2string(lua_State *L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TSTRING);
     auto *h = hvalue(luaA_toobject(L, 1));
     int len = luaH_getn(h);
 
