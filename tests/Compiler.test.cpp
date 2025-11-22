@@ -2671,6 +2671,9 @@ TEST_CASE("RecursionParse")
     ScopedFastInt flag(FInt::LuauRecursionLimit, 200);
 #elif defined(_NOOPT) || defined(_DEBUG)
     ScopedFastInt flag(FInt::LuauRecursionLimit, 300);
+    // ServerLua: We do RelWithDebinfo MSVC builds and it does not like large stacks.
+#elif defined(_MSC_VER)
+    ScopedFastInt flag(FInt::LuauRecursionLimit, 300);
 #endif
 
     Luau::BytecodeBuilder bcb;
