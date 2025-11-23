@@ -3297,7 +3297,7 @@ TEST_CASE("KillError")
 
         interruptCount = 0;
         int status = lua_resume(T, nullptr, 0);
-        CHECK(status == LUA_ERRKILL);
+        CHECK(status == LUA_ERRRUN);
         CHECK(lua_isstring(T, -1));
         CHECK(std::string(lua_tostring(T, -1)).find("Script terminated") != std::string::npos);
 
@@ -3324,7 +3324,7 @@ TEST_CASE("KillError")
 
         interruptCount = 0;
         int status = lua_resume(T, nullptr, 0);
-        CHECK(status == LUA_ERRKILL);
+        CHECK(status == LUA_ERRRUN);
         CHECK(lua_isstring(T, -1));
         CHECK(std::string(lua_tostring(T, -1)).find("Script terminated") != std::string::npos);
 

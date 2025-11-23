@@ -538,10 +538,6 @@ static void resume(lua_State* L, void* ud)
 
 static CallInfo* resume_findhandler(lua_State* L)
 {
-    // ServerLua: Don't find handlers for uncatchable termination errors
-    if (L->status == LUA_ERRKILL)
-        return NULL;
-
     CallInfo* ci = L->ci;
 
     while (ci > L->base_ci)
@@ -587,8 +583,7 @@ static void resume_handle(lua_State* L, void* ud)
     L->status = LUA_OK;
 
     // push error object to stack top if it's not already there
-    // ServerLua: Extended to also skip LUA_ERRKILL (has error on stack)
-    if (status != LUA_ERRRUN && status != LUA_ERRKILL)
+    if (status != LUA_ERRRUN)
         luaD_seterrorobj(L, status, L->top);
 
     // adjust the stack frame for ci to prepare for cont call
@@ -675,7 +670,13 @@ static int resume_finish(lua_State* L, int status)
 
     if (status != LUA_OK)
     {
-        L->status = cast_byte(status);
+        // ServerLua: Set ERRRUN on thread for ERRKILL (both are terminal errors)
+        L->status = cast_byte(status == LUA_ERRKILL ? LUA_ERRRUN : status);
+
+        // ServerLua: Close upvalues for uncatchable termination errors
+        if (status == LUA_ERRKILL)
+            luaF_close(L, L->stack);
+
         luaD_seterrorobj(L, status, L->top);
         L->ci->top = L->top;
     }
@@ -717,7 +718,16 @@ int lua_resumeerror(lua_State* L, lua_State* from)
     if (CallInfo* ci = resume_findhandler(L))
     {
         L->status = cast_byte(status);
-        status = luaD_rawrunprotected(L, resume_handle, ci);
+        try
+        {
+            status = luaD_rawrunprotected(L, resume_handle, ci);
+        }
+        catch (lua_exception& e)
+        {
+            // ServerLua: Catch re-thrown uncatchable errors at API boundary
+            LUAU_ASSERT(e.getStatus() == LUA_ERRKILL);
+            status = e.getStatus();
+        }
     }
 
     return resume_finish(L, status);
@@ -771,8 +781,7 @@ int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t e
         if (ef)
         {
             // push error object to stack top if it's not already there
-            // ServerLua: Extended to also skip LUA_ERRKILL (has error on stack)
-            if (status != LUA_ERRRUN && status != LUA_ERRKILL)
+            if (status != LUA_ERRRUN)
                 luaD_seterrorobj(L, status, L->top);
 
             // if errfunc fails, we fail with "error in error handling" or "not enough memory"
