@@ -291,6 +291,9 @@ static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = n
     REQUIRE(isfixed(gcvalue(luaA_toobject(GL, -1))));
     lua_pop(GL, 1);
 
+    // Ensure closures created during execution have correct memcat
+    lua_setmemcat(L, 2);
+
     int status;
     do
     {

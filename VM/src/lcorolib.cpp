@@ -311,9 +311,8 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
         luaL_error(L, "function with upvalues not allowed");
     // We don't currently have any system-defined Lua closures,
     // but we might at some point.
-    // TODO: Currently we accidentally do this in tests :(
-//    if (cl->memcat < 1)
-//        luaL_error(L, "can't wrap a system lua closure");
+    if (cl->memcat < 2)
+        luaL_error(L, "can't wrap a system lua closure");
 
     // Intentionally creating this on the main thread so that we
     // don't automatically inherit the globals of the caller.
@@ -324,6 +323,7 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
     lua_State* co = lua_newthread(GL);
     lua_xmove(GL, L, 1);
     luaL_sandboxthread(co);
+    lua_setmemcat(co, lua_getmemcat(L));
 
     // SL needs some special logic for things that don't live on _G
     if (LUAU_IS_SL_VM(L))
