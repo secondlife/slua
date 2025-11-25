@@ -168,6 +168,18 @@ assert(float_key_json == '{"!f3.14":"pi"}')
 local float_key_decoded = lljson.sldecode(float_key_json)
 assert(float_key_decoded[3.14] == "pi")
 
+-- Sparse tables: integer keys become !f tagged, avoiding sparse array issues
+-- (contrast with regular encode which would fail or fill with nulls)
+local sparse_table = {[1] = "first", [100] = "hundredth"}
+local sparse_json = lljson.slencode(sparse_table)
+-- Encoded as object with !f keys, not as array
+-- Okay, this is a little obnoxious, but we don't really know in which order the
+-- keys would be serialized. Just accept either/or.
+assert(sparse_json == '{"!f1":"first","!f100":"hundredth"}' or sparse_json == '{"!f100":"hundredth","!f1":"first"}')
+local sparse_decoded = lljson.sldecode(sparse_json)
+assert(sparse_decoded[1] == "first")
+assert(sparse_decoded[100] == "hundredth")
+
 -- Tagged keys: vector keys
 local vec_key_table = {[vector(1, 2, 3)] = "vec"}
 local vec_key_json = lljson.slencode(vec_key_table)
