@@ -170,29 +170,89 @@ static const char *json_token_type_name[] = {
     NULL
 };
 
-typedef struct {
-    json_token_type_t ch2token[256];
-    char escape2char[256];  /* Decoding */
+// Static lookup tables for JSON parsing (initialized once)
+static json_token_type_t json_ch2token[256];
+static char json_escape2char[256];
+static bool json_tables_initialized = false;
 
-    /* encode_buf is only allocated and used when
-     * encode_keep_buffer is set */
-    strbuf_t encode_buf;
+static void json_init_lookup_tables()
+{
+    if (json_tables_initialized)
+        return;
 
-    int encode_sparse_convert;
-    int encode_sparse_ratio;
-    int encode_sparse_safe;
-    int encode_max_depth;
-    int encode_invalid_numbers;     /* 2 => Encode as "null" */
-    int encode_number_precision;
-    int encode_keep_buffer;
-    int encode_empty_table_as_object;
-    int encode_escape_forward_slash;
+    /* Tag all characters as an error */
+    for (int i = 0; i < 256; i++)
+        json_ch2token[i] = T_ERROR;
 
-    int decode_invalid_numbers;
-    int decode_max_depth;
-    int decode_array_with_array_mt;
-    int encode_skip_unsupported_value_types;
-} json_config_t;
+    /* Set tokens that require no further processing */
+    json_ch2token['{'] = T_OBJ_BEGIN;
+    json_ch2token['}'] = T_OBJ_END;
+    json_ch2token['['] = T_ARR_BEGIN;
+    json_ch2token[']'] = T_ARR_END;
+    json_ch2token[','] = T_COMMA;
+    json_ch2token[':'] = T_COLON;
+    json_ch2token['\0'] = T_END;
+    json_ch2token[' '] = T_WHITESPACE;
+    json_ch2token['\t'] = T_WHITESPACE;
+    json_ch2token['\n'] = T_WHITESPACE;
+    json_ch2token['\r'] = T_WHITESPACE;
+
+    /* Update characters that require further processing */
+    json_ch2token['f'] = T_UNKNOWN;     /* false? */
+    json_ch2token['i'] = T_UNKNOWN;     /* inf, infinity? */
+    json_ch2token['I'] = T_UNKNOWN;
+    json_ch2token['n'] = T_UNKNOWN;     /* null, nan? */
+    json_ch2token['N'] = T_UNKNOWN;
+    json_ch2token['t'] = T_UNKNOWN;     /* true? */
+    json_ch2token['"'] = T_UNKNOWN;     /* string? */
+    json_ch2token['+'] = T_UNKNOWN;     /* number? */
+    json_ch2token['-'] = T_UNKNOWN;
+    for (int i = 0; i < 10; i++)
+        json_ch2token['0' + i] = T_UNKNOWN;
+
+    /* Lookup table for parsing escape characters */
+    for (int i = 0; i < 256; i++)
+        json_escape2char[i] = 0;          /* String error */
+    json_escape2char['"'] = '"';
+    json_escape2char['\\'] = '\\';
+    json_escape2char['/'] = '/';
+    json_escape2char['b'] = '\b';
+    json_escape2char['t'] = '\t';
+    json_escape2char['n'] = '\n';
+    json_escape2char['f'] = '\f';
+    json_escape2char['r'] = '\r';
+    json_escape2char['u'] = 'u';          /* Unicode parsing required */
+
+    json_tables_initialized = true;
+}
+
+struct json_config_t {
+    int encode_sparse_convert = DEFAULT_SPARSE_CONVERT;
+    int encode_sparse_ratio = DEFAULT_SPARSE_RATIO;
+    int encode_sparse_safe = DEFAULT_SPARSE_SAFE;
+    int encode_max_depth = DEFAULT_ENCODE_MAX_DEPTH;
+    int encode_invalid_numbers = DEFAULT_ENCODE_INVALID_NUMBERS;
+    int encode_number_precision = DEFAULT_ENCODE_NUMBER_PRECISION;
+    int encode_empty_table_as_object = DEFAULT_ENCODE_EMPTY_TABLE_AS_OBJECT;
+    int encode_escape_forward_slash = DEFAULT_ENCODE_ESCAPE_FORWARD_SLASH;
+    int decode_invalid_numbers = DEFAULT_DECODE_INVALID_NUMBERS;
+    int decode_max_depth = DEFAULT_DECODE_MAX_DEPTH;
+    int decode_array_with_array_mt = DEFAULT_DECODE_ARRAY_WITH_ARRAY_MT;
+    int encode_skip_unsupported_value_types = DEFAULT_ENCODE_SKIP_UNSUPPORTED_VALUE_TYPES;
+    strbuf_t encode_buf = {};
+
+    json_config_t() {
+        strbuf_init(&encode_buf, 0, DEFAULT_MAX_SIZE);
+    }
+
+    ~json_config_t() {
+        strbuf_free(&encode_buf);
+    }
+
+    // Non-copyable
+    json_config_t(const json_config_t&) = delete;
+    json_config_t& operator=(const json_config_t&) = delete;
+};
 
 typedef struct {
     const char *data;
@@ -252,6 +312,8 @@ static const char *char2escape[256] = {
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
+
+#if 0 // ServerLua: config functions unused, config is now stack-local RAII
 
 /* ===== CONFIGURATION ===== */
 
@@ -409,7 +471,6 @@ static int json_cfg_encode_keep_buffer(lua_State *l)
         if (cfg->encode_keep_buffer)
             strbuf_init(&cfg->encode_buf, 0, DEFAULT_MAX_SIZE);
         else {
-            // Note that this struct is inline, we don't have to set `->encode_buf` to nullptr.
             strbuf_free(&cfg->encode_buf);
         }
     }
@@ -548,6 +609,8 @@ static void json_create_config(lua_State *l)
     cfg->escape2char['r'] = '\r';
     cfg->escape2char['u'] = 'u';          /* Unicode parsing required */
 }
+
+#endif // ServerLua: config functions unused
 
 /* ===== ENCODING ===== */
 
@@ -1025,32 +1088,18 @@ protected:
 static int json_encode(lua_State *l)
 {
     luau_interruptoncalltail(l);
-    json_config_t *cfg = json_fetch_config(l);
-    strbuf_t local_encode_buf;
-    strbuf_t *encode_buf;
+    json_config_t cfg;
     char *json;
     size_t len;
 
     luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
 
-    DEFER_STRBUF_DESTRUCTION(&local_encode_buf);
-
-    if (!cfg->encode_keep_buffer) {
-        /* Use private buffer */
-        encode_buf = &local_encode_buf;
-        strbuf_init(encode_buf, 0, DEFAULT_MAX_SIZE);
-    } else {
-        /* Reuse existing buffer */
-        encode_buf = &cfg->encode_buf;
-        strbuf_reset(encode_buf);
-    }
-
     try {
-        json_append_data(l, cfg, 0, encode_buf);
+        json_append_data(l, &cfg, 0, &cfg.encode_buf);
     } catch(strbuf_exception &e) {
         luaL_error(l, "Overran encode size limits");
     }
-    json = strbuf_string(encode_buf, &len);
+    json = strbuf_string(&cfg.encode_buf, &len);
 
     lua_pushlstring(l, json, len);
 
@@ -1210,7 +1259,7 @@ static void json_set_token_error(json_token_t *token, json_parse_t *json,
 
 static void json_next_string_token(json_parse_t *json, json_token_t *token)
 {
-    char *escape2char = json->cfg->escape2char;
+    const char *escape2char = json_escape2char;
     char ch;
 
     /* Caller must ensure a string is next */
@@ -1355,7 +1404,7 @@ static void json_next_number_token(json_parse_t *json, json_token_t *token)
  */
 static void json_next_token(json_parse_t *json, json_token_t *token)
 {
-    const json_token_type_t *ch2token = json->cfg->ch2token;
+    const json_token_type_t *ch2token = json_ch2token;
     int ch;
 
     /* Eat whitespace. */
@@ -1602,13 +1651,14 @@ static void json_process_value(lua_State *l, json_parse_t *json,
 static int json_decode(lua_State *l)
 {
     luau_interruptoncalltail(l);
+    json_config_t cfg;
     json_parse_t json;
     json_token_t token;
     size_t json_len;
 
     luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
 
-    json.cfg = json_fetch_config(l);
+    json.cfg = &cfg;
     json.data = luaL_checklstring(l, 1, &json_len);
     json.current_depth = 0;
     json.ptr = json.data;
@@ -1645,6 +1695,7 @@ static int json_decode(lua_State *l)
 
 /* ===== INITIALISATION ===== */
 
+#if 0 // ServerLua: unused
 #if !defined(LUA_VERSION_NUM) || LUA_VERSION_NUM < 502
 /* Compatibility for Lua 5.1 and older LuaJIT.
  *
@@ -1696,29 +1747,19 @@ static int json_protect_conversion(lua_State *l)
      * errors are memory related */
     luaL_error(l, "Memory allocation error in CJSON protected call");
 }
+#endif
 
 /* Return cjson module table */
-static int lua_cjson_new(lua_State *l, bool base_config)
+static int lua_cjson_new(lua_State *l)
 {
     luaL_Reg reg[] = {
         { "encode", json_encode },
         { "decode", json_decode },
-        /* TODO: We don't handle mutable upvalues on globals very well, this would be a serialization nightmare. */
-        /*
-        { "encode_empty_table_as_object", json_cfg_encode_empty_table_as_object },
-        { "decode_array_with_array_mt", json_cfg_decode_array_with_array_mt },
-        { "encode_sparse_array", json_cfg_encode_sparse_array },
-        { "encode_number_precision", json_cfg_encode_number_precision },
-        { "encode_invalid_numbers", json_cfg_encode_invalid_numbers },
-        { "decode_invalid_numbers", json_cfg_decode_invalid_numbers },
-        { "encode_escape_forward_slash", json_cfg_encode_escape_forward_slash },
-        { "encode_skip_unsupported_value_types", json_cfg_encode_skip_unsupported_value_types },
-        { "new", lua_cjson_new },
-        */
         { NULL, NULL }
     };
 
-    /* Initialise number conversions */
+    /* Initialise lookup tables and number conversions */
+    json_init_lookup_tables();
     fpconv_init();
 
     lua_setlightuserdataname(l, LU_TAG_JSON_INTERNAL, "lljson_constant");
@@ -1748,19 +1789,15 @@ static int lua_cjson_new(lua_State *l, bool base_config)
         lua_setreadonly(l, -1, true);
         lua_fixvalue(l, -1);
         lua_rawset(l, LUA_REGISTRYINDEX);
-
-        lua_setuserdatadtor(l, UTAG_JSON_CONFIG, json_destroy_config);
+    } else {
+        lua_pop(l, 1);
     }
 
     /* cjson module table */
     lua_newtable(l);
 
-    /* Register functions with config data as upvalue */
-    json_create_config(l);
-    // ServerLua: It becomes very annoying if this isn't fixed in place
-    if (base_config && LUAU_IS_SL_VM(l))
-        lua_fixvalue(l, -1);
-    compat_luaL_setfuncs(l, reg, 1);
+    /* Register functions */
+    luaL_register(l, NULL, reg);
 
     /* Set cjson.null */
     lua_pushlightuserdatatagged(l, JSON_NULL, LU_TAG_JSON_INTERNAL);
@@ -1789,13 +1826,14 @@ static int lua_cjson_new(lua_State *l, bool base_config)
     return 1;
 }
 
+#if 0 // ServerLua: unused
 /* Return cjson.safe module table */
 static int lua_cjson_safe_new(lua_State *l)
 {
     const char *func[] = { "decode", "encode", NULL };
     int i;
 
-    lua_cjson_new(l, false);
+    lua_cjson_new(l);
 
     /* Fix new() method */
     lua_pushcfunction(l, lua_cjson_safe_new, "new");
@@ -1809,10 +1847,11 @@ static int lua_cjson_safe_new(lua_State *l)
 
     return 1;
 }
+#endif
 
 int luaopen_cjson(lua_State *l)
 {
-    lua_cjson_new(l, true);
+    lua_cjson_new(l);
 
     /* Register a global "cjson" table. */
     lua_pushvalue(l, -1);
@@ -1822,6 +1861,7 @@ int luaopen_cjson(lua_State *l)
     return 1;
 }
 
+#if 0 // ServerLua: unused
 int luaopen_cjson_safe(lua_State *l)
 {
     lua_cjson_safe_new(l);
@@ -1829,6 +1869,7 @@ int luaopen_cjson_safe(lua_State *l)
     /* Return cjson.safe table */
     return 1;
 }
+#endif
 
 /* vi:ai et sw=4 ts=4:
  */
