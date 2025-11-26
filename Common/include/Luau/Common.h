@@ -74,7 +74,11 @@ LUAU_NOINLINE inline int assertCallHandler(const char* expression, const char* f
 } // namespace Luau
 
 #if !defined(NDEBUG) || defined(LUAU_ENABLE_ASSERT)
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+#define LUAU_ASSERT(expr) ((void)(!!(expr) || (Luau::assertCallHandler(#expr, __FILE__, __LINE__, __FUNCTION__), *(volatile int*)0 = 0, 0)))
+#else
 #define LUAU_ASSERT(expr) ((void)(!!(expr) || (Luau::assertCallHandler(#expr, __FILE__, __LINE__, __FUNCTION__) && (LUAU_DEBUGBREAK(), 0))))
+#endif
 #define LUAU_ASSERTENABLED
 #else
 #define LUAU_ASSERT(expr) (void)sizeof(!!(expr))

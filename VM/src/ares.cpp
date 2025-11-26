@@ -85,7 +85,10 @@ static const bool kGeneratePath = false;
 /* The maximum object complexity. This is the number of allowed recursions when
  * persisting or unpersisting an object, for example for nested tables. This is
  * used to avoid segfaults when writing or reading user data. */
-static const lua_Unsigned kMaxComplexity = 10000;
+static const lua_Unsigned kMaxComplexity = 3000;
+
+/* Maximum stack size for deserialized threads (matches ldo.cpp) */
+static const uint32_t kMaxStackSize = (uint32_t)(1024 / sizeof(TValue)) * 1024 * 1024;
 
 /*
 ** ============================================================================
@@ -216,7 +219,7 @@ typedef uint64_t ares_size_t;
   do { \
     if (lua_type((info)->L, (idx)) != (expected_type)) { \
       eris_error((info), "malformed data: expected %s, got %s", \
-                 kTypenames[(expected_type)], kTypenames[lua_type((info)->L, (idx))]); \
+                 lua_typename((info)->L, (expected_type)), lua_typename((info)->L, lua_type((info)->L, (idx)))); \
     } \
   } while(0)
 
@@ -256,6 +259,7 @@ typedef struct UnpersistInfo {
   size_t sizeof_size_t;
   size_t vector_components;
   uint32_t version;
+  std::streamoff stream_size; // -1 if unknown (non-seekable stream)
 } UnpersistInfo;
 
 /* Info shared in persist and unpersist. */
@@ -279,13 +283,6 @@ typedef enum eris_CIKind {
     ERIS_CI_KIND_LUA = 1,
     ERIS_CI_KIND_C = 2,
 } eris_CIKind;
-
-/* Type names, used for error messages. */
-static const char *const kTypenames[] = {
-  "nil", "boolean", "lightuserdata", "number", "string",
-  "table", "function", "userdata", "thread", "proto", "upval",
-  "deadkey", "permanent"
-};
 
 /* Setting names as used in ares.settings / ares_g|set_setting. Also, the
  * addresses of these static variables are used as keys in the registry of Lua
@@ -331,6 +328,7 @@ static const uint32_t kOldMagicBytes = 0x83DE1B08;
 #define LUTAG_ARES_START 150
 #define LUTAG_ARES_BOXED_NIL (LUTAG_ARES_START)
 #define LUTAG_ARES_UPREF (LUTAG_ARES_START + 1)
+#define LUTAG_ARES_PROTO (LUTAG_ARES_START + 2)
 
 /* }======================================================================== */
 
@@ -599,9 +597,17 @@ checkboolean(lua_State *L, int narg) {                       /* ... bool? ... */
  * destructor for the container triggers. */
 #define SAFE_ALLOC_VECTOR(L, b, on, size_type, size_field, e) do { \
 size_type _size_val = READ_VALUE(size_type); \
+VALIDATE_SIZE(_size_val); \
 eris_reallocvector((L), (b), (on), _size_val, e); \
 size_field = _size_val; \
 } while (0)
+
+/* Validates that a size doesn't exceed the total stream size. */
+#define VALIDATE_SIZE(size) do { \
+    if ((size_t)(size) > (size_t)info->u.upi.stream_size) { \
+        eris_error(info, "malformed data: size exceeds stream data"); \
+    } \
+} while(0)
 
 /** ======================================================================== */
 
@@ -876,6 +882,9 @@ static void
 u_pointer(Info *info) {                                                /* ... */
   eris_checkstack(info->L, 1);
   uint8_t tag = READ_VALUE(uint8_t);
+  if (tag >= LUTAG_ARES_START) {
+    eris_error(info, "malformed data: invalid lightuserdata tag");
+  }
   void *ptr = (void*)READ_VALUE(ares_size_t);
   lua_pushlightuserdatatagged(info->L, ptr, tag);    /* ... ludata */
 
@@ -946,6 +955,7 @@ u_string(Info *info) {                                                 /* ... */
   {
     /* TODO Can we avoid this copy somehow? (Without it getting too nasty) */
     const size_t length = (size_t)READ_VALUE(ares_size_t);
+    VALIDATE_SIZE(length);
     char *value = (char*)lua_newuserdata(info->L, length * sizeof(char)); /* ... tmp */
     READ_RAW(value, length);
     lua_pushlstring(info->L, value, length);                   /* ... tmp str */
@@ -974,6 +984,7 @@ u_buffer(Info *info) {                                                /* ... */
   eris_checkstack(info->L, 2);
   {
     const size_t length = (size_t)READ_VALUE(ares_size_t);
+    VALIDATE_SIZE(length);
     char *buf_data = (char *)lua_newbuffer(info->L, length);      /* ... buf */
     READ_RAW(buf_data, length);
   }
@@ -1076,15 +1087,17 @@ static void p_table(Info *info) {                                  /* ... tbl */
     luaA_pushobject(info->L, &key);                              /* ... tbl k */
 
     if (info->generatePath) {
-      if (lua_type(info->L, -1) == LUA_TSTRING) {
-        const char *str_key = lua_tostring(info->L, -1);
-        pushpath(info, ".%s", str_key);
+      int keytype = lua_type(info->L, -1);
+      if (keytype == LUA_TSTRING) {
+        pushpath(info, ".%s", lua_tostring(info->L, -1));
+      }
+      else if (keytype == LUA_TNUMBER) {
+        pushpath(info, "[%g]", lua_tonumber(info->L, -1));
       }
       else {
-        const char *str_key = luaL_tolstring(info->L, -1, nullptr);
-                                                             /* ... tbl k str */
-        pushpath(info, "[%s]", str_key);
-        lua_pop(info->L, 1);                                     /* ... tbl k */
+        // Don't use luaL_tolstring here - it invokes __tostring metamethods
+        // which could crash on malformed userdata
+        pushpath(info, "[%s]", lua_typename(info->L, keytype));
       }
     }
 
@@ -1112,28 +1125,41 @@ static void u_table(Info *info) {                                      /* ... */
   bool safe_env = READ_VALUE(uint8_t);
   int array_size = READ_VALUE(int);
   int hash_size = READ_VALUE(int);
+  if (array_size < 0 || hash_size < 0) {
+    eris_error(info, "malformed data: invalid table size");
+  }
+  // hash_size must be 0 or a power of 2
+  if (hash_size != 0 && (hash_size & (hash_size - 1)) != 0) {
+    eris_error(info, "malformed data: hash size must be power of 2");
+  }
+
+  // Check that the stream has enough data for the claimed table size.
+  // Each key-value pair needs at minimum 2 bytes (type tags).
+  int total_elems = array_size + hash_size;
+  VALIDATE_SIZE(total_elems * 2);
 
   /* Maintain a vector of keys in the order they were parsed so any existing
    * iterators won't be invalidated */
   std::vector<std::pair<TValue, TValue>> ordered_keys;
 
   /* Unpersist all key / value pairs. */
-  int total_elems = array_size + hash_size;
   for (int i=0; i<total_elems; ++i) {
     pushpath(info, "@key");
     unpersist(info);                                       /* ... tbl key/nil */
     poppath(info);
 
     if (info->generatePath) {
-      if (lua_type(info->L, -1) == LUA_TSTRING) {
-        const char *key = lua_tostring(info->L, -1);
-        pushpath(info, ".%s", key);
+      int keytype = lua_type(info->L, -1);
+      if (keytype == LUA_TSTRING) {
+        pushpath(info, ".%s", lua_tostring(info->L, -1));
+      }
+      else if (keytype == LUA_TNUMBER) {
+        pushpath(info, "[%g]", lua_tonumber(info->L, -1));
       }
       else {
-        const char *key = luaL_tolstring(info->L, -1, nullptr);
-                                                           /* ... tbl key str */
-        pushpath(info, "[%s]", key);
-        lua_pop(info->L, 1);                                   /* ... tbl key */
+        // Don't use luaL_tolstring here - it invokes __tostring metamethods
+        // which could crash on malformed userdata
+        pushpath(info, "[%s]", lua_typename(info->L, keytype));
       }
     }
 
@@ -1153,16 +1179,13 @@ static void u_table(Info *info) {                                      /* ... */
   // Actually put things into the table
   LuaTable *table = hvalue(luaA_toobject(info->L, -1));
 
-  // Resize the array and hash portions so things will end up in the same place as the
-  // original Table
+  // Resize the array and hash portions to hint at expected sizes.
+  // Note: these are for pre-allocation only and the actual sizes may differ
+  // (adjustasize can increase array size, hash uses power-of-2 sizing).
   // Array resize has to happen first because it'll force the hash to be 0-sized if it
   // notices nothing is in it.
   luaH_resizearray(info->L, table, array_size);
   luaH_resizehash(info->L, table, hash_size);
-
-  // Make sure the resize happened correctly
-  eris_assert(array_size == table->sizearray);
-  eris_assert(hash_size == sizenode(table));
 
   // push a table to (hopefully not) dedupe keys and store their expected iter index
   lua_newtable(info->L); /* tbl pos_tbl */
@@ -1197,13 +1220,7 @@ static void u_table(Info *info) {                                      /* ... */
 
   eris_assert(top + 1 == lua_gettop(info->L));
 
-  // If array has changed size then things are badly broken and we can't maintain
-  // iterators
-  eris_assert(array_size == table->sizearray);
-  // hash size may actually have grown due to bucketing differences, but it
-  // better not have shrunk.
   int actual_hash_size = sizenode(table);
-  eris_assert(hash_size <= actual_hash_size);
 
   // If our hashtable ends up with fewer entries than it originally had, then our
   // table somehow shrank during deserialization (possibly due to a perms table issue.)
@@ -1355,6 +1372,7 @@ static void u_userdata(Info *info) {                                   /* ... */
       case UTAG_PROXY:
       {
           size_t size = READ_VALUE(ares_size_t);
+          VALIDATE_SIZE(size);
           void* value = lua_newuserdatatagged(info->L, size, utag);
           /* ... udata */
           READ_RAW(value, size);
@@ -1364,6 +1382,10 @@ static void u_userdata(Info *info) {                                   /* ... */
       case UTAG_QUATERNION:
       {
           size_t size = READ_VALUE(ares_size_t);
+          VALIDATE_SIZE(size);
+          if (size != sizeof(float) * 4) {
+            eris_error(info, "malformed data: invalid quaternion size");
+          }
           void* value = lua_newuserdatataggedwithmetatable(info->L, size, utag);
                                                                  /* ... udata */
           READ_RAW(value, size);
@@ -1491,7 +1513,8 @@ static void u_userdata(Info *info) {                                   /* ... */
 static void
 p_proto(Info *info) {                                            /* ... proto */
   int i;
-  const Proto *p = (Proto*)lua_touserdata(info->L, -1);
+  const Proto *p = (Proto*)lua_tolightuserdatatagged(info->L, -1, LUTAG_ARES_PROTO);
+  eris_assert(p);
   eris_checkstack(info->L, 3);
 
   info->anyProtoNative |= p->execdata != nullptr;
@@ -1531,7 +1554,7 @@ p_proto(Info *info) {                                            /* ... proto */
   pushpath(info, ".protos");
   for (i = 0; i < p->sizep; ++i) {
     pushpath(info, "[%d]", i);
-    lua_pushlightuserdata(info->L, p->p[i]);           /* ... lcl proto proto */
+    lua_pushlightuserdatatagged(info->L, p->p[i], LUTAG_ARES_PROTO); /* ... lcl proto proto */
     lua_pushvalue(info->L, -1);                  /* ... lcl proto proto proto */
     persist_keyed(info, LUA_TPROTO);                   /* ... lcl proto proto */
     lua_pop(info->L, 1);                                     /* ... lcl proto */
@@ -1605,14 +1628,21 @@ p_proto(Info *info) {                                            /* ... proto */
 static void
 u_proto(Info *info) {                                            /* ... proto */
   int i, n;
-  Proto *p = (Proto*)lua_touserdata(info->L, -1);
-  eris_assert(p);
+  Proto *p = (Proto*)lua_tolightuserdatatagged(info->L, -1, LUTAG_ARES_PROTO);
+  if (!p) {
+    eris_error(info, "malformed data: expected proto pointer");
+  }
+  // Ensure this is a fresh, uninitialized proto (prevents self-referential deserialization)
+  if (p->bytecodeid != 0) {
+    eris_error(info, "malformed data: proto already initialized");
+  }
 
   eris_checkstack(info->L, 2);
 
   /* Preregister proto for handling of cycles (probably impossible, but
    * maybe via the constants of the proto... not worth taking the risk). */
   registerobject(info);
+  p->bytecodeid = -1;  // Mark as "being deserialized"
 
   /* Read function source code. */
   unpersist(info);                                           /* ... proto str */
@@ -1620,7 +1650,7 @@ u_proto(Info *info) {                                            /* ... proto */
   lua_pop(info->L, 1);                                           /* ... proto */
 
   /* Read general information. */
-  p->bytecodeid = READ_VALUE(int);
+  int real_bytecodeid = READ_VALUE(int);
 
   p->maxstacksize = READ_VALUE(uint8_t);
   p->flags = READ_VALUE(uint8_t);
@@ -1664,9 +1694,12 @@ u_proto(Info *info) {                                            /* ... proto */
     pushpath(info, "[%d]", i);
     cp = p->p[i] = eris_newproto(info->L);
     luaC_objbarrier(info->L, p, cp);
-    lua_pushlightuserdata(info->L, (void*)p->p[i]);       /* ... proto nproto */
+    lua_pushlightuserdatatagged(info->L, (void*)p->p[i], LUTAG_ARES_PROTO); /* ... proto nproto */
     unpersist(info);                        /* ... proto nproto nproto/oproto */
-    cp = (Proto*)lua_touserdata(info->L, -1);
+    cp = (Proto*)lua_tolightuserdatatagged(info->L, -1, LUTAG_ARES_PROTO);
+    if (!cp) {
+      eris_error(info, "malformed data: expected proto pointer");
+    }
     if (cp != p->p[i]) {                           /* ... proto nproto oproto */
       /* Just overwrite it, GC will clean this up. */
       p->p[i] = cp;
@@ -1742,6 +1775,9 @@ u_proto(Info *info) {                                            /* ... proto */
       p->yieldpoints[i] = READ_VALUE(int32_t);
   }
 
+  // Assign bytecodeid at the end after all dangerous unpersist calls
+  p->bytecodeid = real_bytecodeid;
+
   lua_pushvalue(info->L, -1);                              /* ... proto proto */
 
   eris_assert(lua_type(info->L, -1) == LUA_TLIGHTUSERDATA);
@@ -1756,7 +1792,7 @@ p_upval(Info *info) {                                              /* ... obj */
 
 static void
 u_upval(Info *info) {                                                  /* ... */
-  eris_checkstack(info->L, 2);
+  eris_checkstack(info->L, 3);
 
   /* Create the table we use to store the stack location to the upval (1+2),
    * the value of the upval (3) and any references to the upvalue's value (4+).
@@ -1868,7 +1904,7 @@ p_closure(Info *info) {                              /* perms reftbl ... func */
      * p_proto so that it can access it and register it in the ref table. */
     pushpath(info, ".proto");
     info->anyProtoNative = false;
-    lua_pushlightuserdata(info->L, cl->l.p);  /* perms reftbl ... lcl proto */
+    lua_pushlightuserdatatagged(info->L, cl->l.p, LUTAG_ARES_PROTO); /* perms reftbl ... lcl proto */
     lua_pushvalue(info->L, -1);         /* perms reftbl ... lcl proto proto */
     persist_keyed(info, LUA_TPROTO);          /* perms reftbl ... lcl proto */
     lua_pop(info->L, 1);                            /* perms reftbl ... lcl */
@@ -1924,7 +1960,7 @@ u_closure(Info *info) {                                                /* ... */
     /* Read the C function from the permanents table. */
     unpersist(info);                                             /* ... cfunc */
     if (!lua_iscfunction(info->L, -1)) {
-      eris_error(info, ERIS_ERR_UCFUNC, kTypenames[lua_type(info->L, -1)]);
+      eris_error(info, ERIS_ERR_UCFUNC, lua_typename(info->L, lua_type(info->L, -1)));
     }
     cl = clvalue(luaA_toobject(info->L, -1));
     if (!cl->c.f) {
@@ -1979,6 +2015,7 @@ u_closure(Info *info) {                                                /* ... */
     pushpath(info, ".fenv");
     /* Read env dict, this is generally the proxy table for globals */
     unpersist(info);                                            /* ... lcl gt */
+    eris_checktype(info, -1, LUA_TTABLE);
     // Replace the placeholder env we had on the closure
     lua_setfenv(info->L, -2);                                      /* ... lcl */
     poppath(info);
@@ -1989,13 +2026,15 @@ u_closure(Info *info) {                                                /* ... */
      * object, so we don't have to worry about it getting GCed. */
     pushpath(info, ".proto");
     /* Push the proto into which to unpersist as a parameter to u_proto. */
-    lua_pushlightuserdata(info->L, cl->l.p);                /* ... lcl nproto */
+    lua_pushlightuserdatatagged(info->L, cl->l.p, LUTAG_ARES_PROTO); /* ... lcl nproto */
     unpersist(info);                          /* ... lcl nproto nproto/oproto */
-    eris_checktype(info, -1, LUA_TLIGHTUSERDATA);
     /* The proto we have now may differ, if we already unpersisted it before.
      * In that case we now have a reference to the originally unpersisted
      * proto so we'll use that. */
-    p = (Proto*)lua_touserdata(info->L, -1);
+    p = (Proto*)lua_tolightuserdatatagged(info->L, -1, LUTAG_ARES_PROTO);
+    if (!p) {
+      eris_error(info, "malformed data: expected proto pointer");
+    }
     if (p != cl->l.p) {                              /* ... lcl nproto oproto */
       /* Just overwrite the old one, GC will clean this up. */
       cl->l.p = p;
@@ -2054,7 +2093,7 @@ u_closure(Info *info) {                                                /* ... */
       }
 
       if (ttype(upval_cont) != LUA_TUPVAL) {
-        eris_error(info, "malformed data: expected upvalue, got %s", kTypenames[ttype(upval_cont)]);
+        eris_error(info, "malformed data: expected upvalue, got %s", lua_typename(info->L, ttype(upval_cont)));
       }
       UpVal *uv = &upval_cont->value.gc->uv;
       luaC_objbarrier(info->L, cl, uv);
@@ -2341,11 +2380,17 @@ u_thread(Info *info) {                                                 /* ... */
   // its sandboxed-ness if applicable) and shove it onto `thread->gt`
   pushpath(info, ".gt");
   unpersist(info);                                           /* ... thread gt */
+  eris_checktype(info, -1, LUA_TTABLE);
   lua_setfenv(info->L, -2);                                     /* ... thread */
   poppath(info);
 
   /* Unpersist the stack. Read size first and adjust accordingly. */
-  eris_reallocstack(thread, READ_VALUE(int), true);
+  uint32_t stack_size = READ_VALUE(uint32_t);
+  if (stack_size > kMaxStackSize) {
+    eris_error(info, "malformed data: stack size exceeds limit");
+  }
+  VALIDATE_SIZE(stack_size);
+  eris_reallocstack(thread, (int)stack_size, true);
   stack = thread->stack; /* After the realloc in case the address changes. */
   thread->top = thread->stack + (size_t)READ_VALUE(ares_size_t);
   validate(thread->top, thread->stack_last);
@@ -2387,11 +2432,16 @@ u_thread(Info *info) {                                                 /* ... */
   pushpath(info, ".callinfo");
   UNLOCK(thread);
 
-  int num_cis = READ_VALUE(int);
-  luaD_reallocCI(thread, num_cis);
+  uint32_t num_cis = READ_VALUE(uint32_t);
+  if (num_cis < 1 || num_cis > LUAI_MAXCALLS) {
+    eris_error(info, "malformed data: invalid call info count");
+  }
+  // conservative: each CI needs at least a few bytes
+  VALIDATE_SIZE(num_cis * 8);
+  luaD_reallocCI(thread, (int)num_cis);
   thread->ci = thread->base_ci;
   level = 0;
-  for (int ci_idx=0; ci_idx<num_cis; ++ci_idx) {
+  for (uint32_t ci_idx=0; ci_idx<num_cis; ++ci_idx) {
     // Need to add a callinfo if this isn't the first one
     if (ci_idx)
         incr_ci(thread);
@@ -2412,6 +2462,18 @@ u_thread(Info *info) {                                                 /* ... */
     UNLOCK(thread);
 
     auto ci_kind = (eris_CIKind)READ_VALUE(uint8_t);
+    // Validate ci_kind matches what's actually in ci->func
+    eris_CIKind actual_kind;
+    if (ttisnil(thread->ci->func)) {
+      actual_kind = ERIS_CI_KIND_NONE;
+    } else if (!ttisfunction(thread->ci->func)) {
+      eris_error(info, "malformed data: callinfo func must be nil or function");
+    } else {
+      actual_kind = clvalue(thread->ci->func)->isC ? ERIS_CI_KIND_C : ERIS_CI_KIND_LUA;
+    }
+    if (ci_kind != actual_kind) {
+      eris_error(info, "malformed data: callinfo kind mismatch");
+    }
     if (ci_kind == ERIS_CI_KIND_LUA) {
       Closure *lcl = eris_ci_func(thread->ci);
       int yield_point = READ_VALUE(int);
@@ -2445,11 +2507,6 @@ u_thread(Info *info) {                                                 /* ... */
         eris_error(info, ERIS_ERR_THREADPC);
       }
     } else if (ci_kind == ERIS_CI_KIND_C) {
-      // ci->func is a StkIdx, so loading the stack should have loaded this.
-      if (!ttisfunction(thread->ci->func)) {
-        eris_error(info, "malformed data: expected function in call info");
-      }
-
       // This function _should_ already be on the stack, let's make sure.
       LOCK(thread);
       unpersist(info);                                  /* ... thread func? */
@@ -2714,6 +2771,9 @@ persist(Info *info) {                                 /* perms reftbl ... obj */
 static void
 u_permanent(Info *info) {                                 /* perms reftbl ... */
   const int type = READ_VALUE(uint8_t);
+  if (type >= LUA_TDEADKEY) {
+    eris_error(info, "malformed data: invalid type %d", type);
+  }
   /* Reserve reference to avoid the key going first. */
   const int reference = allocate_ref_idx(info);
   eris_checkstack(info->L, 1);
@@ -2728,8 +2788,8 @@ u_permanent(Info *info) {                                 /* perms reftbl ... */
   else if (lua_type(info->L, -1) != type) {            /* perms reftbl ... :( */
     /* For the same reason that we cannot allow nil we must also require the
      * unpersisted value to be of the correct type. */
-    const char *want = kTypenames[type];
-    const char *have = kTypenames[lua_type(info->L, -1)];
+    const char *want = lua_typename(info->L, type);
+    const char *have = lua_typename(info->L, lua_type(info->L, -1));
     eris_error(info, ERIS_ERR_SPER_UPERM, want, have);
   }                                                   /* perms reftbl ... obj */
   /* Create the entry in the reftable. */
@@ -3297,6 +3357,19 @@ unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
   info.persisting = false;
   info.u.upi.reader = reader;
 
+  // Determine stream size for validation, -1 if non-seekable
+  std::streampos cur = reader->tellg();
+  if (cur == std::streampos(-1)) {
+    eris_error(&info, "cannot deserialize from non-seekable stream");
+  }
+  reader->seekg(0, std::ios::end);
+  std::streampos end = reader->tellg();
+  if (end == std::streampos(-1)) {
+    eris_error(&info, "cannot determine stream size");
+  }
+  reader->seekg(cur);
+  info.u.upi.stream_size = end;
+
   eris_checkstack(L, 6);
 
   if (get_setting(L, (void*)&kSettingMaxComplexity)) {
@@ -3628,7 +3701,7 @@ eris_make_forkserver(lua_State *L) {
   lua_newtable(Lforker);                              /* Lforker: state perms */
   for (auto *proto : protos) {
     if (!proto) continue;
-    lua_pushlightuserdata(Lforker, proto);      /* Lforker: state perms proto */
+    lua_pushlightuserdatatagged(Lforker, proto, LUTAG_ARES_PROTO); /* Lforker: state perms proto */
     lua_pushfstring(Lforker, "proto/%s/%d", getstr(proto->source), proto->bytecodeid);
                                        /* Lforker: state perms proto proto_id */
     lua_rawset(Lforker, -3);                          /* Lforker: state perms */
@@ -3670,7 +3743,7 @@ eris_make_forkserver(lua_State *L) {
     if (!proto) continue;
     lua_pushfstring(Lforker, "proto/%s/%d", getstr(proto->source), proto->bytecodeid);
                                             /* Lforker: state uperms proto_id */
-    lua_pushlightuserdata(Lforker, proto);
+    lua_pushlightuserdatatagged(Lforker, proto, LUTAG_ARES_PROTO);
                                       /* Lforker: state uperms proto_id proto */
     lua_rawset(Lforker, -3);                         /* Lforker: state uperms */
   }
@@ -3723,7 +3796,15 @@ eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat) {
   lua_setmemcat(Lforker, 0);
 
   if (status == LUA_OK) {
-    eris_assert(lua_isthread(Lforker, -1));
+    eris_assert(lua_gettop(Lforker) == start_top + 2);
+    if (!lua_isthread(Lforker, -1)) {
+      // Deserialized but got wrong type - runtime error
+      lua_pop(Lforker, 1);  // pop the non-thread object
+      lua_pushstring(Lforker, "deserialized object is not a thread");
+      lua_remove(Lforker, -2);  // remove uperms table
+      lua_remove(Lforker, -2);  // remove state string
+      return nullptr;
+    }
     eris_assert(lua_getmemcat(lua_tothread(Lforker, -1)) == memcat);
   } else {
     // ServerLua: Make sure the error message is included (error types with messages on stack)

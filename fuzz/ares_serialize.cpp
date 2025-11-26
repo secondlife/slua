@@ -10,63 +10,96 @@
 #include <sstream>
 #include <vector>
 
-using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
 
+static lua_State* GL = nullptr;
+static lua_State* Lforker = nullptr;
+static lua_SLRuntimeState lsl_state;
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size)
+static const std::string EXAMPLE_SCRIPT = R"(
+function foo()
+    return bar()
+end
+
+local function baz()
+    return "yeah"
+end
+
+-- Won't run, doesn't matter.
+print(baz() .. foo())
+)";
+
+static void initLuaState()
 {
-    std::string source((const char*)Data, Size);
+    if (GL)
+        return;
 
-    lua_State *initialLuaState = luaL_newstate();
-    StateRef globalState(initialLuaState, lua_close);
-    lua_State* L = globalState.get();
+    GL = luaL_newstate();
+    luaL_openlibs(GL);
 
-    luaL_openlibs(L);
+    // Tag as SL VM (required for UUID/quaternion support)
+    lsl_state.slIdentifier = LUA_SL_IDENTIFIER;
+    lua_setthreaddata(GL, &lsl_state);
+    // propagate thread data
+    lua_callbacks(GL)->userthread = [](lua_State *LP, lua_State *L) {
+        if (!LP)
+            return;
+        lua_setthreaddata(L, lua_getthreaddata(LP));
+    };
 
-    // Register a few global functions for conformance tests
-    std::vector<luaL_Reg> funcs = {};
-    // "null" terminate the list of functions to register
-    funcs.push_back({nullptr, nullptr});
-
-    lua_pushvalue(L, LUA_GLOBALSINDEX);
-    luaL_register(L, nullptr, funcs.data());
-    lua_pop(L, 1);
-
-    // In some configurations we have a larger C stack consumption which trips some conformance tests
-#if defined(LUAU_ENABLE_ASAN) || defined(_NOOPT) || defined(_DEBUG)
-    lua_pushboolean(L, true);
-    lua_setglobal(L, "limitedstack");
-#endif
+    // Register SL types (UUID metatables, quaternion metatables, weak tables)
+    luaopen_sl(GL, true);
 
     // Protect core libraries and metatables from modification
-    luaL_sandbox(L);
+    luaL_sandbox(GL);
+    lua_fixallcollectable(GL);
+    eris_register_perms(GL, true);
+    eris_register_perms(GL, false);
 
     // Create a new writable global table for current thread
+    lua_State *L = lua_newthread(GL);
     luaL_sandboxthread(L);
 
-    std::string chunkname = "=" + std::string("fuzz");
-
+    // We need to load some bytecode in so we have a thread to fork
     lua_CompileOptions opts = {};
     opts.optimizationLevel = 1;
     opts.debugLevel = 1;
 
     size_t bytecodeSize = 0;
-    char * bytecode = luau_compile(source.data(), source.size(), &opts, &bytecodeSize);
-    int result = luau_load(L, chunkname.c_str(), bytecode, bytecodeSize, 0);
+    char * bytecode = luau_compile(EXAMPLE_SCRIPT.c_str(), EXAMPLE_SCRIPT.length(), &opts, &bytecodeSize);
+    int result = luau_load(L, "=fuzzing", bytecode, bytecodeSize, 0);
     free(bytecode);
+    LUAU_ASSERT(result == 0);
 
-    int status = (result == 0) ? lua_resume(L, nullptr, 0) : LUA_ERRSYNTAX;
+    Lforker = eris_make_forkserver(L);
+    LUAU_ASSERT(Lforker);
+    // Don't need the original thread on the main stack anymore
+    lua_remove(GL, -2);
+}
 
-    if (status == 0)
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size)
+{
+    initLuaState();
+    int forker_top = lua_gettop(Lforker);
+    int base_top = lua_gettop(GL);
+
+    // Push the state data onto the forker state
+    lua_pushlstring(Lforker, (const char *)Data, Size);
+    // Have the forker create a state with the deserialized state
+    if (eris_fork_thread(Lforker, false, 2) != nullptr)
     {
-        // must have returned exactly 1 value
-        if (lua_gettop(L) != 1)
-            return 1;
-        printf("YAY\n");
-        std::ostringstream foo;
-        lua_newtable(L);
-        lua_insert(L, -2);
-        eris_dump(L, &foo);
+        // The new thread should be on the end of the base stat's stack.
+        luaL_checktype(GL, -1, LUA_TTHREAD);
+        lua_pop(GL, 1);
     }
+    else
+    {
+        luaL_checktype(Lforker, -1, LUA_TSTRING);
+        lua_pop(Lforker, 1);
+    }
+
+    LUAU_ASSERT(lua_gettop(GL) == base_top);
+    LUAU_ASSERT(lua_gettop(Lforker) == forker_top);
+    lua_gc(GL, LUA_GCCOLLECT, 0);
+
     return 0;
 }
