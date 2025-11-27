@@ -547,6 +547,9 @@ static void populateperms(lua_State *L, bool forUnpersist)
 #if defined(eris_c) || defined(lstrlib_c)
     eris_persist_static(strlib, gmatch_aux)
 #endif
+#if defined(eris_c) || defined(lutf8lib_c)
+    eris_persist_static(utf8lib, iter_aux)
+#endif
 #if defined(eris_c) || defined(lbaselib_c)
     // these aren't continuations, these are upvalues that may end up on
     // the call stack in their own right, but can't be called directly!
