@@ -2,10 +2,12 @@
 #include "lua.h"
 #include "lualib.h"
 #include "luacode.h"
+#include "llsl.h"
 
 #include "Luau/Common.h"
 #include "Luau/Frontend.h"
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/LSLBuiltins.h"
 
 #include <string>
 #include <memory>
@@ -62,17 +64,48 @@ struct DemoConfigResolver : Luau::ConfigResolver
     Luau::Config defaultConfig;
 };
 
+// SL mode state
+static lua_SLRuntimeState sl_state;
+
+static void userthread_callback(lua_State* LP, lua_State* L)
+{
+    if (LP == nullptr)
+        return;
+    lua_setthreaddata(L, lua_getthreaddata(LP));
+}
+
 static void setupState(lua_State* L)
 {
     luaL_openlibs(L);
 
+    // SL mode setup
+    lua_setthreaddata(L, &sl_state);
+    sl_state.slIdentifier = LUA_SL_IDENTIFIER;
+    lua_callbacks(L)->userthread = userthread_callback;
+
+    // SL libraries
+    luaopen_sl(L, true);
+    luaopen_ll(L, true);
+    lua_pop(L, 1);
+
+    // JSON and Base64
+    luaopen_cjson(L);
+    lua_pop(L, 1);
+    luaopen_llbase64(L);
+    lua_pop(L, 1);
+
+    // Set SL constants on _G
+    luaSL_set_constant_globals(L);
+
     luaL_sandbox(L);
+    lua_fixallcollectable(L);
 }
 
 static std::string runCode(lua_State* L, const std::string& source)
 {
     size_t bytecodeSize = 0;
     char* bytecode = luau_compile(source.data(), source.length(), nullptr, &bytecodeSize);
+    lua_setmemcat(L, 0);
     int result = luau_load(L, "=stdin", bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -87,7 +120,9 @@ static std::string runCode(lua_State* L, const std::string& source)
         return error;
     }
 
+    lua_setmemcat(L, 2);
     lua_State* T = lua_newthread(L);
+    lua_setmemcat(L, 0);
 
     lua_pushvalue(L, -2);
     lua_remove(L, -3);
@@ -189,6 +224,14 @@ extern "C" const char* executeScript(const char* source)
         if (strncmp(flag->name, "Luau", 4) == 0)
             flag->value = true;
 
+    // Initialize SL builtins once from embedded file
+    static bool builtins_initialized = false;
+    if (!builtins_initialized)
+    {
+        luauSL_init_global_builtins("/builtins.txt");
+        builtins_initialized = true;
+    }
+
     // create new state
     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -196,8 +239,18 @@ extern "C" const char* executeScript(const char* source)
     // setup state
     setupState(L);
 
-    // sandbox thread
+    // sandbox thread first (like REPL does)
     luaL_sandboxthread(L);
+
+    // Event and timer managers (after sandbox)
+    luaSL_createeventmanager(L);
+    lua_ref(L, -1);
+    lua_pushvalue(L, -1);  // Duplicate for timer manager (it expects LLEvents on stack)
+    lua_setglobal(L, "LLEvents");
+
+    luaSL_createtimermanager(L);
+    lua_ref(L, -1);
+    lua_setglobal(L, "LLTimers");
 
     // static string for caching result (prevents dangling ptr on function exit)
     static std::string result;

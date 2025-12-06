@@ -220,6 +220,36 @@ jobs:
 #        files: ./coverage.info
 #        token: ${{ secrets.CODECOV_TOKEN }}
 
+  verify-builtins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: secondlife/lsl-definitions
+          path: lsl-definitions
+
+      - name: Install dependencies
+        run: pip install pyyaml llsd
+
+      - name: Generate builtins.txt
+        run: |
+          cd lsl-definitions
+          python gen_definitions.py gen_builtins_txt lsl_definitions.yaml builtins.txt
+
+      - name: Verify builtins.txt matches
+        run: |
+          if ! diff -q builtins.txt lsl-definitions/builtins.txt; then
+            echo "ERROR: builtins.txt is out of sync with secondlife/lsl-definitions"
+            diff builtins.txt lsl-definitions/builtins.txt || true
+            echo ""
+            echo "To fix: clone secondlife/lsl-definitions and run:"
+            echo "  python gen_definitions.py gen_builtins_txt lsl_definitions.yaml /path/to/slua/builtins.txt"
+            exit 1
+          fi
+          echo "builtins.txt is up to date"
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -238,3 +268,5 @@ jobs:
           source emsdk/emsdk_env.sh
           emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
           make -j2 Luau.Web
+      - name: smoke test
+        run: node CLI/test/Web.test.js Luau.Web.js

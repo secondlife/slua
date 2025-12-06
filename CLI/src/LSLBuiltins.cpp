@@ -63,16 +63,16 @@ void luauSL_init_global_builtins(const char* builtins_file)
     sSLConstantStrings.clear();
 
     LUAU_ASSERT(builtins_file != nullptr);
-    std::ifstream fp(builtins_file, std::ios::binary);
 
-    if (!fp.good())
+    std::ifstream file_stream(builtins_file);
+    if (!file_stream)
     {
-        fprintf(stderr, "couldn't open %s", builtins_file);
+        fprintf(stderr, "couldn't open %s\n", builtins_file);
         exit(EXIT_FAILURE);
     }
 
     std::string line;
-    while (std::getline(fp, line))
+    while (std::getline(file_stream, line))
     {
         // ignore comment and blank lines
         if (!line.rfind("//", 0) || !line.rfind('\r', 0) || !line.rfind('\n', 0) || line.empty())
