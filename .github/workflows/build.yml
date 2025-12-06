@@ -220,21 +220,21 @@ jobs:
 #        files: ./coverage.info
 #        token: ${{ secrets.CODECOV_TOKEN }}
 
-#  web:
-#    runs-on: ubuntu-latest
-#    steps:
-#      - uses: actions/checkout@v1
-#      - uses: actions/checkout@v2
-#        with:
-#          repository: emscripten-core/emsdk
-#          path: emsdk
-#      - name: emsdk install
-#        run: |
-#          cd emsdk
-#          ./emsdk install latest
-#          ./emsdk activate latest
-#      - name: make
-#        run: |
-#          source emsdk/emsdk_env.sh
-#          emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
-#          make -j2 Luau.Web
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions/checkout@v2
+        with:
+          repository: emscripten-core/emsdk
+          path: emsdk
+      - name: emsdk install
+        run: |
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+      - name: make
+        run: |
+          source emsdk/emsdk_env.sh
+          emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j2 Luau.Web
