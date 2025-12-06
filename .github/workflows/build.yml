@@ -236,7 +236,7 @@ jobs:
       - name: Generate builtins.txt
         run: |
           cd lsl-definitions
-          python gen_definitions.py gen_builtins_txt lsl_definitions.yaml builtins.txt
+          python gen_definitions.py lsl_definitions.yaml gen_builtins_txt builtins.txt
 
       - name: Verify builtins.txt matches
         run: |
@@ -245,7 +245,7 @@ jobs:
             diff builtins.txt lsl-definitions/builtins.txt || true
             echo ""
             echo "To fix: clone secondlife/lsl-definitions and run:"
-            echo "  python gen_definitions.py gen_builtins_txt lsl_definitions.yaml /path/to/slua/builtins.txt"
+            echo "  python gen_definitions.py lsl_definitions.yaml gen_builtins_txt /path/to/slua/builtins.txt"
             exit 1
           fi
           echo "builtins.txt is up to date"
@@ -269,4 +269,4 @@ jobs:
           emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
           make -j2 Luau.Web
       - name: smoke test
-        run: node CLI/test/Web.test.js Luau.Web.js
+        run: node CLI/test/Web.test.js ./Luau.Web.js
