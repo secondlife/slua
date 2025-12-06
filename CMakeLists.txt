@@ -302,7 +302,7 @@ endif()
 
 if(LUAU_BUILD_WEB)
     target_compile_options(Luau.Web PRIVATE ${LUAU_OPTIONS})
-    target_link_libraries(Luau.Web PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
+    target_link_libraries(Luau.Web PRIVATE Luau.Compiler Luau.VM Luau.Analysis Luau.CLI.lib)
 
     # declare exported functions to emscripten
     target_link_options(Luau.Web PRIVATE -sEXPORTED_FUNCTIONS=["_executeScript","_checkScript"] -sEXPORTED_RUNTIME_METHODS=["ccall","cwrap"])
@@ -312,6 +312,9 @@ if(LUAU_BUILD_WEB)
 
     # the output is a single .js file with an embedded wasm blob
     target_link_options(Luau.Web PRIVATE -sSINGLE_FILE=1)
+
+    # Embed builtins.txt into the wasm virtual filesystem for SL constants
+    target_link_options(Luau.Web PRIVATE --embed-file ${CMAKE_SOURCE_DIR}/builtins.txt@/builtins.txt)
 endif()
 
 # validate dependencies for internal libraries
