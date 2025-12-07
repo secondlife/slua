@@ -57,6 +57,7 @@ constexpr int MaxTraversalLimit = 50;
 static bool codegen = false;
 static bool lsl = false;
 static bool sl = false;
+static bool builtinsLoaded = false;
 static lua_SLRuntimeState lsl_state;
 
 static int program_argc = 0;
@@ -864,7 +865,7 @@ int replMain(int argc, char** argv)
         else if (strncmp(argv[i], "--sl-builtins=", 14) == 0)
         {
             luauSL_init_global_builtins(argv[i] + 14);
-            globalOptions.slLibraries = 1;
+            builtinsLoaded = true;
         }
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
@@ -888,6 +889,10 @@ int replMain(int argc, char** argv)
         fprintf(stderr, "can only specify one of --lsl or --sl\n");
         return 1;
     }
+
+    // Initialize embedded builtins for SL/LSL mode (unless --sl-builtins= was used)
+    if ((lsl || sl) && !builtinsLoaded)
+        luauSL_init_global_builtins(nullptr);
 
     program_argc = argc - program_args;
     program_argv = &argv[program_args];

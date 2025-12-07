@@ -96,8 +96,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
       - name: Autobuild install
-        env:
-          AUTOBUILD_GITHUB_TOKEN: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
         run: |
           autobuild install -A64
       - name: cmake configure

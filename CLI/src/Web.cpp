@@ -224,11 +224,11 @@ extern "C" const char* executeScript(const char* source)
         if (strncmp(flag->name, "Luau", 4) == 0)
             flag->value = true;
 
-    // Initialize SL builtins once from embedded file
+    // Initialize SL builtins once from embedded data
     static bool builtins_initialized = false;
     if (!builtins_initialized)
     {
-        luauSL_init_global_builtins("/builtins.txt");
+        luauSL_init_global_builtins(nullptr);
         builtins_initialized = true;
     }
 

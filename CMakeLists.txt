@@ -34,6 +34,15 @@ if (LUAU_USE_TAILSLIDE)
 endif()
 
 project(Luau LANGUAGES CXX C)
+
+# Embed builtins.txt into a header file at configure time
+file(READ "${CMAKE_SOURCE_DIR}/builtins.txt" BUILTINS_CONTENT)
+configure_file(
+    "${CMAKE_SOURCE_DIR}/CLI/src/builtins_embedded.h.in"
+    "${CMAKE_BINARY_DIR}/builtins_embedded.h"
+    @ONLY
+)
+
 add_library(Luau.Common STATIC)
 add_library(Luau.CLI.lib STATIC)
 add_library(Luau.Ast STATIC)
@@ -83,6 +92,7 @@ target_include_directories(Luau.Common PUBLIC Common/include)
 
 target_compile_features(Luau.CLI.lib PUBLIC cxx_std_17)
 target_include_directories(Luau.CLI.lib PUBLIC CLI/include)
+target_include_directories(Luau.CLI.lib PRIVATE ${CMAKE_BINARY_DIR})  # For builtins_embedded.h
 target_link_libraries(Luau.CLI.lib PRIVATE Luau.Common Luau.Config)
 
 target_compile_features(Luau.Ast PUBLIC cxx_std_17)
@@ -312,9 +322,6 @@ if(LUAU_BUILD_WEB)
 
     # the output is a single .js file with an embedded wasm blob
     target_link_options(Luau.Web PRIVATE -sSINGLE_FILE=1)
-
-    # Embed builtins.txt into the wasm virtual filesystem for SL constants
-    target_link_options(Luau.Web PRIVATE --embed-file ${CMAKE_SOURCE_DIR}/builtins.txt@/builtins.txt)
 endif()
 
 # validate dependencies for internal libraries

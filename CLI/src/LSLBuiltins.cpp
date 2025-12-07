@@ -11,6 +11,8 @@
 #include "llsl.h"
 #include "luacode.h"
 
+#include "builtins_embedded.h"
+
 static const std::unordered_map<std::string, LSLIType> sTypeNameToType = {
     {"void", LSLIType::LST_NULL},
     {"integer", LSLIType::LST_INTEGER},
@@ -55,24 +57,11 @@ LSLIType str_to_type(const std::string& str)
     LUAU_UNREACHABLE();
 }
 
-// Called once at startup, not thread-safe.
-// Loads constants into the map for the constant folder to use
-void luauSL_init_global_builtins(const char* builtins_file)
+// Helper to parse builtins from any input stream
+static void parse_builtins(std::istream& stream, const char* source_name)
 {
-    sSLConstants.clear();
-    sSLConstantStrings.clear();
-
-    LUAU_ASSERT(builtins_file != nullptr);
-
-    std::ifstream file_stream(builtins_file);
-    if (!file_stream)
-    {
-        fprintf(stderr, "couldn't open %s\n", builtins_file);
-        exit(EXIT_FAILURE);
-    }
-
     std::string line;
-    while (std::getline(file_stream, line))
+    while (std::getline(stream, line))
     {
         // ignore comment and blank lines
         if (!line.rfind("//", 0) || !line.rfind('\r', 0) || !line.rfind('\n', 0) || line.empty())
@@ -89,7 +78,7 @@ void luauSL_init_global_builtins(const char* builtins_file)
         iss >> ret_type >> name >> eq;
         if (eq != "=")
         {
-            fprintf(stderr, "error parsing %s: %s\n", builtins_file, line.c_str());
+            fprintf(stderr, "error parsing %s: %s\n", source_name, line.c_str());
             exit(EXIT_FAILURE);
         }
 
@@ -196,6 +185,33 @@ CONST_PARSE_FAIL(); \
     }
 #undef CONST_PARSE_FAIL
 #undef CONST_SSCANF
+}
+
+// Called once at startup, not thread-safe.
+// Loads constants into the map for the constant folder to use.
+// If builtins_file is nullptr, uses embedded builtins data.
+void luauSL_init_global_builtins(const char* builtins_file)
+{
+    sSLConstants.clear();
+    sSLConstantStrings.clear();
+
+    if (builtins_file == nullptr)
+    {
+        // Use embedded builtins
+        std::istringstream stream(EMBEDDED_BUILTINS);
+        parse_builtins(stream, "<embedded>");
+    }
+    else
+    {
+        // Load from file
+        std::ifstream file_stream(builtins_file);
+        if (!file_stream)
+        {
+            fprintf(stderr, "couldn't open %s\n", builtins_file);
+            exit(EXIT_FAILURE);
+        }
+        parse_builtins(file_stream, builtins_file);
+    }
 }
 
 void luauSL_lookup_constant_cb(const char* library, const char* member, lua_CompileConstant* constant)

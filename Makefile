@@ -169,10 +169,10 @@ $(APR_OBJECTS): CXXFLAGS+=-std=c++11 -Wno-unused-function -Wno-char-subscripts -
 $(CJSON_OBJECTS): CXXFLAGS+=-std=c++11 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -IEqSat/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY
-$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -IEqSat/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -I$(BUILD)
+$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -I$(BUILD)
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IEqSat/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include
-$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -Istage/packages/include
+$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -Istage/packages/include -I$(BUILD)
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
 $(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IAnalysis/include -IEqSat/include -IVM/include -ICodeGen/include -IConfig/include -Istage/packages/include
 
@@ -279,6 +279,17 @@ $(ISOCLINE_TARGET): $(ISOCLINE_OBJECTS)
 
 $(COMMON_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
 	ar rcs $@ $^
+
+# generated header for embedded builtins
+$(BUILD)/builtins_embedded.h: builtins.txt
+	@mkdir -p $(dir $@)
+	@echo '// Auto-generated from builtins.txt' > $@
+	@echo 'static const char* const EMBEDDED_BUILTINS = R"builtins(' >> $@
+	@cat builtins.txt >> $@
+	@echo ')builtins";' >> $@
+
+# LSLBuiltins depends on generated header
+$(BUILD)/CLI/src/LSLBuiltins.cpp.o: $(BUILD)/builtins_embedded.h
 
 # object file targets
 $(BUILD)/%.cpp.o: %.cpp

@@ -1,0 +1,6 @@
+// Auto-generated from builtins.txt at configure time
+#pragma once
+
+static const char* const EMBEDDED_BUILTINS = R"builtins(
+@BUILTINS_CONTENT@
+)builtins";
