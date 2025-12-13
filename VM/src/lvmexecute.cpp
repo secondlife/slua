@@ -707,8 +707,10 @@ reentry:
                 {
                     LuaTable* h = hvalue(rb);
 
+                    // ServerLua: Use luai_num2int for UBSan suppression in ASAN builds
                     double indexd = nvalue(rc);
-                    int index = int(indexd);
+                    int index;
+                    luai_num2int(index, indexd);
 
                     // index has to be an exact integer and in-bounds for the array portion
                     if (LUAU_LIKELY(unsigned(index) - 1 < unsigned(h->sizearray) && !h->metatable && double(index) == indexd))
@@ -748,8 +750,10 @@ reentry:
                 {
                     LuaTable* h = hvalue(rb);
 
+                    // ServerLua: Use luai_num2int for UBSan suppression in ASAN builds
                     double indexd = nvalue(rc);
-                    int index = int(indexd);
+                    int index;
+                    luai_num2int(index, indexd);
 
                     // index has to be an exact integer and in-bounds for the array portion
                     if (LUAU_LIKELY(unsigned(index) - 1 < unsigned(h->sizearray) && !h->metatable && !h->readonly && double(index) == indexd))
@@ -1856,7 +1860,9 @@ reentry:
                     {
                         // ServerLua: division by -1 is weird, and
                         // previously special-cased to prevent division errors.
-                        setintvalue(ra, -1 * intvalue(rb));
+                        // Note: -INT32_MIN overflows, so handle that case explicitly.
+                        int32_t val = intvalue(rb);
+                        setintvalue(ra, val == INT32_MIN ? INT32_MIN : -val);
                     }
                     else
                     {
@@ -2148,7 +2154,9 @@ reentry:
                     {
                         // ServerLua: division by -1 is weird, and
                         // previously special-cased to prevent division errors.
-                        setintvalue(ra, -1 * intvalue(rb));
+                        // Note: -INT32_MIN overflows, so handle that case explicitly.
+                        int32_t val = intvalue(rb);
+                        setintvalue(ra, val == INT32_MIN ? INT32_MIN : -val);
                     }
                     else
                     {

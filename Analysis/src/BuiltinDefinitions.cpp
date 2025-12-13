@@ -1282,6 +1282,10 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     return arena->addType(TableType{{{{"__index", {tableType}}}}, std::nullopt, TypeLevel{}, TableState::Sealed});
 }
 
+// ServerLua: Suppress UBSan for out-of-range select() index (bounds-checked afterward)
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((no_sanitize("float-cast-overflow")))
+#endif
 std::optional<WithPredicate<TypePackId>> MagicSelect::handleOldSolver(
     TypeChecker& typechecker,
     const ScopePtr& scope,

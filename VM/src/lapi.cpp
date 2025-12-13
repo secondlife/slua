@@ -431,9 +431,9 @@ int lua_tointegerx(lua_State* L, int idx, int* isnum)
     }
     else if (tonumber(o, &n))
     {
-        int res;
+        // ServerLua: Use safe conversion for cross-platform consistency
         double num = nvalue(o);
-        luai_num2int(res, num);
+        int res = luai_num2int_safe(num);
         if (isnum)
             *isnum = 1;
         return res;

@@ -120,8 +120,8 @@ ifeq ($(config),coverage)
 endif
 
 ifeq ($(config),sanitize)
-	CXXFLAGS+=-fsanitize=address -O1 -DLUAU_ENABLE_ASAN=1
-	LDFLAGS+=-fsanitize=address
+	CXXFLAGS+=-fsanitize=address,undefined -fno-sanitize=vptr -O1 -DLUAU_ENABLE_ASAN=1
+	LDFLAGS+=-fsanitize=address,undefined
 endif
 
 ifeq ($(config),analyze)

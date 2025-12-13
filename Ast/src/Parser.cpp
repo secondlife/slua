@@ -3130,6 +3130,10 @@ AstExpr* Parser::parseAssertionExpr()
         return expr;
 }
 
+// ServerLua: Suppress UBSan for intentional precision-loss detection cast
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((no_sanitize("float-cast-overflow")))
+#endif
 static ConstantNumberParseResult parseInteger(double& result, const char* data, int base)
 {
     LUAU_ASSERT(base == 2 || base == 16);

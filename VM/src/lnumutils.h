@@ -64,7 +64,28 @@ inline float luai_lerpf(float a, float b, float t)
     return (t == 1.0) ? b : a + (b - a) * t;
 }
 
+// ServerLua: Safe float-to-int with x86 semantics
+inline int luai_num2int_safe(double d)
+{
+    constexpr double kMaxInt = 2147483648.0; // 2^31
+    if (d >= -kMaxInt && d < kMaxInt)
+        return (int)d;
+    return (int)(-kMaxInt);
+}
+
+// ServerLua: Suppress UBSan float-cast-overflow in ASAN builds
+#ifdef LUAU_ENABLE_ASAN
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((no_sanitize("float-cast-overflow")))
+#endif
+inline int luai_num2int_impl(double d)
+{
+    return (int)d;
+}
+#define luai_num2int(i, d) ((i) = luai_num2int_impl(d))
+#else
 #define luai_num2int(i, d) ((i) = (int)(d))
+#endif
 
 // On MSVC in 32-bit, double to unsigned cast compiles into a call to __dtoui3, so we invoke x87->int64 conversion path manually
 #if defined(_MSC_VER) && defined(_M_IX86)

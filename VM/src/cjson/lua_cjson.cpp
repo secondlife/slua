@@ -697,8 +697,8 @@ static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json)
         /* table, key, value */
         if (lua_type(l, -2) == LUA_TNUMBER &&
             (k = lua_tonumber(l, -2))) {
-            /* Integer >= 1 ? */
-            if (floor(k) == k && k >= 1) {
+            /* Integer >= 1 and in int range? (floor(inf)==inf, so check upper bound) */
+            if (floor(k) == k && k >= 1 && k <= INT_MAX) {
                 if (k > max)
                     max = k;
                 items++;
