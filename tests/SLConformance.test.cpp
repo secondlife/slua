@@ -345,6 +345,20 @@ TEST_CASE("Push UUID string")
     });
 }
 
+static int give_quaternion(lua_State *L)
+{
+    luaSL_pushquaternion(L, 1.0, 2.0, 3.0, 4.0);
+    return 1;
+}
+
+TEST_CASE("Push Quaternion")
+{
+    runConformance("quaternion.lua", nullptr, [](lua_State *L) {
+        lua_pushcfunction(L, give_quaternion, "give_quaternion");
+        lua_setglobal(L, "give_quaternion");
+    });
+}
+
 static int get_num_table_keys(lua_State *L, int idx)
 {
     lua_pushnil(L);
