@@ -1512,31 +1512,32 @@ static int lua_quaternion_conjugate(lua_State *L)
 }
 
 
-static inline void quaternion_to(lua_State *L, const float* vec) {
+static inline void push_rotated_vector(lua_State *L, const float* vec) {
     const float* quat = luaSL_checkquaternion(L, 1);
     float res[3] = {0.0f};
     rot_vec(vec, quat, res);
-    lua_pushvector(L, res[0], res[1], res[2]);
+    float invSqrt = 1.0f / sqrtf(res[0] * res[0] + res[1] * res[1] + res[2] * res[2]);
+    lua_pushvector(L, res[0] * invSqrt, res[1] * invSqrt, res[2] * invSqrt);
 }
 
 static int lua_quaternion_tofwd(lua_State *L)
 {
     const float vec[3] = {1.0f, 0.0f, 0.0f};
-    quaternion_to(L, vec);
+    push_rotated_vector(L, vec);
     return 1;
 }
 
 static int lua_quaternion_toleft(lua_State *L)
 {
     const float vec[3] = {0.0f, 1.0f, 0.0f};
-    quaternion_to(L, vec);
+    push_rotated_vector(L, vec);
     return 1;
 }
 
 static int lua_quaternion_toup(lua_State *L)
 {
     const float vec[3] = {0.0f, 0.0f, 1.0f};
-    quaternion_to(L, vec);
+    push_rotated_vector(L, vec);
     return 1;
 }
 
