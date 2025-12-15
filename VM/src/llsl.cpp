@@ -1477,30 +1477,43 @@ static int lua_quaternion_slerp(lua_State *L)
 {
     const float* a = luaSL_checkquaternion(L, 1);
     const float* b = luaSL_checkquaternion(L, 2);
-    const float t = luaL_checknumber(L, 3);
+    const float u = luaL_checknumber(L, 3);
 
     float b_to[4] = {b[0], b[1], b[2], b[3]};
-    float cosom = quaternion_dot(a, b_to);
-    if (cosom < 0.0f)
-    {
-        cosom = -cosom;
-        b_to[0] = -b_to[0];
-        b_to[1] = -b_to[1];
-        b_to[2] = -b_to[2];
-        b_to[3] = -b_to[3];
-    }   
+    float cos_t = quaternion_dot(a, b_to);
 
-	// calculate coefficients
-    float omega = acosf(cosom);
-    float sinom = sinf(omega);
-    float scale0 = sinf((1.0f - t) * omega) / sinom;
-    float scale1 = sinf(t * omega) / sinom;
-	// calculate final values
-	luaSL_pushquaternion(L,
-			scale0 * a[0] + scale1 * b_to[0],
-			scale0 * a[1] + scale1 * b_to[1],
-			scale0 * a[2] + scale1 * b_to[2],
-			scale0 * a[3] + scale1 * b_to[3]);
+    bool bflip = false;
+    if (cos_t < 0.0f)
+    {
+        cos_t = -cos_t;
+        bflip = true;
+    }
+
+    float alpha;
+    float beta;
+    if(1.0f - cos_t < 0.00001f)
+    {
+        beta = 1.0f - u;
+        alpha = u;
+    }
+    else
+    {
+        float theta = acosf(cos_t);
+        float sin_t = sinf(theta);
+        beta = sinf(theta - u*theta) / sin_t;
+        alpha = sinf(u*theta) / sin_t;
+    }
+
+    if (bflip)
+    {
+        beta = -beta;
+    }
+
+    luaSL_pushquaternion(L,
+        beta*a[0] + alpha*b[0],
+        beta*a[1] + alpha*b[1],
+        beta*a[2] + alpha*b[2],
+        beta*a[3] + alpha*b[3]);
     return 1;
 }
 
