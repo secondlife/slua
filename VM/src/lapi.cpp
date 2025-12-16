@@ -2092,13 +2092,13 @@ CLANG_NOOPT void GCC_NOOPT lua_fixallcollectable(lua_State *L)
 
         if (key_str)
         {
-            if (!strcmp(key_str, "vector"))
+            if (!strcmp(key_str, "vector") || !strcmp(key_str, "quaternion") || !strcmp(key_str, "rotation") || !strcmp(key_str, "uuid"))
             {
-                // vector has a special metatable with `__call` which should be fixable.
+                // vector quaternion rotation and uuid have a special metatable with `__call` which should be fixable.
                 if (ttistable(global_val))
                 {
-                    LuaTable *vector_mt = hvalue(global_val)->metatable;
-                    ASSERT_IN_DBG(try_fix_table(vector_mt));
+                    LuaTable *mt = hvalue(global_val)->metatable;
+                    ASSERT_IN_DBG(try_fix_table(mt));
                 }
             }
         }

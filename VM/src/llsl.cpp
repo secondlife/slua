@@ -1422,6 +1422,211 @@ static void make_weak_uuid_table(lua_State *L)
     lua_setmetatable(L, -2);
 }
 
+// ServerLua: callable quaternion module
+static int quaternion_call(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_remove(L, 1);
+    return lsl_quaternion_ctor(L);
+}
+
+static inline float quaternion_dot(const float* a, const float* b) {
+    return ((a)[0] * (b)[0] + (a)[1] * (b)[1] + (a)[2] * (b)[2] + (a)[3] * (b)[3]);
+}
+
+static int lua_quaternion_normalize(lua_State *L)
+{
+    const float* quat = luaSL_checkquaternion(L, 1);
+    float invNorm = 1.0f / sqrtf(quaternion_dot(quat, quat));
+    luaSL_pushquaternion(L, quat[0] * invNorm, quat[1] * invNorm, quat[2] * invNorm, quat[3] * invNorm);
+    return 1;
+}
+
+static int lua_quaternion_magnitude(lua_State *L)
+{
+    const float* quat = luaSL_checkquaternion(L, 1);
+    lua_pushnumber(L, sqrtf(quaternion_dot(quat, quat)));
+    return 1;
+}
+
+
+static int lua_quaternion_dot(lua_State *L)
+{
+    const float* a = luaSL_checkquaternion(L, 1);
+    const float* b = luaSL_checkquaternion(L, 2);
+    lua_pushnumber(L, quaternion_dot(a, b));
+    return 1;
+}
+
+static int lua_quaternion_slerp(lua_State *L)
+{
+    const float* a = luaSL_checkquaternion(L, 1);
+    const float* b = luaSL_checkquaternion(L, 2);
+    const float u = luaL_checknumber(L, 3);
+
+    float cos_t = quaternion_dot(a, b);
+
+    bool bflip = false;
+    if (cos_t < 0.0f)
+    {
+        cos_t = -cos_t;
+        bflip = true;
+    }
+
+    float alpha;
+    float beta;
+    if(1.0f - cos_t < 0.00001f)
+    {
+        beta = 1.0f - u;
+        alpha = u;
+    }
+    else
+    {
+        float theta = acosf(cos_t);
+        float sin_t = sinf(theta);
+        beta = sinf(theta - u*theta) / sin_t;
+        alpha = sinf(u*theta) / sin_t;
+    }
+
+    if (bflip)
+    {
+        beta = -beta;
+    }
+
+    luaSL_pushquaternion(L,
+        beta*a[0] + alpha*b[0],
+        beta*a[1] + alpha*b[1],
+        beta*a[2] + alpha*b[2],
+        beta*a[3] + alpha*b[3]);
+    return 1;
+}
+
+static int lua_quaternion_conjugate(lua_State *L)
+{
+    const float* quat = luaSL_checkquaternion(L, 1);
+    luaSL_pushquaternion(L, -quat[0], -quat[1], -quat[2], quat[3]);
+    return 1;
+}
+
+
+static inline void push_rotated_vector(lua_State *L, const float* vec) {
+    const float* quat = luaSL_checkquaternion(L, 1);
+    float res[3] = {0.0f};
+    rot_vec(vec, quat, res);
+    float invSqrt = 1.0f / sqrtf(res[0] * res[0] + res[1] * res[1] + res[2] * res[2]);
+    lua_pushvector(L, res[0] * invSqrt, res[1] * invSqrt, res[2] * invSqrt);
+}
+
+static int lua_quaternion_tofwd(lua_State *L)
+{
+    const float vec[3] = {1.0f, 0.0f, 0.0f};
+    push_rotated_vector(L, vec);
+    return 1;
+}
+
+static int lua_quaternion_toleft(lua_State *L)
+{
+    const float vec[3] = {0.0f, 1.0f, 0.0f};
+    push_rotated_vector(L, vec);
+    return 1;
+}
+
+static int lua_quaternion_toup(lua_State *L)
+{
+    const float vec[3] = {0.0f, 0.0f, 1.0f};
+    push_rotated_vector(L, vec);
+    return 1;
+}
+
+static const luaL_Reg quaternionlib[] = {
+    {"create", lsl_quaternion_ctor},
+    {"normalize", lua_quaternion_normalize},
+    {"magnitude", lua_quaternion_magnitude},
+    {"dot", lua_quaternion_dot},
+    {"slerp", lua_quaternion_slerp},
+    {"conjugate", lua_quaternion_conjugate},
+    {"tofwd", lua_quaternion_tofwd},
+    {"toleft", lua_quaternion_toleft},
+    {"toup", lua_quaternion_toup},
+    {NULL, NULL},
+};
+
+int luaopen_sl_quaternion(lua_State* L, const char* name)
+{
+    [[maybe_unused]] int old_top = lua_gettop(L);
+    lua_newtable(L);
+    luaL_register(L, NULL, quaternionlib);
+
+    luaSL_pushquaternion(L, 0.0, 0.0, 0.0, 1.0);
+    lua_setfield(L, -2, "identity");
+
+    // ServerLua: `quaternion()` is an alias to `quaternion.create()`, so we need to add a metatable
+    //  to the quaternion module which allows calling it.
+    lua_newtable(L);
+    lua_pushcfunction(L, quaternion_call, "__call");
+    lua_setfield(L, -2, "__call");
+
+    // We need to override __iter so generalized iteration doesn't try to use __call.
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
+    // This is confusing at first, but we want a unique function identity
+    // when this shows up anywhere other than globals, otherwise we can
+    // muck up Ares serialization.
+    luau_dupcclosure(L, -1, "__iter");
+    lua_replace(L, -2);
+    lua_rawsetfield(L, -2, "__iter");
+
+    lua_setreadonly(L, -1, true);
+    lua_setmetatable(L, -2);
+
+    lua_setglobal(L, name);
+
+    LUAU_ASSERT(lua_gettop(L) == old_top);
+    return 1;
+}
+
+// ServerLua: callable uuid module
+static int uuid_call(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_remove(L, 1);
+    return lua_uuid_ctor(L);
+}
+
+static const luaL_Reg uuidlib[] = {
+    {"create", lua_uuid_ctor},
+    {NULL, NULL},
+};
+
+int luaopen_sl_uuid(lua_State* L)
+{
+    [[maybe_unused]] int old_top = lua_gettop(L);
+    lua_newtable(L);
+    luaL_register(L, NULL, uuidlib);
+
+    // ServerLua: `uuid()` is an alias to `uuid.create()`, so we need to add a metatable
+    //  to the uuid module which allows calling it.
+    lua_newtable(L);
+    lua_pushcfunction(L, uuid_call, "__call");
+    lua_setfield(L, -2, "__call");
+
+    // We need to override __iter so generalized iteration doesn't try to use __call.
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
+    // This is confusing at first, but we want a unique function identity
+    // when this shows up anywhere other than globals, otherwise we can
+    // muck up Ares serialization.
+    luau_dupcclosure(L, -1, "__iter");
+    lua_replace(L, -2);
+    lua_rawsetfield(L, -2, "__iter");
+
+    lua_setreadonly(L, -1, true);
+    lua_setmetatable(L, -2);
+
+    lua_setglobal(L, "uuid");
+
+    LUAU_ASSERT(lua_gettop(L) == old_top);
+    return 1;
+}
+
 int luaopen_sl(lua_State* L, int expose_internal_funcs)
 {
     if (!LUAU_IS_SL_VM(L))
@@ -1432,23 +1637,14 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     int top = lua_gettop(L);
 
     // Load these into the global namespace
-    lua_pushcfunction(L, lsl_quaternion_ctor, "quaternion");
-    luau_dupcclosure(L, -1, "rotation");
-    // Alias it as "rotation"
-    lua_setglobal(L, "rotation");
-    lua_setglobal(L, "quaternion");
 
     if (LUAU_IS_LSL_VM(L))
     {
         lua_pushcfunction(L, lsl_key_ctor, "uuid");
+        luau_dupcclosure(L, -1, "touuid");
+        lua_setglobal(L, "touuid");
+        lua_setglobal(L, "uuid");
     }
-    else
-    {
-        lua_pushcfunction(L, lua_uuid_ctor, "uuid");
-    }
-    luau_dupcclosure(L, -1, "touuid");
-    lua_setglobal(L, "touuid");
-    lua_setglobal(L, "uuid");
 
     lua_pushcfunction(L, lsl_to_vector, "tovector");
     lua_setglobal(L, "tovector");
@@ -1509,6 +1705,15 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     lua_pop(L, 1);
     LUAU_ASSERT(lua_gettop(L) == top);
 
+    if (!LUAU_IS_LSL_VM(L))
+    {
+        // Create uuid module table
+        luaopen_sl_uuid(L);
+        LUAU_ASSERT(lua_gettop(L) == top);
+        lua_pushcfunction(L, lua_uuid_ctor, "touuid");
+        lua_setglobal(L, "touuid");
+    }
+
     //////
     /// Quaternions
     //////
@@ -1553,6 +1758,11 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
     lua_setreadonly(L, -1, true);
     // Okay, don't need this on the stack anymore
     lua_pop(L, 1);
+    LUAU_ASSERT(lua_gettop(L) == top);
+
+    // Create quaternion module table
+    luaopen_sl_quaternion(L, "quaternion");
+    luaopen_sl_quaternion(L, "rotation");
     LUAU_ASSERT(lua_gettop(L) == top);
 
     //////
