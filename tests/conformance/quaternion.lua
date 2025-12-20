@@ -13,7 +13,8 @@ assert(quaternion.create(4, 3, 2, 1) == rotation.create(4, 3, 2, 1))
 
 -- Test quaternion module functions
 assert(quaternion.normalize(quaternion(3, 5, 2, 1)) == quaternion(0.4803844690322876, 0.8006408214569092, 0.3202563226222992, 0.1601281613111496))
-
+-- Normalize with a bad quaternion returns identity
+assert(quaternion.normalize(quaternion(0, 0, 0, 0)) == quaternion.identity)
 assert(quaternion.magnitude(quaternion(0, 0, 0, 1)) == 1)
 
 assert(quaternion.dot(quaternion(1, 2, 3, 4),quaternion(0, 0, 0, 1)) == 4)

@@ -1434,11 +1434,37 @@ static inline float quaternion_dot(const float* a, const float* b) {
     return ((a)[0] * (b)[0] + (a)[1] * (b)[1] + (a)[2] * (b)[2] + (a)[3] * (b)[3]);
 }
 
+constexpr float ONE_PART_IN_A_MILLION = 0.000001f;
+constexpr float FP_MAG_THRESHOLD = 0.0000001f;
+
 static int lua_quaternion_normalize(lua_State *L)
 {
     const float* quat = luaSL_checkquaternion(L, 1);
-    float invNorm = 1.0f / sqrtf(quaternion_dot(quat, quat));
-    luaSL_pushquaternion(L, quat[0] * invNorm, quat[1] * invNorm, quat[2] * invNorm, quat[3] * invNorm);
+    // This logic largely copied from indra
+    float mag = sqrtf(quaternion_dot(quat, quat));
+    if (mag > FP_MAG_THRESHOLD)
+    {
+        // Floating point error can prevent some quaternions from achieving
+        // exact unity length.  When trying to renormalize such quaternions we
+        // can oscillate between multiple quantized states. To prevent such
+        // drifts we only renormalize if the length is far enough from unity.
+        if (fabs(1.f - mag) > ONE_PART_IN_A_MILLION)
+        {
+            float oomag = 1.0f / mag;
+            luaSL_pushquaternion(L, quat[0] * oomag, quat[1] * oomag, quat[2] * oomag, quat[3] * oomag);
+        }
+        else
+        {
+            // We don't normalize in this case in indra, so push the original input
+            lua_pushvalue(L, 1);
+        }
+    }
+    else
+    {
+        // We were given a very bad quaternion so we set it to identity
+        luaSL_pushquaternion(L, 0, 0, 0, 1);
+    }
+
     return 1;
 }
 
