@@ -372,6 +372,38 @@ assert(#LLEvents:listeners("timer") == 1)
 LLTimers:off(auto_reg_timer2)
 assert(#LLEvents:listeners("timer") == 0)
 
+-- Test that once() handler adding a timer doesn't duplicate listeners
+-- Regression test: when the only timer is a once() that re-registers itself,
+-- the listener count should stay at 1, not grow unboundedly.
+setclock(0)
+assert(#LLEvents:listeners("timer") == 0)
+
+local reregister_count = 0
+local function reregister_handler()
+    reregister_count += 1
+    if reregister_count < 5 then
+        LLTimers:once(0.1, reregister_handler)
+    end
+end
+
+LLTimers:once(0.1, reregister_handler)
+assert(#LLEvents:listeners("timer") == 1)
+
+-- Fire multiple times, each time the handler adds a new once() timer
+for i = 1, 4 do
+    incrementclock(0.1)
+    LLEvents:_handleEvent('timer')
+    -- Should ALWAYS be 1, never grow
+    assert(#LLEvents:listeners("timer") == 1,
+        "Listener count should stay at 1, got " .. #LLEvents:listeners("timer"))
+end
+
+-- After final once() fires without re-registering, should be 0
+incrementclock(0.1)
+LLEvents:_handleEvent('timer')
+assert(reregister_count == 5)
+assert(#LLEvents:listeners("timer") == 0)
+
 -- Test that timer wrapper in listeners() cannot be called directly
 local guard_timer = LLTimers:every(1.0, function() end)
 local timer_listeners = LLEvents:listeners("timer")

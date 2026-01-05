@@ -42,6 +42,7 @@ int timer_event_wrapper_cont(lua_State *L, [[maybe_unused]] int status)
 }
 
 // Forward declarations for timer wrapper management
+static bool is_timer_wrapper_registered(lua_State *L, lua_LLTimers *lltimers);
 static void register_timer_wrapper(lua_State *L, lua_LLTimers *lltimers);
 static void unregister_timer_wrapper(lua_State *L, lua_LLTimers *lltimers);
 static void schedule_next_tick(lua_State *L, lua_LLTimers *lltimers);
@@ -151,7 +152,8 @@ static int lltimers_on(lua_State *L)
     luau_shrinktable(L, -1, 0);
 
     // Register timer wrapper with LLEvents when adding first timer
-    if (old_len == 0)
+    // (also check if already registered, in case we're inside a handler that just removed a timer)
+    if (old_len == 0 && !is_timer_wrapper_registered(L, lltimers))
         register_timer_wrapper(L, lltimers);
 
     // Reschedule timer tick since we added a new timer
@@ -210,7 +212,8 @@ static int lltimers_once(lua_State *L)
     lua_pop(L, 1); // Pop timers array
 
     // Register timer wrapper with LLEvents when adding first timer
-    if (old_len == 0)
+    // (also check if already registered, in case we're inside a handler that just removed a timer)
+    if (old_len == 0 && !is_timer_wrapper_registered(L, lltimers))
         register_timer_wrapper(L, lltimers);
 
     // Return the passed-in handler so it can be unregistered later
@@ -287,6 +290,48 @@ enum TickStack {
     CURRENT_TIMER = 6,         // Current timer data table being processed
     HANDLER_FUNC = 7           // Handler function to call
 };
+
+// Check if our timer wrapper is already registered with LLEvents
+static bool is_timer_wrapper_registered(lua_State *L, lua_LLTimers *lltimers)
+{
+    int top = lua_gettop(L);
+
+    // Get LLEvents userdata and its listeners table
+    // We can't use `:listeners()` because we lie about the closure identity
+    // of our tick wrapper so users can't accidentally unregister it :)
+    lua_getref(L, lltimers->llevents_ref);
+    auto *llevents = (lua_LLEvents *)lua_touserdata(L, -1);
+    lua_getref(L, llevents->listeners_tab_ref);
+
+    // Get "timer" listeners array
+    lua_rawgetfield(L, -1, "timer");
+    if (lua_isnil(L, -1))
+    {
+        lua_settop(L, top);
+        return false;
+    }
+
+    // Get our wrapper to compare against
+    lua_getref(L, lltimers->timer_wrapper_ref);
+
+    // Handlers are wrapped in tables: wrapper[1] = handler
+    // Check if any wrapper[1] matches our timer wrapper
+    int len = lua_objlen(L, -2);
+    for (int i = 1; i <= len; i++)
+    {
+        lua_rawgeti(L, -2, i);  // Get wrapper table
+        lua_rawgeti(L, -1, 1);  // Get wrapper[1] (the actual handler)
+        if (lua_rawequal(L, -1, -3))  // Compare with our wrapper
+        {
+            lua_settop(L, top);
+            return true;
+        }
+        lua_pop(L, 2);  // Pop handler and wrapper table
+    }
+
+    lua_settop(L, top);
+    return false;
+}
 
 // Register timer wrapper with LLEvents when first timer is added
 static void register_timer_wrapper(lua_State *L, lua_LLTimers *lltimers)
