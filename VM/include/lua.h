@@ -247,6 +247,8 @@ LUA_API void lua_pushboolean(lua_State* L, int b);
 LUA_API int lua_pushthread(lua_State* L);
 // ServerLua: For re-pushing a closure with a unique closure identity
 LUA_API void luau_dupcclosure(lua_State *L, int idx, const char *debugname);
+// ServerLua: For shrinking a table to use its minimum required capacity.
+LUA_API void luau_shrinktable(lua_State *L, int idx, int allow_reorder);
 
 LUA_API void lua_pushlightuserdatatagged(lua_State* L, void* p, int tag);
 LUA_API void* lua_newuserdatatagged(lua_State* L, size_t sz, int tag);

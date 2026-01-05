@@ -2244,3 +2244,10 @@ LUA_API void luau_dupcclosure(lua_State *L, int idx, const char *debugname)
     }
     lua_pushcclosurek(L, cl->c.f, debugname, cl->nupvalues, cl->c.cont);
 }
+
+LUA_API void luau_shrinktable(lua_State *L, int idx, int allow_reorder)
+{
+    idx = lua_absindex(L, idx);
+    LuaTable *t = hvalue(luaA_toobject(L, idx));
+    luaH_shrink(L, t, (bool)allow_reorder);
+}

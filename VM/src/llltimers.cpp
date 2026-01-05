@@ -148,6 +148,7 @@ static int lltimers_on(lua_State *L)
 
     // Add to the end of the timers array
     lua_rawseti(L, -2, old_len + 1);
+    luau_shrinktable(L, -1, 0);
 
     // Register timer wrapper with LLEvents when adding first timer
     if (old_len == 0)
@@ -201,6 +202,7 @@ static int lltimers_once(lua_State *L)
 
     // Add to the timers array
     lua_rawseti(L, -2, old_len + 1);
+    luau_shrinktable(L, -1, 0);
 
     // Reschedule timer tick since we added a new timer
     schedule_next_tick(L, lltimers);
@@ -259,6 +261,8 @@ static int lltimers_off(lua_State *L)
         }
         lua_pop(L, 2); // Pop handler and timer data
     }
+
+    luau_shrinktable(L, -1, 0);
 
     lua_pop(L, 1); // Pop timers array
 

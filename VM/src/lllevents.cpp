@@ -281,6 +281,7 @@ static int llevents_on(lua_State *L)
 
     // Add the wrapper to the end of the array
     lua_rawseti(L, -2, lua_objlen(L, -2) + 1);
+    luau_shrinktable(L, -1, 0);
 
     // Return the unwrapped handler so it can be unregistered later
     lua_pushvalue(L, 3);
@@ -346,18 +347,27 @@ static int llevents_off(lua_State *L)
         lua_pop(L, 2);
     }
 
-    // Clear out the empty handler array if we have no more handlers for this event type
-    if (found && lua_objlen(L, -1) == 0)
+    // We found and removed something
+    if (found)
     {
-        lua_pushnil(L);
-        lua_setfield(L, -3, event_name);
-
-        // Let the host know that we have no more handlers for this event, if it cares.
-        // We don't need to check the result, we're not asking, we're telling the host
-        // that there are no more handlers of this type.
-        if (sl_state->eventHandlerRegistrationCb != nullptr)
+        if (lua_objlen(L, -1) == 0)
         {
-            sl_state->eventHandlerRegistrationCb(L, event_name, false);
+            // Clear out the empty handler array if we have no more handlers for this event type
+            lua_pushnil(L);
+            lua_setfield(L, -3, event_name);
+
+            // Let the host know that we have no more handlers for this event, if it cares.
+            // We don't need to check the result, we're not asking, we're telling the host
+            // that there are no more handlers of this type.
+            if (sl_state->eventHandlerRegistrationCb != nullptr)
+            {
+                sl_state->eventHandlerRegistrationCb(L, event_name, false);
+            }
+        }
+        else
+        {
+            // Just shrink the table to its new size.
+            luau_shrinktable(L, -1, 0);
         }
     }
 
