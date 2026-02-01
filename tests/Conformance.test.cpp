@@ -43,6 +43,7 @@ LUAU_FASTFLAG(LuauCompileMathIsNanInfFinite)
 LUAU_FASTFLAG(LuauTypeCheckerMathIsNanInfFinite)
 LUAU_FASTFLAG(LuauCodegenChainedSpills)
 LUAU_FASTFLAG(LuauCodegenSpillRestoreFreeTemp)
+LUAU_FASTFLAG(LuauCodegenExtraSimd)
 LUAU_FASTFLAG(LuauCodegenDwordSpillSlots)
 LUAU_FASTFLAG(LuauCodegenExtraSpills)
 
@@ -1800,6 +1801,10 @@ TEST_CASE("Vector")
 
 TEST_CASE("VectorLibrary")
 {
+    ScopedFastFlag luauCodegenExtraSimd{FFlag::LuauCodegenExtraSimd, true};
+    ScopedFastFlag luauCodegenSplitFloat{FFlag::LuauCodegenSplitFloat, true};
+    ScopedFastFlag luauCodegenFloatOps{FFlag::LuauCodegenFloatOps, true};
+
     lua_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
