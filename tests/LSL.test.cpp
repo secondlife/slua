@@ -439,6 +439,11 @@ TEST_CASE("Comparison Operators")
     CHECK_EQ(YIELD_NUM(state.get()), 9);
 }
 
+TEST_CASE("Self Assign Comparison")
+{
+    runConformance("self_assign_comparison.lsl");
+}
+
 TEST_CASE("If Statement")
 {
     auto state = runConformance("if.lsl", [](lua_State *L)

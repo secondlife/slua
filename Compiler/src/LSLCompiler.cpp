@@ -1518,6 +1518,21 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
         if (swap_regs)
             std::swap(rhs_reg, lhs_reg);
 
+        // If target aliases with an operand, copy the operand to a temp
+        // before LOADK clobbers it.
+        if (target_reg == lhs_reg)
+        {
+            auto temp = allocReg(bin_expr);
+            mBuilder->emitABC(LOP_MOVE, temp, lhs_reg, 0);
+            lhs_reg = temp;
+        }
+        if (target_reg == rhs_reg)
+        {
+            auto temp = allocReg(bin_expr);
+            mBuilder->emitABC(LOP_MOVE, temp, rhs_reg, 0);
+            rhs_reg = temp;
+        }
+
         // Initialize target to true
         mBuilder->emitAD(LOP_LOADK, target_reg, addConstantInteger(1, INT16_MAX));
         // Jump over setting it to false if true
