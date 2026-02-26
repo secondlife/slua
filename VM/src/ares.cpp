@@ -2268,8 +2268,8 @@ p_thread(Info *info) {                                          /* ... thread */
 
       // PC relative to the start of the code
       int64_t pc_offset = ci->savedpc - lcl->l.p->code;
-      // the PC had better be in bounds.
-      eris_assert(pc_offset >= 0 && pc_offset < lcl->l.p->sizecode);
+      // If we have a thread that hasn't been hard-killed, the PC had better be in bounds.
+      eris_assert(thread->status != LUA_ERRKILL && pc_offset >= 0 && pc_offset < lcl->l.p->sizecode);
 
       int yield_point = -1;
       for (int j = 0; j< lcl->l.p->sizeyieldpoints; ++j) {

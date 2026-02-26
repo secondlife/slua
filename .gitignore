@@ -28,3 +28,4 @@ __pycache__
 *.rej
 /fuzz/corpus/json/*
 !/fuzz/corpus/json/*.json
+*.code-workspace
