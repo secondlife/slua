@@ -602,6 +602,19 @@ static int loadsafe(
         for (int j = 0; j < num_yields; ++j)
         {
             p->yieldpoints[j] = readVarInt(data, size, offset);
+            if (p->yieldpoints[j] < 0 || p->yieldpoints[j] >= p->sizecode)
+            {
+                char chunkbuf[LUA_IDSIZE];
+                const char* chunkid = luaO_chunkid(chunkbuf, sizeof(chunkbuf), chunkname, strlen(chunkname));
+                lua_pushfstring(
+                    L,
+                    "%s: malformed bytecode: invalid yield point %d in proto %d",
+                    chunkid,
+                    p->yieldpoints[j],
+                    i
+                );
+                return 1;
+            }
         }
 
         protos[i] = p;
