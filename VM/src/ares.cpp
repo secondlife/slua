@@ -1780,6 +1780,9 @@ u_proto(Info *info) {                                            /* ... proto */
   for (i=0; i<p->sizeyieldpoints; ++i)
   {
       p->yieldpoints[i] = READ_VALUE(int32_t);
+      if (p->yieldpoints[i] < 0 || p->yieldpoints[i] >= p->sizecode) {
+        eris_error(info, "malformed data: invalid yield point");
+      }
   }
 
   // Assign bytecodeid at the end after all dangerous unpersist calls
@@ -2268,8 +2271,6 @@ p_thread(Info *info) {                                          /* ... thread */
 
       // PC relative to the start of the code
       int64_t pc_offset = ci->savedpc - lcl->l.p->code;
-      // If we have a thread that hasn't been hard-killed, the PC had better be in bounds.
-      eris_assert(thread->status != LUA_ERRKILL && pc_offset >= 0 && pc_offset < lcl->l.p->sizecode);
 
       int yield_point = -1;
       for (int j = 0; j< lcl->l.p->sizeyieldpoints; ++j) {
