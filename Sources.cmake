@@ -426,6 +426,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/llltimers.cpp
     VM/src/llltimers.h
     VM/src/lyieldable.cpp
+    VM/src/lstrbuf.cpp
 
     # ServerLua: CJson
     VM/src/cjson/dtoa_config.h
@@ -433,8 +434,6 @@ target_sources(Luau.VM PRIVATE
     VM/src/cjson/fpconv.h
     VM/src/cjson/lua_cjson.cpp
     VM/src/cjson/dtoa_config.h
-    VM/src/cjson/strbuf.cpp
-    VM/src/cjson/strbuf.h
 
     # ServerLua: base64-related routines from APR
     VM/src/apr/apr_base64.cpp

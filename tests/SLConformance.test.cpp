@@ -730,9 +730,60 @@ TEST_CASE("Integer bitwise operations")
     runConformance("integer_bitwise.lua");
 }
 
+// ServerLua: interrupt state for lljson yield tests
+static bool jsonInterruptEnabled = false;
+static int jsonYieldCount = 0;
+
 TEST_CASE("lljson")
 {
-    runConformance("lljson.lua");
+    jsonInterruptEnabled = false;
+    jsonYieldCount = 0;
+
+    runConformance("lljson.lua", nullptr, [](lua_State* L) {
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                jsonYieldCount = 0;
+                return 0;
+            },
+            "clear_check_count"
+        );
+        lua_setglobal(L, "clear_check_count");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                lua_pushinteger(L, jsonYieldCount);
+                return 1;
+            },
+            "get_check_count"
+        );
+        lua_setglobal(L, "get_check_count");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                jsonInterruptEnabled = true;
+                return 0;
+            },
+            "enable_check_interrupt"
+        );
+        lua_setglobal(L, "enable_check_interrupt");
+
+        // ServerLua: Interrupt handler that yields on every YIELD_CHECK hit
+        lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+        {
+            if (gc != LUA_INTERRUPT_LLLIB)
+                return;
+            if (!jsonInterruptEnabled)
+                return;
+            jsonYieldCount++;
+            lua_yield(L, 0);
+        };
+    });
 }
 
 TEST_CASE("llbase64")

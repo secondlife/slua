@@ -11,6 +11,7 @@
 #include "ludata.h"
 #include "lbuffer.h"
 #include "llsl.h"
+#include "lstrbuf.h"
 
 #include <algorithm>
 #include <string.h>
@@ -342,6 +343,11 @@ static size_t calcgcosize(GCObject *obj)
             return 8;
         case UTAG_LLTIMERS:
             return 8;
+        case UTAG_STRBUF:
+        {
+            const lua_YieldSafeStrBuf* buf = (const lua_YieldSafeStrBuf*)&udata->data;
+            return sizeof(lua_YieldSafeStrBuf) + buf->size;
+        }
         default:
             return sizeudata(udata->len);
         }

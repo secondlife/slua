@@ -58,6 +58,7 @@ THE SOFTWARE.
 #include "ltable.h"
 #include "ludata.h"
 #include "llsl.h"
+#include "lstrbuf.h"
 #include "lljson.h"
 #include "Luau/Bytecode.h"
 
@@ -1368,6 +1369,14 @@ static void p_userdata(Info *info) {                               /* ... udata 
         lua_pop(info->L, 1);                                     /* ... udata */
         break;
     }
+    case UTAG_STRBUF:
+    {
+        const auto *buf = (const lua_YieldSafeStrBuf*)value;
+        WRITE_VALUE(buf->size, ares_size_t);
+        WRITE_VALUE(buf->length, ares_size_t);
+        WRITE_RAW(buf->buf, buf->length);
+        break;
+    }
     default:
       eris_error(info, "Unknown userdata type %d", utag);
       break;
@@ -1500,6 +1509,28 @@ static void u_userdata(Info *info) {                                   /* ... */
           lltimers->timer_wrapper_ref = lua_ref(info->L, -1);
           lua_pop(info->L, 1);                                     /* ... lltimers */
 
+          break;
+      }
+      case UTAG_STRBUF:
+      {
+          size_t size = READ_VALUE(ares_size_t);
+          size_t length = READ_VALUE(ares_size_t);
+          VALIDATE_SIZE(length);
+          if (size < length)
+              eris_error(info, "malformed data: strbuf size less than length");
+          if (size < STRBUF_DEFAULT_SIZE)
+              size = STRBUF_DEFAULT_SIZE;
+
+          auto *buf = (lua_YieldSafeStrBuf*)
+              lua_newuserdatatagged(info->L, sizeof(lua_YieldSafeStrBuf), UTAG_STRBUF);
+                                                                   /* ... udata */
+          buf->buf = (char*)luaM_new_(info->L, size, info->L->activememcat);
+          buf->length = uint32_t(length);
+          buf->size = uint32_t(size);
+          if (length > 0)
+              READ_RAW(buf->buf, length);
+
+          registerobject(info);
           break;
       }
       default:

@@ -361,4 +361,154 @@ recurse.b = recurse
 -- Should fail due to limits
 assert(not pcall(function() lljson.encode(recurse) end))
 
+-- Enable interrupt-driven yields for remaining tests.
+enable_check_interrupt()
+
+local function consume_impl(check, expect_yields, f, ...)
+    clear_check_count()
+    local co = coroutine.create(f)
+    local yields = 0
+    local ok, a, b, c = coroutine.resume(co, ...)
+    assert(ok, a)
+    while coroutine.status(co) ~= "dead" do
+        yields += 1
+        co = ares.unpersist(ares.persist(co))
+        collectgarbage()
+        ok, a, b, c = coroutine.resume(co)
+        assert(ok, a)
+    end
+    if expect_yields then
+        assert(yields > 0, "no yields occurred")
+    end
+    if check then
+        assert(yields == get_check_count(),
+            "yield count mismatch: " .. yields .. " actual vs " .. get_check_count() .. " interrupts")
+    end
+    return a, b, c, yields
+end
+
+local function consume(f, ...)
+    return consume_impl(true, true, f, ...)
+end
+
+local function consume_nocheck(f, ...)
+    return consume_impl(false, false, f, ...)
+end
+
+-- encode flat array: exercises ELEMENT/NEXT_ELEMENT yield path
+assert(consume(function()
+    return lljson.encode({1, 2, 3, 4, 5})
+end) == "[1,2,3,4,5]")
+
+-- encode object: exercises VALUE/NEXT_PAIR yield path
+consume(function()
+    local r = lljson.encode({foo = "bar", baz = 42})
+    local t = lljson.decode(r)
+    assert(t.foo == "bar" and t.baz == 42)
+end)
+
+-- encode nested structure: exercises recursive YIELD_HELPER
+consume(function()
+    local r = lljson.encode({a = {1, 2}, b = {c = "d"}})
+    local t = lljson.decode(r)
+    assert(t.a[1] == 1 and t.a[2] == 2 and t.b.c == "d")
+end)
+
+-- __tojson that yields: exercises TOJSON_CALL yield path with ares round-trip
+assert(consume_nocheck(function()
+    local mt = { __tojson = function(self)
+        coroutine.yield()
+        return tostring(self.val)
+    end }
+    return lljson.encode({setmetatable({val = 42}, mt)})
+end) == "[\"42\"]")
+
+-- __tojson returning a table: exercises TOJSON_RECURSE (recursive encode of result)
+assert(consume_nocheck(function()
+    local mt = { __tojson = function(self)
+        coroutine.yield()
+        return {self.x, self.y}
+    end }
+    return lljson.encode(setmetatable({x = 1, y = 2}, mt))
+end) == "[1,2]")
+
+-- multiple __tojson in one encode: two yielding metamethods in the same array
+assert(consume_nocheck(function()
+    local mt = { __tojson = function(self)
+        coroutine.yield()
+        return self.v
+    end }
+    return lljson.encode({setmetatable({v = 10}, mt), setmetatable({v = 20}, mt)})
+end) == "[10,20]")
+
+-- encode large array: sustained interrupt-driven yields
+consume(function()
+    local t = {}
+    for i = 1, 200 do t[i] = i end
+    local r = lljson.encode(t)
+    local t2 = lljson.decode(r)
+    assert(#t2 == 200 and t2[1] == 1 and t2[200] == 200)
+end)
+
+-- decode with interrupt-driven yields
+consume(function()
+    local src = lljson.encode({a = {1, 2, 3}, b = {c = "d"}})
+    local t = lljson.decode(src)
+    assert(t.a[1] == 1 and t.a[2] == 2 and t.a[3] == 3 and t.b.c == "d")
+end)
+
+-- slencode with interrupt-driven yields
+consume(function()
+    local r = lljson.slencode({pos = vector(1, 2, 3), id = uuid("12345678-1234-1234-1234-123456789abc")})
+    local t = lljson.sldecode(r)
+    assert(t.pos == vector(1, 2, 3) and t.id == uuid("12345678-1234-1234-1234-123456789abc"))
+end)
+
+-- __len that yields: exercises LEN_CHECK/LEN_CALL yield path
+assert(consume_nocheck(function()
+    local mt = { __len = function(self)
+        coroutine.yield()
+        return self.n
+    end }
+    return lljson.encode(setmetatable({10, 20, 30, n = 3}, mt))
+end) == "[10,20,30]")
+
+-- deeply nested encode: arrays of objects of arrays with __tojson and __len at multiple levels
+consume_nocheck(function()
+    local tojson_mt = { __tojson = function(self)
+        coroutine.yield()
+        return self.val
+    end }
+    local len_mt = { __len = function(self)
+        coroutine.yield()
+        return self.n
+    end }
+    local r = lljson.encode({
+        items = {
+            {name = "a", tags = {1, 2, 3}},
+            {name = "b", tags = setmetatable({10, 20, n = 2}, len_mt)},
+            {name = "c", custom = setmetatable({val = "hello"}, tojson_mt)},
+        },
+        meta = {
+            nested = {
+                deep = {{true, false}, {lljson.null}},
+            },
+        },
+    })
+    local t = lljson.decode(r)
+    assert(t.items[1].name == "a" and t.items[1].tags[2] == 2)
+    assert(t.items[2].name == "b" and t.items[2].tags[1] == 10 and t.items[2].tags[2] == 20)
+    assert(t.items[3].name == "c" and t.items[3].custom == "hello")
+    assert(t.meta.nested.deep[1][1] == true and t.meta.nested.deep[1][2] == false)
+end)
+
+-- deeply nested decode: exercises recursive json_process_value → parse_object/parse_array at depth
+consume(function()
+    local src = '{"a":[{"b":[[1,2],[3,4]]},{"c":{"d":[5,6,7],"e":{"f":true}}}],"g":[[[8]]]}'
+    local t = lljson.decode(src)
+    assert(t.a[1].b[1][1] == 1 and t.a[1].b[2][2] == 4)
+    assert(t.a[2].c.d[3] == 7 and t.a[2].c.e.f == true)
+    assert(t.g[1][1][1] == 8)
+end)
+
 return 'OK'

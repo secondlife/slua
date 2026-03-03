@@ -1,6 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
+#include "lstrbuf.h"
 
 #include <stdlib.h>
 
@@ -29,6 +30,9 @@ void luaL_openlibs(lua_State* L)
         lua_pushstring(L, lib->name);
         lua_call(L, 1, 0);
     }
+
+    // ServerLua: Register the UTAG_STRBUF GC destructor.
+    lstrbuf_setup(L);
 }
 
 void luaL_sandbox(lua_State* L)
