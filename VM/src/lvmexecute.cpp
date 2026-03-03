@@ -2730,6 +2730,25 @@ reentry:
                 }
                 else
                 {
+                    // ServerLua: Phase 2 — re-entry after iterator returned (from RET or
+                    // continuation resume). Results are already at ra+3; copy first result
+                    // to iteration index and branch.
+                    if (L->ci->flags & LUA_CALLINFO_INSN_SUSPENDED)
+                    {
+                        L->ci->flags &= ~LUA_CALLINFO_INSN_SUSPENDED;
+                        ra = VM_REG(LUAU_INSN_A(insn));
+                        L->top = L->ci->top;
+
+                        setobj2s(L, ra + 2, ra + 3);
+                        pc += ttisnil(ra + 3) ? 1 : LUAU_INSN_D(insn);
+                        LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                        VM_NEXT();
+                    }
+
+                    // ServerLua: Phase 1 — dispatch iterator call via luau_precall so that
+                    // yielding inside the iterator is possible (luaD_call bumps nCcalls
+                    // which prevents lua_yield).
+
                     // note: it's safe to push arguments past top for complicated reasons (see top of the file)
                     setobj2s(L, ra + 3 + 2, ra + 2);
                     setobj2s(L, ra + 3 + 1, ra + 1);
@@ -2738,19 +2757,42 @@ reentry:
                     L->top = ra + 3 + 3; // func + 2 args (state and index)
                     LUAU_ASSERT(L->top <= L->stack_last);
 
-                    VM_PROTECT(luaD_call(L, ra + 3, uint8_t(aux)));
-                    L->top = L->ci->top;
+                    L->ci->flags |= LUA_CALLINFO_INSN_SUSPENDED;
+                    VM_PROTECT_PC(); // luau_precall may fail (luaV_tryfuncTM)
+                    L->ci->savedpc = pc - 1; // override: point back at FORGLOOP for re-entry
 
-                    // recompute ra since stack might have been reallocated
-                    ra = VM_REG(LUAU_INSN_A(insn));
+                    int precallresult = luau_precall(L, ra + 3, uint8_t(aux));
 
-                    // copy first variable back into the iteration index
-                    setobj2s(L, ra + 2, ra + 3);
+                    if (precallresult == PCRLUA)
+                    {
+                        // Lua iterator: re-enter VM loop. When the iterator returns
+                        // (RET), savedpc brings us back to FORGLOOP for phase 2.
+                        cl = clvalue(L->ci->func);
+                        base = L->base;
+                        k = cl->l.p->k;
+                        pc = SingleStep ? cl->l.p->code : cl->l.p->codeentry;
+                        VM_NEXT();
+                    }
+                    else if (precallresult == PCRYIELD)
+                    {
+                        // C iterator yielded. On resume, continuation runs,
+                        // luau_poscall copies results, savedpc returns here for phase 2.
+                        goto exit;
+                    }
+                    else // PCRC
+                    {
+                        // C iterator returned normally. luau_precall already copied
+                        // results to ra+3 and popped the frame.
+                        L->ci->flags &= ~LUA_CALLINFO_INSN_SUSPENDED;
+                        base = L->base; // refresh after potential stack realloc in C iterator
+                        ra = VM_REG(LUAU_INSN_A(insn));
+                        L->top = L->ci->top;
 
-                    // note that we need to increment pc by 1 to exit the loop since we need to skip over aux
-                    pc += ttisnil(ra + 3) ? 1 : LUAU_INSN_D(insn);
-                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
-                    VM_NEXT();
+                        setobj2s(L, ra + 2, ra + 3);
+                        pc += ttisnil(ra + 3) ? 1 : LUAU_INSN_D(insn);
+                        LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                        VM_NEXT();
+                    }
                 }
             }
 
