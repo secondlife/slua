@@ -16,13 +16,13 @@
     if (stacklimitreached(L, (n))) \
         luaD_reallocstack(L, getgrownstacksize(L, (n)), 1); \
     else \
-        condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 1));
+        condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 1), 1);
 
 #define luaD_checkstack(L, n) \
     if (stacklimitreached(L, (n))) \
         luaD_growstack(L, n); \
     else \
-        condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0));
+        condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0), 1);
 
 #define incr_top(L) \
     { \
@@ -40,7 +40,7 @@
             (L)->ci->top = (p); \
     }
 
-#define incr_ci(L) ((L->ci == L->end_ci) ? luaD_growCI(L) : (condhardstacktests(luaD_reallocCI(L, L->size_ci)), ++L->ci))
+#define incr_ci(L) ((L->ci == L->end_ci) ? luaD_growCI(L) : (condhardstacktests(luaD_reallocCI(L, L->size_ci), 1), ++L->ci))
 
 #define saveci(L, p) ((char*)(p) - (char*)L->base_ci)
 #define restoreci(L, n) ((CallInfo*)((char*)L->base_ci + (n)))

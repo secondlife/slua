@@ -122,6 +122,8 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 || (tm = fasttm(L, h->metatable, TM_INDEX)) == NULL)
             { // or no TM?
                 setobj2s(L, val, res);
+                // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+                hardstacktests_tm_realloc(L);
                 return;
             }
             // t isn't a table, so see if it has an INDEX meta-method to look up the key with
@@ -164,6 +166,8 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
 
                 setobj2t(L, h, newval, val);
                 luaC_barriert(L, h, val);
+                // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+                hardstacktests_tm_realloc(L);
                 return;
             }
 
@@ -260,9 +264,19 @@ int luaV_lessthan(lua_State* L, const TValue* l, const TValue* r)
     if (LUAU_UNLIKELY(ttype(l) != ttype(r)))
         luaG_ordererror(L, l, r, TM_LT);
     else if (LUAU_LIKELY(ttisnumber(l)))
-        return luai_numlt(nvalue(l), nvalue(r));
+    {
+        int result = luai_numlt(nvalue(l), nvalue(r));
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     else if (ttisstring(l))
-        return luaV_strcmp(tsvalue(l), tsvalue(r)) < 0;
+    {
+        int result = luaV_strcmp(tsvalue(l), tsvalue(r)) < 0;
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     else
         return call_orderTM(L, l, r, TM_LT, /* error= */ true);
 }
@@ -273,9 +287,19 @@ int luaV_lessequal(lua_State* L, const TValue* l, const TValue* r)
     if (ttype(l) != ttype(r))
         luaG_ordererror(L, l, r, TM_LE);
     else if (ttisnumber(l))
-        return luai_numle(nvalue(l), nvalue(r));
+    {
+        int result = luai_numle(nvalue(l), nvalue(r));
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     else if (ttisstring(l))
-        return luaV_strcmp(tsvalue(l), tsvalue(r)) <= 0;
+    {
+        int result = luaV_strcmp(tsvalue(l), tsvalue(r)) <= 0;
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     else if ((res = call_orderTM(L, l, r, TM_LE)) != -1) // first try `le'
         return res;
     else if ((res = call_orderTM(L, r, l, TM_LT)) == -1) // error if not `lt'
@@ -290,31 +314,68 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
     switch (ttype(t1))
     {
     case LUA_TNIL:
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
         return 1;
     case LUA_TNUMBER:
-        return luai_numeq(nvalue(t1), nvalue(t2));
+    {
+        int result = luai_numeq(nvalue(t1), nvalue(t2));
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     case LUA_TVECTOR:
-        return luai_veceq(vvalue(t1), vvalue(t2));
+    {
+        int result = luai_veceq(vvalue(t1), vvalue(t2));
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     case LUA_TBOOLEAN:
-        return bvalue(t1) == bvalue(t2); // true must be 1 !!
+    {
+        int result = bvalue(t1) == bvalue(t2); // true must be 1 !!
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     case LUA_TLIGHTUSERDATA:
-        return pvalue(t1) == pvalue(t2) && lightuserdatatag(t1) == lightuserdatatag(t2);
+    {
+        int result = pvalue(t1) == pvalue(t2) && lightuserdatatag(t1) == lightuserdatatag(t2);
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     case LUA_TUSERDATA:
     {
         tm = get_compTM(L, uvalue(t1)->metatable, uvalue(t2)->metatable, TM_EQ);
         if (!tm)
-            return uvalue(t1) == uvalue(t2);
+        {
+            int result = uvalue(t1) == uvalue(t2);
+            // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+            hardstacktests_tm_realloc(L);
+            return result;
+        }
         break; // will try TM
     }
     case LUA_TTABLE:
     {
         tm = get_compTM(L, hvalue(t1)->metatable, hvalue(t2)->metatable, TM_EQ);
         if (!tm)
-            return hvalue(t1) == hvalue(t2);
+        {
+            int result = hvalue(t1) == hvalue(t2);
+            // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+            hardstacktests_tm_realloc(L);
+            return result;
+        }
         break; // will try TM
     }
     default:
-        return gcvalue(t1) == gcvalue(t2);
+    {
+        int result = gcvalue(t1) == gcvalue(t2);
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
     }
     callTMres(L, L->top, tm, t1, t2); // call TM
     return !l_isfalse(L->top);
@@ -558,6 +619,8 @@ void luaV_dolen(lua_State* L, StkId ra, const TValue* rb)
         if ((tm = fasttm(L, h->metatable, TM_LEN)) == NULL)
         {
             setnvalue(ra, cast_num(luaH_getn(h)));
+            // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+            hardstacktests_tm_realloc(L);
             return;
         }
         break;
@@ -566,6 +629,8 @@ void luaV_dolen(lua_State* L, StkId ra, const TValue* rb)
     {
         TString* ts = tsvalue(rb);
         setnvalue(ra, cast_num(ts->len));
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
         return;
     }
     default:
