@@ -30,7 +30,7 @@ jobs:
             addrsize: "64"
           - os: {name: ubuntu, version: ubuntu-latest}
             addrsize: "64"
-            cflags: "-DHARDSTACKTESTS=1"
+            cflags: "-DHARDSTACKTESTS=2"
           - os: {name: ubuntu-32bit, version: ubuntu-latest}
             addrsize: "32"
             cflags: "-msse3 -mfpmath=sse -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64"
@@ -76,7 +76,7 @@ jobs:
         ./slua-tests -ts=Conformance --codegen -O2 --fflags=true
     - name: make cli
       run: |
-         LDFLAGS=-m${{matrix.addrsize}} CXXFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}} -DHARDSTACKTESTS=1" CFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" make -j4 config=sanitize ${{ matrix.addrsize == '64' && 'native=1' || ''}} werror=1 slua slua-analyze slua-compile # match config with tests to improve build time
+         LDFLAGS=-m${{matrix.addrsize}} CXXFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" CFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" make -j4 config=sanitize ${{ matrix.addrsize == '64' && 'native=1' || ''}} werror=1 slua slua-analyze slua-compile # match config with tests to improve build time
          ./slua tests/conformance/assert.luau
          ./slua-analyze tests/conformance/assert.luau
          ./slua-compile tests/conformance/assert.luau

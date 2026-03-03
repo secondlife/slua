@@ -78,7 +78,7 @@
 
 #define luaC_checkGC(L) \
     { \
-        condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0)); \
+        condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0), 1); \
         if (luaC_needsGC(L)) \
         { \
             condhardmemtests(luaC_validate(L), 1); \

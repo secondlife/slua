@@ -3,8 +3,10 @@
 #pragma once
 
 // When debugging complex issues, consider enabling one of these:
-// This will reallocate the stack very aggressively at every opportunity; use this with asan to catch stale stack pointers
+// This will reallocate the stack very aggressively at most opportunities; use this with asan to catch stale stack pointers
 // #define HARDSTACKTESTS 1
+// This will reallocate the stack very aggressively at every opportunity, including whenever a metamethod could have been invoked
+// #define HARDSTACKTESTS 2
 // This will call GC validation very aggressively at every incremental GC step; use this with caution as it's SLOW
 // #define HARDMEMTESTS 1
 // This will call GC validation very aggressively at every GC opportunity; use this with caution as it's VERY SLOW

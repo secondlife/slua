@@ -169,7 +169,7 @@ int lua_checkstack(lua_State* L, int size)
         }
         else
         {
-            condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0));
+            condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 0), 1);
         }
 
         expandstacklimit(L, L->top + size);
