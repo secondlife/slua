@@ -136,7 +136,7 @@ target_include_directories(Luau.CodeGen PUBLIC CodeGen/include)
 target_link_libraries(Luau.CodeGen PRIVATE Luau.VM Luau.VM.Internals) # Code generation needs VM internals
 target_link_libraries(Luau.CodeGen PUBLIC Luau.Common)
 
-target_compile_features(Luau.VM PRIVATE cxx_std_11)
+target_compile_features(Luau.VM PRIVATE cxx_std_17)
 target_include_directories(Luau.VM PUBLIC VM/include "${PACKAGE_INCLUDE_DIR}")
 target_link_libraries(Luau.VM PUBLIC Luau.Common)
 

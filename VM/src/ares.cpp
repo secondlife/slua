@@ -1323,6 +1323,7 @@ static void p_userdata(Info *info) {                               /* ... udata 
   switch(utag) {
     case UTAG_PROXY:
     case UTAG_QUATERNION:
+    case UTAG_OPAQUE_BUFFER:
       WRITE_VALUE(size, ares_size_t);
       WRITE_RAW(value, size);
       break;
@@ -1381,6 +1382,7 @@ static void u_userdata(Info *info) {                                   /* ... */
   {
     uint8_t utag = READ_VALUE(uint8_t);
     switch(utag) {
+      case UTAG_OPAQUE_BUFFER:
       case UTAG_PROXY:
       {
           size_t size = READ_VALUE(ares_size_t);
@@ -2235,7 +2237,6 @@ p_thread(Info *info) {                                          /* ... thread */
 
   /* Write general information. */
   WRITE_VALUE(thread->status, uint8_t);
-  // ServerLua:
   // Write thread's activememcat
   WRITE_VALUE(thread->activememcat, uint8_t);
 //  WRITE_VALUE(eris_savestackidx(thread,
@@ -2441,7 +2442,6 @@ u_thread(Info *info) {                                                 /* ... */
 
   /* Read general information. */
   thread->status = READ_VALUE(uint8_t);
-  // ServerLua:
   // Read thread's activememcat in version >= 2
   if (info->u.upi.version >= 2)
       thread->activememcat = READ_VALUE(uint8_t);
@@ -2665,7 +2665,6 @@ persist_typed(Info *info, int type) {                 /* perms reftbl ... obj */
   ++info->level;
 
   WRITE_VALUE(type, uint8_t);
-  // ServerLua:
   // Write memcat for GC object types
   if (type_has_memcat(type))
   {
@@ -2843,7 +2842,6 @@ unpersist(Info *info) {                                   /* perms reftbl ... */
   eris_checkstack(info->L, 1);
   {
     const uint8_t type = READ_VALUE(uint8_t);
-    // ServerLua:
     // Read memcat for GC object types in version >= 2
     uint8_t obj_memcat = info->L->activememcat;
     if (info->u.upi.version >= 2 && type_has_memcat(type))
@@ -3357,25 +3355,13 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
   eris_populate_perms(L, false);
   lua_pop(L, 1);                           /* perms reftbl buff path? rootobj */
 
-#if HARDSTACKTESTS
-  // Arrange the stack to make it more likely that we hit any lua_checkstack() misuse
   int pre_pad_top = lua_gettop(L);
-  lua_checkstack(L, LUA_MINSTACK);
-  while (lua_gettop(L) != LUA_MINSTACK - 1) {
-    lua_pushnil(L);
-  }
-  // A reference to the root obj needs to end back up on top
-  lua_pushvalue(L, pre_pad_top);
-  eris_assert(lua_gettop(L) == LUA_MINSTACK);
-#endif
+  lua_hardenstack(L, 1);
 
   p_header(&info);
   persist(&info);                          /* perms reftbl buff path? rootobj */
 
-#if HARDSTACKTESTS
-  lua_pop(L, LUA_MINSTACK - pre_pad_top);
-  eris_assert(lua_gettop(L) == pre_pad_top);
-#endif
+  lua_settop(L, pre_pad_top);
 
   if (info.generatePath) {                  /* perms reftbl buff path rootobj */
     lua_remove(L, PATHIDX);                      /* perms reftbl buff rootobj */
@@ -3447,27 +3433,17 @@ unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
   eris_populate_perms(L, true);
   lua_pop(L, 1);                              /* perms reftbl nil? path? str? */
 
-#if HARDSTACKTESTS
-  // Arrange the stack to make it more likely that we hit any lua_checkstack() misuse
   int pre_pad_top = lua_gettop(L);
-  lua_checkstack(L, LUA_MINSTACK);
-  while (lua_gettop(L) != LUA_MINSTACK - 1) {
-      lua_pushnil(L);
-  }
-  // A reference to the root obj needs to end back up on top
-  lua_pushvalue(L, pre_pad_top);
-  eris_assert(lua_gettop(L) == LUA_MINSTACK);
-#endif
+  lua_hardenstack(L, 1);
 
   u_header(&info);
   unpersist(&info);                   /* perms reftbl nil? path? str? rootobj */
 
-#if HARDSTACKTESTS
-  // Slot the top of the stack back in where it should be
-  lua_replace(L, pre_pad_top + 1);
-  lua_pop(L, LUA_MINSTACK - pre_pad_top - 1);
-  eris_assert(lua_gettop(L) == pre_pad_top + 1);
-#endif
+  /* Get rid of any padding we might have added, leave just the result */
+  if (lua_gettop(L) > pre_pad_top + 1) {
+    lua_replace(L, pre_pad_top + 1);
+    lua_settop(L, pre_pad_top + 1);
+  }
 
   if (info.generatePath) {              /* perms reftbl nil path str? rootobj */
     lua_remove(L, PATHIDX);                  /* perms reftbl nil str? rootobj */

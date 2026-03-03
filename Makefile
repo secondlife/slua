@@ -159,9 +159,9 @@ $(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -ICompiler/include -ICommon/include -I
 $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/include -ICompiler/include  -IVM/include
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -ICompiler/include -IVM/include
 $(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -IVM/include -IVM/src # Code generation needs VM internals
-$(VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include -Istage/packages/include -I VM/cjson
-$(APR_OBJECTS): CXXFLAGS+=-std=c++11 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include
-$(CJSON_OBJECTS): CXXFLAGS+=-std=c++11 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
+$(VM_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -Istage/packages/include -I VM/cjson
+$(APR_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include
+$(CJSON_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
 $(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -I$(BUILD)

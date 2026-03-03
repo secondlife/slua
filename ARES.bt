@@ -30,6 +30,8 @@ const uchar UTAG_UUID = 26;
 const uchar UTAG_DETECTED_EVENT = 28;
 const uchar UTAG_LLEVENTS = 29;
 const uchar UTAG_LLTIMERS = 30;
+const uchar UTAG_STRBUF = 31;
+const uchar UTAG_OPAQUE_BUFFER = 32;
 
 #define LUA_TNONE		(-1)
 
@@ -693,6 +695,14 @@ typedef struct {
         Object tick_wrapper;
         break;
     }
+    case UTAG_STRBUF:
+    {
+        size_t capacity;
+        size_t used;
+        uchar data[used];
+        break;
+    }
+    case UTAG_OPAQUE_BUFFER:
     default:
     {
         size_t length;      /* Size of the data */

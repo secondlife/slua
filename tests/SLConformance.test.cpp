@@ -17,6 +17,7 @@
 #include "doctest.h"
 #include "ScopedFlags.h"
 #include "llsl.h"
+#include "lyieldablemacros.h"
 #include "../VM/src/lstate.h"
 #include "../VM/src/mono_strings.h"
 #include "../VM/src/lapi.h"
@@ -995,6 +996,373 @@ TEST_CASE("Table Sizing")
         lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, luaL_checkinteger(L, 1)); return 0;}, "change_memcat");
         lua_setglobal(L, "change_memcat");
     });
+}
+
+// Yieldable C function test using lyieldable.h framework.
+// Takes a callback and a count n, calls callback(i) for i=1..n,
+// accumulates return values and returns the sum.
+DEFINE_YIELDABLE(test_yieldable_sum, 0)
+{
+    YIELDABLE_RETURNS_DEFAULT;
+
+    // If you want to be able to yield at this function call level,
+    // you need to define names for all the places you might yield.
+    // So we know where to jump to when we resume.
+    enum class Phase : uint8_t {
+        DEFAULT = 0,
+        CALL_CALLBACK = 1,
+    };
+
+    // All slots must be finalized before we do any init code.
+    SlotManager slots(L, is_init);
+
+    // Phase storage is explicit
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, i, 1);
+    DEFINE_SLOT(int32_t, n, 0);
+    DEFINE_SLOT(int32_t, accumulator, 0);
+
+    slots.finalize();
+
+    // Args always start at position 2.
+    if (is_init)
+    {
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+        n = luaL_checkinteger(L, 3);
+    }
+
+    // Denotes where we can actually begin yielding. Any setup should
+    // be done by this point
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(CALL_CALLBACK);
+    YIELD_DISPATCH_END();
+
+    for (; i <= n; ++i)
+    {
+        // Push callback and argument
+        lua_pushvalue(L, 2);
+        lua_pushinteger(L, i);
+        YIELD_CALL(L, 1, 1, CALL_CALLBACK);
+        // Accumulate the return value
+        accumulator += lua_tointeger(L, -1);
+        lua_pop(L, 1);
+    }
+
+    lua_pushinteger(L, accumulator);
+    return 1;
+}
+
+// Helper function with chained SlotManager. Calls callback(i) for
+// i=start..start+count-1, accumulates results into the parent's accumulator
+// slot (passed by reference).
+static void test_yieldable_inner(lua_State* L, SlotManager& parentSlots, int32_t& accumulator)
+{
+    YIELDABLE_RETURNS_VOID;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        CALL_CALLBACK = 1,
+    };
+
+    SlotManager slots(parentSlots);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, i, 0);
+    DEFINE_SLOT(int32_t, end, 0);
+    slots.finalize();
+
+    if (slots.isInit())
+    {
+        // Args: [2: callback] [3: start] [4: count]
+        i = luaL_checkinteger(L, 3);
+        end = i + luaL_checkinteger(L, 4);
+    }
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(CALL_CALLBACK);
+    YIELD_DISPATCH_END();
+
+    for (; i < end; ++i)
+    {
+        lua_pushvalue(L, 2);
+        lua_pushinteger(L, i);
+        YIELD_CALL(L, 1, 1, CALL_CALLBACK);
+        accumulator += lua_tointeger(L, -1);
+        lua_pop(L, 1);
+    }
+}
+
+// Outer yieldable function that delegates to test_yieldable_inner.
+// Takes (callback, start, count) and returns accumulated sum.
+// Calls callback(0) first (a yieldable call in the parent) before
+// delegating to the helper — this proves that slots.isInit() in the
+// helper returns true even when the parent has already yielded & resumed.
+DEFINE_YIELDABLE(test_yieldable_chained, 0)
+{
+    YIELDABLE_RETURNS_DEFAULT;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        PRE_CALL = 1,
+        HELPER_CALL = 2,
+    };
+
+    SlotManager slots(L, is_init);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, accumulator, 0);
+    slots.finalize();
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(PRE_CALL);
+    YIELD_DISPATCH(HELPER_CALL);
+    YIELD_DISPATCH_END();
+
+    // Call callback(0) in the parent before entering the helper.
+    // The result is added to accumulator, but callback(0) typically
+    // returns 0 so it doesn't affect the sum.
+    lua_pushvalue(L, 2);
+    lua_pushinteger(L, 0);
+    YIELD_CALL(L, 1, 1, PRE_CALL);
+    accumulator += lua_tointeger(L, -1);
+    lua_pop(L, 1);
+
+    YIELD_HELPER(L, HELPER_CALL, test_yieldable_inner(L, slots, accumulator));
+
+    lua_pushinteger(L, accumulator);
+    return 1;
+}
+
+// Recursive helper: calls callback(n), accumulates result, then recurses with n-1.
+// Stack layout: [1: nil/buf] [2: callback] [3: n]
+static void test_yieldable_recursive_sum(lua_State* L, SlotManager& parentSlots, int32_t& accumulator)
+{
+    YIELDABLE_RETURNS_VOID;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        CALL_CALLBACK = 1,
+        RECURSE = 2,
+    };
+
+    SlotManager slots(parentSlots);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, n, 0);
+    slots.finalize();
+
+    if (slots.isInit())
+    {
+        n = luaL_checkinteger(L, 3);
+    }
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(CALL_CALLBACK);
+    YIELD_DISPATCH(RECURSE);
+    YIELD_DISPATCH_END();
+
+    if (n > 0)
+    {
+        // Call callback(n) — callback is at position 2
+        lua_pushvalue(L, 2);
+        lua_pushinteger(L, n);
+        YIELD_CALL(L, 1, 1, CALL_CALLBACK);
+        accumulator += lua_tointeger(L, -1);
+        lua_pop(L, 1);
+
+        // Recurse with n-1
+        lua_pushinteger(L, n - 1);
+        lua_replace(L, 3);
+        YIELD_HELPER(L, RECURSE, test_yieldable_recursive_sum(L, slots, accumulator));
+    }
+}
+
+// Outer yieldable: takes (callback, n), returns sum of callback(i) for i=n..1.
+DEFINE_YIELDABLE(test_yieldable_recursive, 0)
+{
+    YIELDABLE_RETURNS_DEFAULT;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        HELPER_CALL = 1,
+    };
+
+    SlotManager slots(L, is_init);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, accumulator, 0);
+    slots.finalize();
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(HELPER_CALL);
+    YIELD_DISPATCH_END();
+
+    YIELD_HELPER(L, HELPER_CALL, test_yieldable_recursive_sum(L, slots, accumulator));
+
+    lua_pushinteger(L, accumulator);
+    return 1;
+}
+
+// Simple yieldable function that yields via YIELD_CHECK (interrupt-driven).
+// Takes n, sums 1..n. No callback — yields happen purely from the interrupt handler.
+DEFINE_YIELDABLE(test_yieldable_check_sum, 0)
+{
+    YIELDABLE_RETURNS_DEFAULT;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        CHECK_POINT = 1,
+    };
+
+    SlotManager slots(L, is_init);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, i, 1);
+    DEFINE_SLOT(int32_t, n, 0);
+    DEFINE_SLOT(int32_t, accumulator, 0);
+    slots.finalize();
+
+    if (is_init)
+        n = luaL_checkinteger(L, 2);
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(CHECK_POINT);
+    YIELD_DISPATCH_END();
+
+    for (; i <= n; ++i)
+    {
+        YIELD_CHECK(L, CHECK_POINT, -100);
+        accumulator += i;
+    }
+
+    lua_pushinteger(L, accumulator);
+    return 1;
+}
+
+// Inner helper with child SlotManager that yields via YIELD_CHECK.
+// Sums start..start+count-1 into parent's accumulator.
+static void test_yieldable_inner_check(lua_State* L, SlotManager& parentSlots, int32_t& accumulator)
+{
+    YIELDABLE_RETURNS_VOID;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        CHECK_POINT = 1,
+    };
+
+    SlotManager slots(parentSlots);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, i, 0);
+    DEFINE_SLOT(int32_t, end, 0);
+    slots.finalize();
+
+    if (slots.isInit())
+    {
+        // No callback at position 2 (unlike YIELD_CALL version), so
+        // start is at position 2, count at position 3
+        i = luaL_checkinteger(L, 2);
+        end = i + luaL_checkinteger(L, 3);
+    }
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(CHECK_POINT);
+    YIELD_DISPATCH_END();
+
+    for (; i < end; ++i)
+    {
+        YIELD_CHECK(L, CHECK_POINT, -100);
+        accumulator += i;
+    }
+}
+
+// Outer function with parent YIELD_CHECK + YIELD_HELPER to child.
+// Takes (start, count), returns sum of start..start+count-1.
+DEFINE_YIELDABLE(test_yieldable_chained_check, 0)
+{
+    YIELDABLE_RETURNS_DEFAULT;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        PRE_CHECK = 1,
+        HELPER_CALL = 2,
+    };
+
+    SlotManager slots(L, is_init);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, accumulator, 0);
+    slots.finalize();
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(PRE_CHECK);
+    YIELD_DISPATCH(HELPER_CALL);
+    YIELD_DISPATCH_END();
+
+    YIELD_CHECK(L, PRE_CHECK, -100);
+
+    YIELD_HELPER(L, HELPER_CALL, test_yieldable_inner_check(L, slots, accumulator));
+
+    lua_pushinteger(L, accumulator);
+    return 1;
+}
+
+TEST_CASE("Lyieldable")
+{
+    runConformance("lyieldable.luau", nullptr, [](lua_State* L) {
+        lua_pushcclosurek(L, test_yieldable_sum_v0, "test_yieldable_sum", 0, test_yieldable_sum_v0_k);
+        lua_setglobal(L, "yieldable_sum");
+
+        lua_pushcclosurek(L, test_yieldable_chained_v0, "test_yieldable_chained", 0, test_yieldable_chained_v0_k);
+        lua_setglobal(L, "yieldable_chained");
+
+        lua_pushcclosurek(L, test_yieldable_recursive_v0, "test_yieldable_recursive", 0, test_yieldable_recursive_v0_k);
+        lua_setglobal(L, "yieldable_recursive");
+    });
+}
+
+static int checkYieldCount = 0;
+
+TEST_CASE("LyieldableCheck")
+{
+    runConformance(
+        "lyieldable_check.luau",
+        nullptr,
+        [](lua_State* L)
+        {
+            lua_pushcclosurek(L, test_yieldable_check_sum_v0, "test_yieldable_check_sum", 0, test_yieldable_check_sum_v0_k);
+            lua_setglobal(L, "yieldable_check_sum");
+
+            lua_pushcclosurek(L, test_yieldable_chained_check_v0, "test_yieldable_chained_check", 0, test_yieldable_chained_check_v0_k);
+            lua_setglobal(L, "yieldable_chained_check");
+
+            // clear_check_count() — resets the yield counter
+            lua_pushcfunction(
+                L,
+                [](lua_State* L) -> int
+                {
+                    checkYieldCount = 0;
+                    return 0;
+                },
+                "clear_check_count"
+            );
+            lua_setglobal(L, "clear_check_count");
+
+            // get_check_count() — returns the yield counter
+            lua_pushcfunction(
+                L,
+                [](lua_State* L) -> int
+                {
+                    lua_pushinteger(L, checkYieldCount);
+                    return 1;
+                },
+                "get_check_count"
+            );
+            lua_setglobal(L, "get_check_count");
+
+            // Install interrupt that yields on every YIELD_CHECK hit
+            lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+            {
+                if (gc != -100)
+                    return;
+                checkYieldCount++;
+                lua_yield(L, 0);
+            };
+        }
+    );
 }
 
 TEST_SUITE_END();

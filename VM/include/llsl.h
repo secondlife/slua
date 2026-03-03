@@ -30,6 +30,8 @@ enum class YieldableStatus : uint8_t {
 #define UTAG_DETECTED_EVENT 28
 #define UTAG_LLEVENTS 29
 #define UTAG_LLTIMERS 30
+#define UTAG_STRBUF 31
+#define UTAG_OPAQUE_BUFFER 32
 
 // Internal global names for event/timer managers (hidden from user code)
 #define LLEVENTS_GLOBAL_NAME "/$ LLEvents"
