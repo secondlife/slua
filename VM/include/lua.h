@@ -567,12 +567,12 @@ static void populateperms(lua_State *L, bool forUnpersist)
     eris_persist_static_cont(corolib, auxwrapy, auxwrapcont)
 #endif
 #if defined(eris_c) || defined(lllevents_c)
-    eris_persist_static_cont(llevents, llevents_handle_event_init, llevents_handle_event_cont)
+    eris_persist_static_cont(llevents, llevents_handle_event_v0, llevents_handle_event_v0_k)
     eris_persist_static_cont(llevents, llevents_once_wrapper, llevents_once_wrapper_cont)
     eris_persist_static(llevents, timer_wrapper_guard)
 #endif
 #if defined(eris_c) || defined(llltimers_c)
-    eris_persist_static_cont(llltimers, lltimers_tick_init, lltimers_tick_cont)
+    eris_persist_static_cont(llltimers, lltimers_tick_v0, lltimers_tick_v0_k)
     eris_persist_cont(llltimers, timer_event_wrapper, timer_event_wrapper_cont)
 #endif
 #if defined(eris_c)

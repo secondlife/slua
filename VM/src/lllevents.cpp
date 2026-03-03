@@ -7,6 +7,7 @@
 #include "llsl.h"
 #include "lllevents.h"
 #include "llltimers.h"
+#include "lyieldablemacros.h"
 
 #include "lobject.h"
 #include "lstate.h"
@@ -17,7 +18,7 @@
 // Guard function to prevent direct calls to internal timer wrapper
 int timer_wrapper_guard(lua_State *L)
 {
-    luaL_errorL(L, "Cannot call internal timer wrapper directly");
+    luaL_errorL(L, "Cannot call internal wrapper directly");
     return 0;
 }
 
@@ -533,21 +534,11 @@ static const std::unordered_set<std::string> MULTI_EVENT_NAMES = {
     "final_damage"
 };
 
-// Stack indices for yield-safe event handler continuation
+// Stack indices for yield-safe event handler
 enum EventHandlerStack {
-    // The handler index serves as a pointer into the (cloned) handlers
-    // table,
-    HANDLER_INDEX = 1,
-    IS_MULTI = 2,
-    // How many handlers are in the handlers table (cached for speed)
-    HANDLERS_LEN = 3,
-    HANDLERS_TABLE = 4,
-    // The original (live) handlers table before cloning
-    ORIGINAL_HANDLERS_TABLE = 5,
-    // number of args after `ARG_START`
-    NARGS = 6,
-    // multi-args start after this.
-    ARG_START = 7
+    HANDLERS_TABLE = 2,
+    ORIGINAL_HANDLERS_TABLE = 3,
+    ARG_START = 4,
 };
 
 static bool is_multi_event(const char* event_name)
@@ -555,80 +546,135 @@ static bool is_multi_event(const char* event_name)
     return MULTI_EVENT_NAMES.find(event_name) != MULTI_EVENT_NAMES.end();
 }
 
-int llevents_handle_event_cont(lua_State *L, int status)
+DEFINE_YIELDABLE(llevents_handle_event, 0)
 {
-    int handler_index = lua_tointeger(L, HANDLER_INDEX);
-    int handlers_len = lua_tointeger(L, HANDLERS_LEN);
-    int nargs = lua_tointeger(L, NARGS);
-    bool is_multi = lua_toboolean(L, IS_MULTI);
+    YIELDABLE_RETURNS_DEFAULT;
 
-    // We need rather a lot of overhead.
+    enum class Phase : uint8_t {
+        DEFAULT = 0,
+        INTERRUPT_CHECK = 1,
+        CALL_HANDLER = 2,
+    };
+
+    SlotManager slots(L, is_init);
+
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, handler_index, 1);
+    DEFINE_SLOT(int32_t, handlers_len, 0);
+    DEFINE_SLOT(int32_t, nargs, 0);
+    DEFINE_SLOT(bool, is_multi, false);
+    slots.finalize();
+
+    if (is_init)
+    {
+        auto *llevents = (const lua_LLEvents *)lua_touserdatatagged(L, 2, UTAG_LLEVENTS);
+        if (!llevents)
+            luaL_typeerror(L, 2, "LLEvents");
+
+        luaL_checktype(L, 3, LUA_TSTRING);
+
+        const char *event_name = luaL_checkstring(L, 3);
+        nargs = lua_gettop(L) - ARG_START + 1;
+        is_multi = is_multi_event(event_name);
+        bool can_adjust_damage = is_multi && (strcmp(event_name, "on_damage") == 0);
+
+        lua_getref(L, llevents->listeners_tab_ref);
+        lua_rawgetfield(L, -1, event_name);
+
+        // We have no listeners for this event.
+        if (lua_isnil(L, -1))
+            return 0;
+
+        int len = lua_objlen(L, -1);
+
+        // Empty array isn't valid, val should be nil if no handlers for an event.
+        LUAU_ASSERT(len > 0);
+        handlers_len = len;
+
+        // Place original handlers table at position 3 (replacing event_name arg)
+        lua_replace(L, ORIGINAL_HANDLERS_TABLE);
+        // Clone from its new home, place at position 2 (replacing llevents arg)
+        lua_clonetable(L, ORIGINAL_HANDLERS_TABLE);
+        lua_replace(L, HANDLERS_TABLE);
+        // Pop leftover listeners_tab
+        lua_pop(L, 1);
+
+        if (is_multi)
+        {
+            int num_detected = luaL_checkinteger(L, ARG_START);
+
+            lua_createtable(L, num_detected, 0);
+
+            for (int i = 1; i <= num_detected; i++)
+            {
+                luaSL_pushdetectedevent(L, i, true, can_adjust_damage);
+                lua_rawseti(L, -2, i);
+            }
+
+            lua_setreadonly(L, -1, true);
+            // Set the first arg to the table of detected event wrappers
+            lua_replace(L, ARG_START);
+        }
+    }
+
     lua_checkstack(L, lua_gettop(L) * 3);
-    // Continue with next handler
-    handler_index++;
 
-    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(INTERRUPT_CHECK);
+    YIELD_DISPATCH(CALL_HANDLER);
+    YIELD_DISPATCH_END();
 
     for (; handler_index <= handlers_len; ++handler_index)
     {
-        lua_rawgeti(L, HANDLERS_TABLE, handler_index);
-        LUAU_ASSERT(lua_type(L, -1) == LUA_TTABLE);
-
-        // Check if this wrapper still exists in the original handlers table
-        bool found = false;
-        int original_len = lua_objlen(L, ORIGINAL_HANDLERS_TABLE);
-        for (int i = 1; i <= original_len; i++)
-        {
-            lua_rawgeti(L, ORIGINAL_HANDLERS_TABLE, i);
-            if (lua_rawequal(L, -1, -2))
-            {
-                found = true;
-                lua_pop(L, 1); // Pop the original wrapper
-                break;
-            }
-            lua_pop(L, 1); // Pop the original wrapper
-        }
-
-        if (!found)
-        {
-            // Handler was removed during iteration, skip it
-            lua_pop(L, 1); // Pop the wrapper from cloned table
-            continue;
-        }
-
-        // Unwrap to get the actual handler function
-        lua_rawgeti(L, -1, 1); // Get wrapper[1]
-        lua_remove(L, -2); // Remove the wrapper table
-        LUAU_ASSERT(lua_iscallable(L, -1));
-
-        // Push arguments for this handler call
-        for (int j = 0; j < nargs; j++)
-        {
-            lua_pushvalue(L, ARG_START + j);
-        }
-
-        // Update handler index on stack for next continuation
-        lua_pushinteger(L, handler_index);
-        lua_replace(L, HANDLER_INDEX);
-
-        // Call handler, we want errors to bubble up and only handle yield/break.
-        lua_call(L, nargs, 0);
-        if (L->status != LUA_OK)
-            return -1;
-
         // Check for interrupts between handlers to prevent abuse
-        if (LUAU_LIKELY(!!interrupt))
+        YIELD_CHECK(L, INTERRUPT_CHECK, LUA_INTERRUPT_EVENTS);
+
+        // Enclose this in an anonymous scope so lifetimes of temporaries are bounded
         {
-            interrupt(L, LUA_INTERRUPT_EVENTS);
-            if (L->status != LUA_OK)
-                return -1;
+            // Get the (table-wrapped) function to call from the handlers table
+            lua_rawgeti(L, HANDLERS_TABLE, handler_index);
+            LUAU_ASSERT(lua_type(L, -1) == LUA_TTABLE);
+
+            // Check if this wrapper still exists in the original handlers table
+            bool found = false;
+            int original_len = lua_objlen(L, ORIGINAL_HANDLERS_TABLE);
+            for (int i = 1; i <= original_len; i++)
+            {
+                lua_rawgeti(L, ORIGINAL_HANDLERS_TABLE, i);
+                if (lua_rawequal(L, -1, -2))
+                {
+                    found = true;
+                    lua_pop(L, 1);
+                    break;
+                }
+                lua_pop(L, 1);
+            }
+
+            // Not registered anymore? One of the intermediary handlers
+            // may have unregistered it. Try the next one.
+            if (!found)
+            {
+                lua_pop(L, 1);
+                continue;
+            }
+
+            // Unwrap to get the actual handler function
+            lua_rawgeti(L, -1, 1);
+            lua_remove(L, -2);
+            LUAU_ASSERT(lua_iscallable(L, -1));
+
+            // Push arguments for this handler call
+            for (int j = 0; j < nargs; j++)
+                lua_pushvalue(L, ARG_START + j);
         }
+
+        // handler function and arguments are in order on the stack, do the call.
+        YIELD_CALL(L, nargs, 0, CALL_HANDLER);
     }
 
     // All handlers completed - mark DetectedEvent wrappers as invalid
     if (is_multi)
     {
-        // We only care about the first argument with our (readonly) table of wrappers.
         int num_wrappers = lua_objlen(L, ARG_START);
 
         for (int i = 1; i <= num_wrappers; i++)
@@ -636,97 +682,12 @@ int llevents_handle_event_cont(lua_State *L, int status)
             lua_rawgeti(L, ARG_START, i);
             auto *detected_event = (lua_DetectedEvent *)lua_touserdatatagged(L, -1, UTAG_DETECTED_EVENT);
             if (detected_event)
-            {
                 detected_event->valid = false;
-            }
             lua_pop(L, 1);
         }
     }
 
     return 0;
-}
-
-static int llevents_handle_event_init(lua_State *L)
-{
-    // Arguments: llevents_userdata, event_name, ...event_args
-    auto *llevents = (const lua_LLEvents *)lua_touserdatatagged(L, 1, UTAG_LLEVENTS);
-    if (!llevents)
-        luaL_typeerror(L, 1, "LLEvents");
-
-    // No implicit conversion from number please.
-    luaL_checktype(L, 2, LUA_TSTRING);
-
-    const char *event_name = luaL_checkstring(L, 2);
-    int nargs = lua_gettop(L) - 2;
-    bool is_multi = is_multi_event(event_name);
-
-    // I can't remember how much this needs temporarily, this should be fine.
-    lua_checkstack(L, nargs + 10);
-
-    lua_getref(L, llevents->listeners_tab_ref);
-    lua_rawgetfield(L, -1, event_name);
-
-    // We have no listeners for this event.
-    if (lua_isnil(L, -1))
-    {
-        return 0;
-    }
-
-    int handlers_len = lua_objlen(L, -1);
-
-    // Empty array isn't valid, val should be nil if no handlers.
-    // If it's present and empty we've messed up badly.
-    LUAU_ASSERT(handlers_len > 0);
-
-    // Clone the handlers array so modifications during handling don't affect us
-    // Keep the original for checking if handlers were removed during iteration
-    lua_clonetable(L, -1);
-    lua_remove(L, -3);  // Remove listeners_tab
-
-    if (is_multi)
-    {
-        // First argument should be num_detected for multi-event types,
-        // which is of course the _third_ argument for `handleEvent()` itself.
-        int num_detected = luaL_checkinteger(L, 3);
-
-        // Create DetectedEvent wrappers table
-        lua_createtable(L, num_detected, 0);
-
-        bool can_adjust_damage = (strcmp(event_name, "on_damage") == 0);
-        for (int i = 1; i <= num_detected; i++)
-        {
-            luaSL_pushdetectedevent(L, i, true, can_adjust_damage);
-            lua_rawseti(L, -2, i);
-        }
-
-        lua_setreadonly(L, -1, true);
-        lua_replace(L, 3);
-    }
-
-    // Insert context values at their enum positions
-    lua_pushinteger(L, 0);
-    lua_insert(L, HANDLER_INDEX);
-
-    lua_pushboolean(L, is_multi);
-    lua_insert(L, IS_MULTI);
-
-    lua_pushinteger(L, handlers_len);
-    lua_insert(L, HANDLERS_LEN);
-
-    // cloned handlers_table already on top
-    lua_insert(L, HANDLERS_TABLE);
-
-    // original handlers_table (for checking removed handlers)
-    lua_insert(L, ORIGINAL_HANDLERS_TABLE);
-
-    lua_pushinteger(L, nargs);
-    lua_insert(L, NARGS);
-
-    // Remove llevents and event_name which are now at ARG_START
-    lua_remove(L, ARG_START);  // Remove llevents
-    lua_remove(L, ARG_START);  // Remove event_name
-
-    return llevents_handle_event_cont(L, LUA_OK);
 }
 
 void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
@@ -777,7 +738,7 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
     lua_setfield(L, -2, "eventNames");
 
     // Store _handleEvent in registry for host access
-    lua_pushcclosurek(L, llevents_handle_event_init, "_handleEvent", 0, llevents_handle_event_cont);
+    lua_pushcclosurek(L, llevents_handle_event_v0, "_handleEvent", 0, llevents_handle_event_v0_k);
     lua_setfield(L, LUA_REGISTRYINDEX, LLEVENTS_HANDLEEVENT_KEY);
 
     // Store timer wrapper guard in registry for listeners() protection
@@ -786,7 +747,7 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
 
     if (expose_internal_funcs)
     {
-        lua_pushcclosurek(L, llevents_handle_event_init, "_handleEvent", 0, llevents_handle_event_cont);
+        lua_pushcclosurek(L, llevents_handle_event_v0, "_handleEvent", 0, llevents_handle_event_v0_k);
         lua_setfield(L, -2, "_handleEvent");
     }
 
