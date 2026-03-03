@@ -7,6 +7,7 @@
 #include "lualib.h"
 #include "llsl.h"
 #include "llltimers.h"
+#include "lyieldablemacros.h"
 
 #include "lobject.h"
 #include "lstate.h"
@@ -282,15 +283,13 @@ static int lltimers_off(lua_State *L)
     return 1;
 }
 
-// Stack indices for yield-safe timer tick continuation
+// Stack indices for yield-safe timer tick
 enum TickStack {
-    LLTIMERS_USERDATA = 1,
-    TIMER_INDEX = 2,
-    TIMERS_LEN = 3,
-    CLONED_TIMERS_ARRAY = 4,  // Shallow clone for safe iteration
-    LIVE_TIMERS_ARRAY = 5,     // The actual timers array (can be modified)
-    CURRENT_TIMER = 6,         // Current timer data table being processed
-    HANDLER_FUNC = 7           // Handler function to call
+    LLTIMERS_USERDATA = 2,
+    CLONED_TIMERS_ARRAY = 3,
+    LIVE_TIMERS_ARRAY = 4,
+    CURRENT_TIMER = 5,
+    HANDLER_FUNC = 6,
 };
 
 // Check if our timer wrapper is already registered with LLEvents
@@ -431,12 +430,13 @@ static void schedule_next_tick(lua_State *L, lua_LLTimers *lltimers)
     sl_state->setTimerEventCb(L, next_interval);
 }
 
-static int lltimers_tick_cont(lua_State *L, int status);
+// Forward-declare continuation for is_already_in_tick.
+static int lltimers_tick_v0_k(lua_State *L, int status);
 
 // Check if we're already inside a _tick() call by walking the call stack
 static bool is_already_in_tick(lua_State *L)
 {
-    // Walk up the call stack looking for lltimers_tick_cont
+    // Walk up the call stack looking for lltimers_tick_v0_k
     // We start from L->ci - 1 because L->ci is the current (new) call to _tick
     for (CallInfo* ci = L->ci - 1; ci > L->base_ci; ci--)
     {
@@ -447,7 +447,7 @@ static bool is_already_in_tick(lua_State *L)
         Closure* cl = clvalue(ci->func);
 
         // Check if this is a C function with our continuation
-        if (cl->isC && cl->c.cont == lltimers_tick_cont)
+        if (cl->isC && cl->c.cont == lltimers_tick_v0_k)
         {
             // Found _tick() higher in the call stack - we're reentrant!
             return true;
@@ -457,295 +457,264 @@ static bool is_already_in_tick(lua_State *L)
     return false;
 }
 
-static int lltimers_tick_init(lua_State *L)
+DEFINE_YIELDABLE(lltimers_tick, 0)
 {
-    auto *lltimers = (lua_LLTimers *)lua_touserdatatagged(L, 1, UTAG_LLTIMERS);
-    if (!lltimers)
-        luaL_typeerror(L, 1, "LLTimers");
+    YIELDABLE_RETURNS_DEFAULT;
 
-    lua_settop(L, 1);
+    enum class Phase : uint8_t {
+        DEFAULT = 0,
+        INTERRUPT_CHECK = 1,
+        CALL_HANDLER = 2,
+    };
 
-    // Check for reentrancy
-    if (is_already_in_tick(L))
+    SlotManager slots(L, is_init);
+
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(int32_t, timer_index, 1);
+    DEFINE_SLOT(int32_t, timers_len, 0);
+    slots.finalize();
+
+    if (is_init)
     {
-        luaL_errorL(L, "Recursive call to LLTimers:_tick() detected");
+        // SlotManager already inserted nil at position 1; self is at LLTIMERS_USERDATA (2)
+        auto *lltimers = (lua_LLTimers *)lua_touserdatatagged(L, LLTIMERS_USERDATA, UTAG_LLTIMERS);
+        if (!lltimers)
+            luaL_typeerror(L, LLTIMERS_USERDATA, "LLTimers");
+
+        lua_settop(L, LLTIMERS_USERDATA);
+
+        // Check for reentrancy
+        if (is_already_in_tick(L))
+            luaL_errorL(L, "Recursive call to LLTimers:_tick() detected");
+
+        // Reserve stack slots up to HANDLER_FUNC
+        for (int i = lua_gettop(L) + 1; i <= HANDLER_FUNC; i++)
+            lua_pushnil(L);
+
+        // Get the live timers array and check if we have any timers
+        lua_getref(L, lltimers->timers_tab_ref);
+        int len = lua_objlen(L, -1);
+
+        if (!len)
+            return 0;
+
+        // Clone the timer array for safe iteration
+        lua_clonetable(L, -1);
+
+        // Place both in their stack positions
+        lua_replace(L, CLONED_TIMERS_ARRAY);
+        lua_replace(L, LIVE_TIMERS_ARRAY);
+
+        timers_len = len;
+        LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
     }
 
-    // This reserves all the stack slots we need for the continuation
-    for (int i = 2; i <= HANDLER_FUNC; i++)
-        lua_pushnil(L);
-
-    // Get the live timers array and check if we have any timers
-    lua_getref(L, lltimers->timers_tab_ref);
-    int len = lua_objlen(L, -1);
-
-    if (!len)
-    {
-        // No timers to run, go back to sleep
-        return 0;
-    }
-
-    // Clone the timer array for safe iteration
-    lua_clonetable(L, -1);
-
-    // Place both in their stack positions
-    lua_replace(L, CLONED_TIMERS_ARRAY);
-    lua_replace(L, LIVE_TIMERS_ARRAY);
-
-    // Set up iteration state
-    lua_pushinteger(L, 1);
-    lua_replace(L, TIMER_INDEX);
-
-    lua_pushinteger(L, len);
-    lua_replace(L, TIMERS_LEN);
-
-    LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
-
-    return lltimers_tick_cont(L, LUA_OK);
-}
-
-static int lltimers_tick_cont(lua_State *L, [[maybe_unused]]int status)
-{
     auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
-
-    int timer_index = lua_tointeger(L, TIMER_INDEX);
-    int timers_len = lua_tointeger(L, TIMERS_LEN);
-
-    // Process timers
-    LUAU_ASSERT(timer_index >= 1);
-    LUAU_ASSERT(timers_len >= 0);
-
-    // Allocate stack space for loop iterations (needed after resume from yield)
     lua_checkstack(L, 10);
 
-    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(INTERRUPT_CHECK);
+    YIELD_DISPATCH(CALL_HANDLER);
+    YIELD_DISPATCH_END();
 
-    while (timer_index <= timers_len)
+    for (; timer_index <= timers_len; ++timer_index)
     {
-        lua_rawgeti(L, CLONED_TIMERS_ARRAY, timer_index); // Get timer from cloned array
+        // Check for interrupts between timers to prevent abuse
+        YIELD_CHECK(L, INTERRUPT_CHECK, LUA_INTERRUPT_EVENTS);
 
-        // Verify we got a table
-        LUAU_ASSERT(lua_type(L, -1) == LUA_TTABLE);
-
-        // Make sure this still exists in the live timers array before we try and run it
-        int timer_idx_in_live_array = -1;
-        int live_array_len = lua_objlen(L, LIVE_TIMERS_ARRAY);
-        for (int i = 1; i <= live_array_len; i++)
         {
-            lua_rawgeti(L, LIVE_TIMERS_ARRAY, i);
-            if (lua_rawequal(L, -1, -2))
+            lua_rawgeti(L, CLONED_TIMERS_ARRAY, timer_index);
+
+            LUAU_ASSERT(lua_type(L, -1) == LUA_TTABLE);
+
+            // Make sure this still exists in the live timers array
+            int timer_idx_in_live_array = -1;
+            int live_array_len = lua_objlen(L, LIVE_TIMERS_ARRAY);
+            for (int i = 1; i <= live_array_len; i++)
             {
-                timer_idx_in_live_array = i;
-                lua_replace(L, CURRENT_TIMER);  // Store timer in stack slot
-                break;
-            }
-            lua_pop(L, 1);
-        }
-
-        if (timer_idx_in_live_array == -1)
-        {
-            // Timer was unscheduled, skip it
-            // Pop the timer reference and nil out the timer and handler locals
-            lua_pop(L, 1);
-            lua_pushnil(L);
-            lua_replace(L, CURRENT_TIMER);
-            lua_pushnil(L);
-            lua_replace(L, HANDLER_FUNC);
-            LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
-            timer_index++;
-            continue;
-        }
-
-        // Get the nextRun time from the timer
-        lua_rawgeti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
-        double next_run = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-
-        // Get the logical schedule time (what we'll pass to the handler)
-        // We read this BEFORE updating it so the handler gets the current value
-        lua_rawgeti(L, CURRENT_TIMER, TIMER_LOGICAL_SCHEDULE);
-        double logical_schedule = lua_tonumber(L, -1);
-        lua_pop(L, 1);
-
-        // Save the original value - this is what the handler should receive
-        double handler_scheduled_time = logical_schedule;
-
-        // Verify nextRun is a reasonable number
-        LUAU_ASSERT(next_run >= 0.0);
-
-        // Get current time (do this every loop because we might have yielded)
-        double start_time = sl_state->clockProvider ? sl_state->clockProvider(L) : 0.0;
-
-        // Verify start_time is reasonable
-        LUAU_ASSERT(start_time >= 0.0);
-
-        // Not time to run this yet, continue
-        if (next_run > start_time)
-        {
-            // Timer was unscheduled, skip it
-            // Pop the timer reference and nil out the timer and handler locals
-            // TODO: utility function for this?
-            lua_pop(L, 1);
-            lua_pushnil(L);
-            lua_replace(L, CURRENT_TIMER);
-            lua_pushnil(L);
-            lua_replace(L, HANDLER_FUNC);
-            LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
-            timer_index++;
-            continue;
-        }
-
-        // If we reach here, timer should fire
-        LUAU_ASSERT(next_run <= start_time);
-
-        // Check if this is a one-shot timer (interval is nil)
-        lua_rawgeti(L, CURRENT_TIMER, TIMER_INTERVAL);
-        bool is_one_shot = lua_isnil(L, -1);
-        double interval = is_one_shot ? 0.0 : lua_tonumber(L, -1);
-        lua_pop(L, 1);
-
-        if (is_one_shot)
-        {
-            // TODO: Utility function for removal cases?
-            // One-shot timer, immediately unschedule it
-            // Shift elements down in the live timers array
-            for (int j = timer_idx_in_live_array; j < live_array_len; j++)
-            {
-                lua_rawgeti(L, LIVE_TIMERS_ARRAY, j + 1);
-                lua_rawseti(L, LIVE_TIMERS_ARRAY, j);
-            }
-            lua_pushnil(L);
-            lua_rawseti(L, LIVE_TIMERS_ARRAY, live_array_len);
-
-            // Verify the array shrunk by one
-            LUAU_ASSERT(lua_objlen(L, LIVE_TIMERS_ARRAY) == live_array_len - 1);
-        }
-        else
-        {
-            // Schedule its next run using absolute scheduling with clamped catch-up
-            // (next = previous_scheduled_time + interval)
-            // This prevents drift and ensures the timer maintains its rhythm.
-            // However, if the timer is very late (> 2 seconds), skip ahead to prevent
-            // excessive catch-up iterations that could bog down the system.
-            //
-            // We maintain two schedules:
-            // - TIMER_NEXT_RUN: May be clamped to prevent catch-up storms
-            // - TIMER_LOGICAL_SCHEDULE: Never clamped, always += interval
-            //   This lets handlers know their true delay from the logical schedule.
-            //
-            // Note that we do this BEFORE the timer is ever run.
-            // This ensures that handler runtime has no effect on
-            // when the handler will be invoked next.
-            bool did_clamp = false;
-
-            // Correctly handles scheduling an event for _at least immediately after_
-            // the current time, even if addition of a tiny interval underflows.
-            // For interval=0: use start_time to prevent re-trigger without clock advance
-            // For other intervals: use next_run to maintain rhythm
-            double next_scheduled = std::max(
-                std::nextafter(interval == 0.0 ? start_time : next_run, INFINITY),
-                (interval != 0.0) ? next_run + interval : 0.0
-            );
-            double new_next_run = next_scheduled;
-
-            // Catchup logic with overflow protection
-            constexpr double MAX_CATCHUP_TIME = 2.0;
-            if (interval > 0 && start_time - next_scheduled > MAX_CATCHUP_TIME)
-            {
-                // Skip ahead to next interval after current time
-                // This prevents spiral of death from excessive catch-up
-                double time_behind = start_time - next_run;
-                double intervals_to_skip = std::ceil(time_behind / interval);
-
-                if (!std::isfinite(intervals_to_skip))
+                lua_rawgeti(L, LIVE_TIMERS_ARRAY, i);
+                if (lua_rawequal(L, -1, -2))
                 {
-                    // Division overflowed to infinity - interval is extremely small, treat as ASAP
-                    new_next_run = std::nextafter(start_time, INFINITY);
+                    timer_idx_in_live_array = i;
+                    lua_replace(L, CURRENT_TIMER);
+                    break;
                 }
-                else
-                {
-                    new_next_run = next_run + (intervals_to_skip * interval);
-                }
-                // Ensure next tick is at least one full interval from now
-                // This prevents "fast ticks" when waking up close to a catchup boundary
-                new_next_run = std::max(new_next_run, start_time + interval);
-                did_clamp = true;
+                lua_pop(L, 1);
             }
 
-            // Update actual next run time (may be clamped)
-            lua_pushnumber(L, new_next_run);
-            lua_rawseti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
-
-            // Update logical schedule
-            // When clamping, sync to new_next_run (reset to new reality)
-            // When not clamping, increment normally (logical_schedule + interval)
-            if (did_clamp)
+            if (timer_idx_in_live_array == -1)
             {
-                // Sync logical schedule when clamping - we're giving up on catch-up
-                // so reset the logical schedule to match the new reality.
-                // This ensures handlers see the initial delay (current fire), then return to normal.
-                lua_pushnumber(L, new_next_run);
+                // Timer was unscheduled, skip it
+                lua_pop(L, 1);
+                lua_pushnil(L);
+                lua_replace(L, CURRENT_TIMER);
+                lua_pushnil(L);
+                lua_replace(L, HANDLER_FUNC);
+                LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
+                continue;
+            }
+
+            // Get the nextRun time from the timer
+            lua_rawgeti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
+            double next_run = lua_tonumber(L, -1);
+            lua_pop(L, 1);
+
+            // Get the logical schedule time (what we'll pass to the handler)
+            // We read this BEFORE updating it so the handler gets the current value
+            lua_rawgeti(L, CURRENT_TIMER, TIMER_LOGICAL_SCHEDULE);
+            double logical_schedule = lua_tonumber(L, -1);
+            lua_pop(L, 1);
+
+            // Save the original value - this is what the handler should receive
+            double handler_scheduled_time = logical_schedule;
+
+            // Verify nextRun is a reasonable number
+            LUAU_ASSERT(next_run >= 0.0);
+
+            // Get current time (do this every loop because we might have yielded)
+            double start_time = sl_state->clockProvider ? sl_state->clockProvider(L) : 0.0;
+
+            // Verify start_time is reasonable
+            LUAU_ASSERT(start_time >= 0.0);
+
+            // Not time to run this yet, skip
+            if (next_run > start_time)
+            {
+                lua_pop(L, 1);
+                lua_pushnil(L);
+                lua_replace(L, CURRENT_TIMER);
+                lua_pushnil(L);
+                lua_replace(L, HANDLER_FUNC);
+                LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
+                continue;
+            }
+
+            LUAU_ASSERT(next_run <= start_time);
+
+            // Check if this is a one-shot timer (interval is nil)
+            lua_rawgeti(L, CURRENT_TIMER, TIMER_INTERVAL);
+            bool is_one_shot = lua_isnil(L, -1);
+            double interval = is_one_shot ? 0.0 : lua_tonumber(L, -1);
+            lua_pop(L, 1);
+
+            if (is_one_shot)
+            {
+                // One-shot timer, immediately unschedule it
+                for (int j = timer_idx_in_live_array; j < live_array_len; j++)
+                {
+                    lua_rawgeti(L, LIVE_TIMERS_ARRAY, j + 1);
+                    lua_rawseti(L, LIVE_TIMERS_ARRAY, j);
+                }
+                lua_pushnil(L);
+                lua_rawseti(L, LIVE_TIMERS_ARRAY, live_array_len);
+                LUAU_ASSERT(lua_objlen(L, LIVE_TIMERS_ARRAY) == live_array_len - 1);
             }
             else
             {
-                // Normal increment - maintain rhythm
-                // For interval=0, use next_scheduled since logical_schedule + 0 never changes
-                lua_pushnumber(L, interval == 0.0 ? next_scheduled : logical_schedule + interval);
+                // Schedule its next run using absolute scheduling with clamped catch-up
+                // (next = previous_scheduled_time + interval)
+                // This prevents drift and ensures the timer maintains its rhythm.
+                // However, if the timer is very late (> 2 seconds), skip ahead to prevent
+                // excessive catch-up iterations that could bog down the system.
+                //
+                // We maintain two schedules:
+                // - TIMER_NEXT_RUN: May be clamped to prevent catch-up storms
+                // - TIMER_LOGICAL_SCHEDULE: Never clamped, always += interval
+                //   This lets handlers know their true delay from the logical schedule.
+                //
+                // Note that we do this BEFORE the timer is ever run.
+                // This ensures that handler runtime has no effect on
+                // when the handler will be invoked next.
+                bool did_clamp = false;
+
+                // Correctly handles scheduling an event for _at least immediately after_
+                // the current time, even if addition of a tiny interval underflows.
+                // For interval=0: use start_time to prevent re-trigger without clock advance
+                // For other intervals: use next_run to maintain rhythm
+                double next_scheduled = std::max(
+                    std::nextafter(interval == 0.0 ? start_time : next_run, INFINITY),
+                    (interval != 0.0) ? next_run + interval : 0.0
+                );
+                double new_next_run = next_scheduled;
+
+                // Catchup logic with overflow protection
+                constexpr double MAX_CATCHUP_TIME = 2.0;
+                if (interval > 0 && start_time - next_scheduled > MAX_CATCHUP_TIME)
+                {
+                    // Skip ahead to next interval after current time
+                    // This prevents spiral of death from excessive catch-up
+                    double time_behind = start_time - next_run;
+                    double intervals_to_skip = std::ceil(time_behind / interval);
+
+                    if (!std::isfinite(intervals_to_skip))
+                    {
+                        // Division overflowed to infinity - interval is extremely small, treat as ASAP
+                        new_next_run = std::nextafter(start_time, INFINITY);
+                    }
+                    else
+                    {
+                        new_next_run = next_run + (intervals_to_skip * interval);
+                    }
+                    // Ensure next tick is at least one full interval from now
+                    // This prevents "fast ticks" when waking up close to a catchup boundary
+                    new_next_run = std::max(new_next_run, start_time + interval);
+                    did_clamp = true;
+                }
+
+                // Update actual next run time (may be clamped)
+                lua_pushnumber(L, new_next_run);
+                lua_rawseti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
+
+                // Update logical schedule
+                // When clamping, sync to new_next_run (reset to new reality)
+                // When not clamping, increment normally (logical_schedule + interval)
+                if (did_clamp)
+                {
+                    // Sync logical schedule when clamping - we're giving up on catch-up
+                    // so reset the logical schedule to match the new reality.
+                    // This ensures handlers see the initial delay (current fire), then return to normal.
+                    lua_pushnumber(L, new_next_run);
+                }
+                else
+                {
+                    // For interval=0, use next_scheduled since logical_schedule + 0 never changes
+                    lua_pushnumber(L, interval == 0.0 ? next_scheduled : logical_schedule + interval);
+                }
+                lua_rawseti(L, CURRENT_TIMER, TIMER_LOGICAL_SCHEDULE);
             }
-            lua_rawseti(L, CURRENT_TIMER, TIMER_LOGICAL_SCHEDULE);
+
+            // Get the handler from the timer and call it
+            lua_pop(L, 1);
+            lua_rawgeti(L, CURRENT_TIMER, TIMER_HANDLER);
+            lua_replace(L, HANDLER_FUNC);
+
+            LUAU_ASSERT(lua_iscallable(L, HANDLER_FUNC));
+            LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
+
+            // No pcall(), errors bubble up to the global error handler!
+            lua_pushvalue(L, HANDLER_FUNC);
+            // Include when it was scheduled to run as first arg, allowing callees to do a diff between
+            // scheduled and actual time.
+            // We pass the saved handler_scheduled_time (the original logical schedule) so handlers
+            // can detect delays. When clamping occurs, the handler still receives the ORIGINAL
+            // scheduled time (when it was supposed to run), not the synced time.
+            lua_pushnumber(L, handler_scheduled_time);
+            // Include the interval as second arg, enabling handlers to calculate missed intervals.
+            // For once() timers, this will be nil. For on() timers, it's the interval.
+            if (is_one_shot) {
+                lua_pushnil(L);
+            } else {
+                lua_pushnumber(L, interval);
+            }
         }
+        YIELD_CALL(L, 2, 0, CALL_HANDLER);
 
-        // Get the handler from the timer and call it
-        lua_pop(L, 1); // Pop timer reference from cloned array
-        lua_rawgeti(L, CURRENT_TIMER, TIMER_HANDLER); // Get handler
-        lua_replace(L, HANDLER_FUNC); // Store handler in its own slot
-
-        // Verify we got a callable
-        LUAU_ASSERT(lua_iscallable(L, HANDLER_FUNC));
-
-        // Update timer_index for continuation
-        lua_pushinteger(L, timer_index + 1);
-        lua_replace(L, TIMER_INDEX);
-
-        LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
-
-        // No pcall(), errors bubble up to the global error handler!
-        lua_pushvalue(L, HANDLER_FUNC);
-        // Include when it was scheduled to run as first arg, allowing callees to do a diff between
-        // scheduled and actual time.
-        // We pass the saved handler_scheduled_time (the original logical schedule) so handlers
-        // can detect delays. When clamping occurs, the handler still receives the ORIGINAL
-        // scheduled time (when it was supposed to run), not the synced time.
-        lua_pushnumber(L, handler_scheduled_time);
-        // Include the interval as second arg, enabling handlers to calculate missed intervals.
-        // For once() timers, this will be nil. For on() timers, it's the interval.
-        if (is_one_shot) {
-            lua_pushnil(L);
-        } else {
-            lua_pushnumber(L, interval);
-        }
-        lua_call(L, 2, 0);
-
-        if (L->status == LUA_YIELD || L->status == LUA_BREAK)
-        {
-            return -1;
-        }
-
-        // We can nil this out, we don't need a reference anymore.
+        // Nil out the timer reference, we don't need it anymore
         lua_pushnil(L);
         lua_replace(L, CURRENT_TIMER);
         LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
-
-        // Check for interrupts between timers to prevent abuse
-        if (LUAU_LIKELY(!!interrupt))
-        {
-            interrupt(L, LUA_INTERRUPT_EVENTS);
-            if (L->status != LUA_OK)
-                return -1;
-        }
-
-        timer_index++;
     }
+
 
     // Done processing all timers, schedule the next tick
     auto *lltimers = (lua_LLTimers *)lua_touserdata(L, LLTIMERS_USERDATA);
@@ -808,12 +777,12 @@ void luaSL_setup_llltimers_metatable(lua_State *L, int expose_internal_funcs)
     lua_setfield(L, -2, "off");
 
     // Store _tick in registry for host and timer wrapper access
-    lua_pushcclosurek(L, lltimers_tick_init, "_tick", 0, lltimers_tick_cont);
+    lua_pushcclosurek(L, lltimers_tick_v0, "_tick", 0, lltimers_tick_v0_k);
     lua_setfield(L, LUA_REGISTRYINDEX, "LLTIMERS_TICK");
 
     if (expose_internal_funcs)
     {
-        lua_pushcclosurek(L, lltimers_tick_init, "_tick", 0, lltimers_tick_cont);
+        lua_pushcclosurek(L, lltimers_tick_v0, "_tick", 0, lltimers_tick_v0_k);
         lua_setfield(L, -2, "_tick");
     }
 

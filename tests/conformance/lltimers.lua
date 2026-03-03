@@ -412,7 +412,7 @@ assert(#timer_listeners == 1)
 local guard_func = timer_listeners[1]
 assert_errors(function()
     guard_func()
-end, "Cannot call internal timer wrapper directly")
+end, "Cannot call internal wrapper directly")
 
 -- Verify guard function exists
 assert(guard_func ~= nil)
