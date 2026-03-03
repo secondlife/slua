@@ -128,6 +128,8 @@ LUALIB_API int luaopen_os(lua_State* L);
 
 #define LUA_STRLIBNAME "string"
 LUALIB_API int luaopen_string(lua_State* L);
+// ServerLua: Registers base (non-yieldable) pattern-matching functions on table at stack top.
+LUALIB_API void luaopen_string_base(lua_State* L);
 
 #define LUA_BITLIBNAME "bit32"
 LUALIB_API int luaopen_bit32(lua_State* L);

@@ -10,6 +10,7 @@
 /crash-*
 /default.prof*
 /fuzz-*
+/fuzz/corpus
 /luau
 /luau-tests
 /luau-analyze

@@ -21,6 +21,9 @@
 
 #include <cstdlib>
 #include <fstream>
+
+#include "llsl.h"
+
 #include <string>
 #include <vector>
 #include <math.h>
@@ -1372,6 +1375,133 @@ TEST_CASE("StringInterp")
     runConformance("stringinterp.luau");
 }
 
+// ServerLua: Yieldability tests for builtins we've modified to be yieldable
+static bool pmInterruptEnabled = false;
+static int pmYieldCount = 0;
+static bool pmTimingMode = false;
+static double pmLastTimestamp = 0;
+static double pmMaxDelta = 0;
+
+TEST_CASE("StdlibYield")
+{
+    pmInterruptEnabled = false;
+    pmYieldCount = 0;
+    pmTimingMode = false;
+
+    runConformance("stdlib_yield.lua", [](lua_State* L) {
+        lua_newtable(L);
+        luaopen_string_base(L);
+        lua_setglobal(L, "string_base");
+
+        // Let Lua tests detect codegen mode
+        lua_pushboolean(L, codegen && luau_codegen_supported());
+        lua_setglobal(L, "is_codegen");
+
+        lua_pushboolean(L,
+#if LUAU_ENABLE_ASAN
+            true
+#else
+            false
+#endif
+        );
+        lua_setglobal(L, "is_asan");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                pmYieldCount = 0;
+                return 0;
+            },
+            "clear_check_count"
+        );
+        lua_setglobal(L, "clear_check_count");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                lua_pushinteger(L, pmYieldCount);
+                return 1;
+            },
+            "get_check_count"
+        );
+        lua_setglobal(L, "get_check_count");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                pmInterruptEnabled = true;
+                return 0;
+            },
+            "enable_check_interrupt"
+        );
+        lua_setglobal(L, "enable_check_interrupt");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                pmTimingMode = true;
+                pmLastTimestamp = 0;
+                pmMaxDelta = 0;
+                return 0;
+            },
+            "enable_timing_interrupt"
+        );
+        lua_setglobal(L, "enable_timing_interrupt");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                pmTimingMode = false;
+                lua_pushnumber(L, pmMaxDelta);
+                return 1;
+            },
+            "get_max_interrupt_delta"
+        );
+        lua_setglobal(L, "get_max_interrupt_delta");
+
+        // ServerLua: Interrupt handler that yields on every YIELD_CHECK hit
+        // inside yieldable string functions. Gated by pmInterruptEnabled so
+        // earlier tests with explicit coroutine.yield aren't affected.
+        // In timing mode, records max delta between any yieldable interrupt
+        // points — not just YIELD_CHECK, since VM instruction interrupts are
+        // equally valid preemption opportunities for the scheduler.
+        lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+        {
+            if (pmTimingMode)
+            {
+                if (gc >= 0 || gc == LUA_INTERRUPT_METAMETHOD)
+                    return;
+
+                // All non-GC, non-metamethod interrupt points should be yieldable —
+                // validates the VM lets the scheduler preempt here.
+                LUAU_ASSERT(luaSL_may_interrupt(L) == YieldableStatus::OK);
+
+                double now = lua_clock();
+                if (pmLastTimestamp > 0)
+                {
+                    double delta = now - pmLastTimestamp;
+                    if (delta > pmMaxDelta)
+                        pmMaxDelta = delta;
+                }
+                pmLastTimestamp = now;
+                return;
+            }
+
+            if (gc != LUA_INTERRUPT_STDLIB)
+                return;
+            if (!pmInterruptEnabled)
+                return;
+            pmYieldCount++;
+            lua_yield(L, 0);
+        };
+    });
+}
+
 TEST_CASE("VarArg")
 {
     runConformance("vararg.luau");
@@ -1475,9 +1605,21 @@ TEST_CASE("UTF8")
     runConformance("utf8.luau");
 }
 
+// ServerLua: C function with no continuation — calls a callback but cannot yield through it.
+// Used by coroutine.luau to test that isyieldable() returns false inside unyieldable C calls.
+static int unyieldable_call(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    lua_call(L, 0, 1);
+    return 1;
+}
+
 TEST_CASE("Coroutine")
 {
-    runConformance("coroutine.luau");
+    runConformance("coroutine.luau", [](lua_State* L) {
+        lua_pushcfunction(L, unyieldable_call, "unyieldable_call");
+        lua_setglobal(L, "unyieldable_call");
+    });
 }
 
 static int cxxthrow(lua_State* L)

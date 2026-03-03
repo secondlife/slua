@@ -5,6 +5,9 @@
 
 #include "lstring.h"
 
+// ServerLua: yieldable pattern-matching replacements.
+#include "lyieldstrlib.h"
+
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
@@ -1679,9 +1682,36 @@ static void createmetatable(lua_State* L)
 /*
 ** Open string library
 */
+// ServerLua: Registers base (non-yieldable) pattern-matching functions on the table at stack top. For fuzz-testing against yieldable versions.
+void luaopen_string_base(lua_State* L)
+{
+    static const luaL_Reg base_pm[] = {
+        {"find", str_find},
+        {"match", str_match},
+        {"gmatch", gmatch},
+        {"gsub", str_gsub},
+        {NULL, NULL},
+    };
+    luaL_register(L, NULL, base_pm);
+}
+
 int luaopen_string(lua_State* L)
 {
     luaL_register(L, LUA_STRLIBNAME, strlib);
+
+    // ServerLua: Overwrite pattern-matching functions with yieldable versions.
+    lua_pushcclosurek(L, yieldable_str_find_v0, "find", 0, yieldable_str_find_v0_k);
+    lua_setfield(L, -2, "find");
+
+    lua_pushcclosurek(L, yieldable_str_match_v0, "match", 0, yieldable_str_match_v0_k);
+    lua_setfield(L, -2, "match");
+
+    lua_pushcfunction(L, yieldable_gmatch, "gmatch");
+    lua_setfield(L, -2, "gmatch");
+
+    lua_pushcclosurek(L, yieldable_str_gsub_v0, "gsub", 0, yieldable_str_gsub_v0_k);
+    lua_setfield(L, -2, "gsub");
+
     createmetatable(L);
 
     return 1;

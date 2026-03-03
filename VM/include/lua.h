@@ -553,6 +553,9 @@ static void populateperms(lua_State *L, bool forUnpersist)
 #if defined(eris_c) || defined(lstrlib_c)
     eris_persist_static(strlib, gmatch_aux)
 #endif
+#if defined(eris_c) || defined(lyieldstrlib_c)
+    eris_persist_cont(lyieldstrlib, yieldable_gmatch_aux_v0, yieldable_gmatch_aux_v0_k)
+#endif
 #if defined(eris_c) || defined(lutf8lib_c)
     eris_persist_static(utf8lib, iter_aux)
 #endif

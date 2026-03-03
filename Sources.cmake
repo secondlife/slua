@@ -427,6 +427,8 @@ target_sources(Luau.VM PRIVATE
     VM/src/llltimers.h
     VM/src/lyieldable.cpp
     VM/src/lstrbuf.cpp
+    VM/src/lyieldstrlib.h
+    VM/src/lyieldstrlib.cpp
 
     # ServerLua: CJson
     VM/src/cjson/dtoa_config.h

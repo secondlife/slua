@@ -1,0 +1,92 @@
+# Lua pattern metacharacter dictionary for libFuzzer
+# Usage: ./fuzz-patmatch corpus/ -dict=fuzz/pattern.dict
+
+# Character classes
+"%a"
+"%A"
+"%c"
+"%C"
+"%d"
+"%D"
+"%l"
+"%L"
+"%p"
+"%P"
+"%s"
+"%S"
+"%u"
+"%U"
+"%w"
+"%W"
+"%z"
+"%Z"
+
+# Quantifiers
+"*"
+"+"
+"?"
+"-"
+
+# Structural tokens
+"("
+")"
+"["
+"]"
+"^"
+"$"
+"."
+
+# Balanced match
+"%b()"
+"%b{}"
+"%b[]"
+"%b<>"
+"%bXY"
+
+# Frontier pattern
+"%f["
+"%f[%a]"
+"%f[%A]"
+"%f[%w]"
+"%f[%W]"
+
+# Bracket classes
+"[a-z]"
+"[A-Z]"
+"[0-9]"
+"[%w_]"
+"[%a%d]"
+"[^%s]"
+"[^%d]"
+"[%l%u]"
+
+# Backreferences
+"%0"
+"%1"
+"%2"
+"%3"
+
+# Escape
+"%%"
+
+# Common patterns
+".*"
+".+"
+".-"
+"(.-)"
+"(.+)"
+"(.*)"
+"(.)"
+"(%d+)"
+"(%a+)"
+"(%w+)"
+
+# Anchored patterns
+"^%s*"
+"%s*$"
+"^(.-)$"
+
+# Captures
+"()"
+"(%d)"
+"(%a)"

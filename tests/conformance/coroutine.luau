@@ -119,8 +119,9 @@ x, a = nil
 
 -- yielding across C boundaries
 
+-- ServerLua: table.sort is now yieldable, use unyieldable_call instead
 co = coroutine.wrap(function()
-       assert(not pcall(table.sort,{1,2,3}, coroutine.yield))
+       assert(not pcall(unyieldable_call, coroutine.yield))
        assert(coroutine.isyieldable())
        coroutine.yield(20)
        return 30
@@ -131,14 +132,14 @@ assert(co() == 30)
 
 -- unyieldable C call
 do
-  local function f (c)
+  local function f ()
           assert(not coroutine.isyieldable())
-          return c .. c
+          return "aa"
         end
 
-  local co = coroutine.wrap(function (c)
+  local co = coroutine.wrap(function ()
                assert(coroutine.isyieldable())
-               local s = string.gsub("a", ".", f)
+               local s = unyieldable_call(f)
                return s
              end)
   assert(co() == "aa")
