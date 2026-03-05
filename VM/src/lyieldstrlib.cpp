@@ -422,10 +422,7 @@ struct MatchStateGuard : YieldGuard
         for (int i = 0; i < ms->level; i++)
         {
             const auto &wire_capture = wire->captures[i];
-            ms->capture[i] = {
-                .init = ms->src_init + wire_capture.offset,
-                .len = wire_capture.len
-            };
+            ms->capture[i] = {ms->src_init + wire_capture.offset, wire_capture.len};
         }
     }
 
@@ -441,10 +438,7 @@ struct MatchStateGuard : YieldGuard
             const auto &live_capture = ms->capture[i];
             ptrdiff_t off = live_capture.init - ms->src_init;
             LUAU_ASSERT(off >= INT32_MIN && off <= INT32_MAX);
-            wire->captures[i] = {
-                .offset = (int32_t)off,
-                .len = (int32_t)live_capture.len,
-            };
+            wire->captures[i] = {(int32_t)off, (int32_t)live_capture.len};
         }
     }
 };
@@ -565,9 +559,10 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                 BUDGET_YIELD_CHECK(L, GREEDY_YIELD);
                 if (!singlematch(ms, s + greedy_i, p, pat_str + greedy_ep_off))
                 {
-                    ms->pushBt(L) = {IMATCH_MAX_EXPAND, {.max_exp = {
-                        SAFE_INT32(s - src_str), greedy_ep_off,
-                        greedy_i, SAFE_INT32(p - pat_str)}}};
+                    auto& bt = ms->pushBt(L);
+                    bt.kind = IMATCH_MAX_EXPAND;
+                    bt.max_exp = {SAFE_INT32(s - src_str), greedy_ep_off,
+                        greedy_i, SAFE_INT32(p - pat_str)};
                     s = s + greedy_i;
                     p = pat_str + greedy_ep_off + 1;
                     mode = Mode::FORWARD;
@@ -640,7 +635,9 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                     auto& cap = ms->capture[ms->level];
                     cap.init = s;
                     cap.len = cap_kind;
-                    ms->pushBt(L) = {IMATCH_START_CAPTURE, {.start_cap = {ms->level}}};
+                    auto& bt = ms->pushBt(L);
+                    bt.kind = IMATCH_START_CAPTURE;
+                    bt.start_cap = {ms->level};
                     ms->level++;
                     goto imatch_init;
                 }
@@ -650,7 +647,9 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                     auto& cap = ms->capture[l];
                     ptrdiff_t old_len = cap.len;
                     cap.len = s - cap.init;
-                    ms->pushBt(L) = {IMATCH_END_CAPTURE, {.end_cap = {l, SAFE_INT32(old_len)}}};
+                    auto& bt = ms->pushBt(L);
+                    bt.kind = IMATCH_END_CAPTURE;
+                    bt.end_cap = {l, SAFE_INT32(old_len)};
                     p = p + 1;
                     goto imatch_init;
                 }
@@ -741,7 +740,9 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                         {
                         case '?':
                         {
-                            ms->pushBt(L) = {IMATCH_OPTIONAL, {.optional = {SAFE_INT32(s - src_str), SAFE_INT32(ep - pat_str)}}};
+                            auto& bt = ms->pushBt(L);
+                            bt.kind = IMATCH_OPTIONAL;
+                            bt.optional = {SAFE_INT32(s - src_str), SAFE_INT32(ep - pat_str)};
                             s = s + 1;
                             p = ep + 1;
                             goto imatch_init;
@@ -759,9 +760,10 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                         }
                         case '-':
                         {
-                            ms->pushBt(L) = {IMATCH_MIN_EXPAND, {.min_exp = {
-                                SAFE_INT32(s - src_str), SAFE_INT32(p - pat_str),
-                                SAFE_INT32(ep - pat_str)}}};
+                            auto& bt = ms->pushBt(L);
+                            bt.kind = IMATCH_MIN_EXPAND;
+                            bt.min_exp = {SAFE_INT32(s - src_str), SAFE_INT32(p - pat_str),
+                                SAFE_INT32(ep - pat_str)};
                             p = ep + 1;
                             goto imatch_init;
                         }
