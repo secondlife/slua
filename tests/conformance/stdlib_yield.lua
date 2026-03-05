@@ -342,55 +342,52 @@ do
 end
 
 -- Run fn() under timing interrupt and assert max gap between yields is bounded.
--- Under ASAN, timing assertions are unreliable for two reasons:
--- 1. ASAN intercepts libc functions (e.g. strpbrk in nospecials()) with per-byte
---    shadow memory checks, inflating O(n) scans that run before the first
---    YIELD_CHECK from ~5μs to ~300μs for large patterns.
--- 2. With HARDSTACKTESTS enabled, forced luaD_reallocstack calls on every
---    comparator return fill ASAN's quarantine until a single free() triggers
---    an O(quarantine_size) flush (~700μs).
--- The function still executes for correctness coverage.
 local function assert_interrupt_bounded(label, max_delta, fn)
   collectgarbage()
   collectgarbage()
   enable_timing_interrupt()
   fn()
   local delta = get_max_interrupt_delta()
-  if not is_asan then
+  if not skip_timing_tests then
     assert(delta < max_delta, `max delta between yields too large ({label}): {delta}s`)
   end
 end
 
+-- 32-bit ASAN has ~3GB address space; reduce test sizes to avoid OOM.
+local N = if is_32bit then 10000 else 100000
+
 do
-  local s = string.rep("a", 100000)
+  local s = string.rep("a", N)
   assert_interrupt_bounded("greedy", 0.0001, function()
     local i, j = string.find(s, "^.*$")
-    assert(i == 1 and j == 100000, `greedy match failed: i={i} j={j}`)
+    assert(i == 1 and j == N, `greedy match failed: i={i} j={j}`)
   end)
 end
 
 do
-  local s = string.rep("(", 50000) .. string.rep(")", 50000)
+  local half = N // 2
+  local s = string.rep("(", half) .. string.rep(")", half)
   assert_interrupt_bounded("balance", 0.0001, function()
     local i, j = string.find(s, "%b()")
-    assert(i == 1 and j == 100000, `balance match failed: i={i} j={j}`)
+    assert(i == 1 and j == N, `balance match failed: i={i} j={j}`)
   end)
 end
 
 do
-  local pat = string.rep("a", 100000) .. "(b)"
-  local s = string.rep("a", 100000) .. "b"
+  local pat = string.rep("a", N) .. "(b)"
+  local s = string.rep("a", N) .. "b"
   assert_interrupt_bounded("forward", 0.0001, function()
     local i, j, c = string.find(s, pat)
-    assert(i == 1 and j == 100001 and c == "b", `forward match failed: i={i} j={j} c={c}`)
+    assert(i == 1 and j == N + 1 and c == "b", `forward match failed: i={i} j={j} c={c}`)
   end)
 end
 
 -- Adversarial plain find: O(N*M) memcmp with no match.
--- memchr hits at every position, memcmp scans ~50K bytes each time.
+-- memchr hits at every position, memcmp scans ~N/2 bytes each time.
 do
-  local s = string.rep("a", 100000)
-  local p = string.rep("a", 50000) .. "b"
+  local half = N // 2
+  local s = string.rep("a", N)
+  local p = string.rep("a", half) .. "b"
   assert_interrupt_bounded("plain find (adversarial)", 0.0001, function()
     local i = string.find(s, p, 1, true)
     assert(i == nil, "should not match")
@@ -399,7 +396,7 @@ end
 
 do
   local pat = "(" .. string.rep("a", 254) .. "b)"
-  local s = string.rep("a", 100000)
+  local s = string.rep("a", N)
   assert_interrupt_bounded("outer loop", 0.0001, function()
     local r = string.find(s, pat)
     assert(r == nil, "should not match")

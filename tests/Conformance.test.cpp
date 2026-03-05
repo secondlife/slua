@@ -1397,14 +1397,21 @@ TEST_CASE("StdlibYield")
         lua_pushboolean(L, codegen && luau_codegen_supported());
         lua_setglobal(L, "is_codegen");
 
+        // Skip timing assertions under instrumented builds:
+        // - ASAN intercepts libc functions with per-byte shadow checks (~5μs → ~300μs),
+        //   and HARDSTACKTESTS quarantine flushes take ~700μs per free().
+        // - Coverage instrumentation (-fprofile-instr-generate) adds similar overhead.
         lua_pushboolean(L,
-#if LUAU_ENABLE_ASAN
+#if LUAU_ENABLE_ASAN || defined(LUAU_COVERAGE)
             true
 #else
             false
 #endif
         );
-        lua_setglobal(L, "is_asan");
+        lua_setglobal(L, "skip_timing_tests");
+
+        lua_pushboolean(L, sizeof(void*) == 4);
+        lua_setglobal(L, "is_32bit");
 
         lua_pushcfunction(
             L,
