@@ -111,7 +111,7 @@ ifeq ($(config),release)
 endif
 
 ifeq ($(config),coverage)
-	CXXFLAGS+=-fprofile-instr-generate -fcoverage-mapping
+	CXXFLAGS+=-fprofile-instr-generate -fcoverage-mapping -DLUAU_COVERAGE=1
 	LDFLAGS+=-fprofile-instr-generate
 endif
 
