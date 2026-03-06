@@ -353,8 +353,8 @@ local function assert_interrupt_bounded(label, max_delta, fn)
   end
 end
 
--- 32-bit ASAN has ~3GB address space; reduce test sizes to avoid OOM.
-local N = if is_32bit then 10000 else 100000
+-- Reduce test sizes under 32-bit ASAN/coverage to avoid OOM.
+local N = if small_testcases then 10000 else 100000
 
 do
   local s = string.rep("a", N)

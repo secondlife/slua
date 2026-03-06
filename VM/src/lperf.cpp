@@ -67,3 +67,32 @@ double lua_clock()
 
     return clock_timestamp() * period;
 }
+
+// ServerLua: per-thread CPU time for deterministic yield gap measurement.
+//  I don't entirely know how useful this is in practice, but it's clear to me that
+//  we at least need to get rid of some of the scheduling overhead for the interrupt
+//  timing delta checks to be moderately useful.
+double lua_cputime()
+{
+#if defined(__APPLE__)
+    mach_port_t thread = mach_thread_self();
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    kern_return_t kr = thread_info(thread, THREAD_BASIC_INFO, (thread_info_t)&info, &count);
+    mach_port_deallocate(mach_task_self(), thread);
+    if (kr == KERN_SUCCESS)
+    {
+        return info.user_time.seconds + info.user_time.microseconds * 1e-6
+             + info.system_time.seconds + info.system_time.microseconds * 1e-6;
+    }
+#elif defined(__linux__) || defined(__FreeBSD__)
+    timespec ts;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0)
+    {
+        return ts.tv_sec + ts.tv_nsec * 1e-9;
+    }
+#endif
+
+    // If all else fails, fall back to wall clock.
+    return lua_clock();
+}

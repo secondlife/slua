@@ -395,6 +395,8 @@ LUA_API void lua_concat(lua_State* L, int n);
 LUA_API uintptr_t lua_encodepointer(lua_State* L, uintptr_t p);
 
 LUA_API double lua_clock();
+// ServerLua: per-thread CPU time in seconds (falls back to lua_clock on unsupported platforms)
+LUA_API double lua_cputime();
 
 LUA_API void lua_setrandomseed(lua_State* L, uint64_t seed);
 

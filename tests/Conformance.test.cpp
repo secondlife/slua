@@ -1397,12 +1397,14 @@ TEST_CASE("StdlibYield")
         lua_pushboolean(L, codegen && luau_codegen_supported());
         lua_setglobal(L, "is_codegen");
 
-        // Skip timing assertions under instrumented builds:
-        // - ASAN intercepts libc functions with per-byte shadow checks (~5μs → ~300μs),
-        //   and HARDSTACKTESTS quarantine flushes take ~700μs per free().
+        // Skip timing assertions under instrumented builds where per-thread
+        // CPU time is unreliable or unavailable:
+        // - ASAN shadow checks inflate libc calls (~5μs → ~300μs), and
+        //   HARDSTACKTESTS quarantine flushes take ~700μs per free().
         // - Coverage instrumentation (-fprofile-instr-generate) adds similar overhead.
+        // - Windows lacks per-thread CPU time with sufficient resolution.
         lua_pushboolean(L,
-#if LUAU_ENABLE_ASAN || defined(LUAU_COVERAGE)
+#if LUAU_ENABLE_ASAN || defined(LUAU_COVERAGE) || defined(_WIN32)
             true
 #else
             false
@@ -1410,8 +1412,17 @@ TEST_CASE("StdlibYield")
         );
         lua_setglobal(L, "skip_timing_tests");
 
-        lua_pushboolean(L, sizeof(void*) == 4);
-        lua_setglobal(L, "is_32bit");
+        // Reduce test sizes when both 32-bit and instrumented (ASAN/coverage),
+        // since ASAN shadow memory + large test strings can exhaust the ~3GB address space.
+        lua_pushboolean(L,
+            sizeof(void*) == 4 &&
+#if LUAU_ENABLE_ASAN || defined(LUAU_COVERAGE)
+            true
+#else
+            false
+#endif
+        );
+        lua_setglobal(L, "small_testcases");
 
         lua_pushcfunction(
             L,
@@ -1488,7 +1499,7 @@ TEST_CASE("StdlibYield")
                 // validates the VM lets the scheduler preempt here.
                 LUAU_ASSERT(luaSL_may_interrupt(L) == YieldableStatus::OK);
 
-                double now = lua_clock();
+                double now = lua_cputime();
                 if (pmLastTimestamp > 0)
                 {
                     double delta = now - pmLastTimestamp;
