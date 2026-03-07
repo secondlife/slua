@@ -1412,18 +1412,6 @@ TEST_CASE("StdlibYield")
         );
         lua_setglobal(L, "skip_timing_tests");
 
-        // Reduce test sizes when both 32-bit and instrumented (ASAN/coverage),
-        // since ASAN shadow memory + large test strings can exhaust the ~3GB address space.
-        lua_pushboolean(L,
-            sizeof(void*) == 4 &&
-#if LUAU_ENABLE_ASAN || defined(LUAU_COVERAGE)
-            true
-#else
-            false
-#endif
-        );
-        lua_setglobal(L, "small_testcases");
-
         lua_pushcfunction(
             L,
             [](lua_State* L) -> int

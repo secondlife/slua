@@ -62,6 +62,11 @@ jobs:
       run: |
         LDFLAGS=-m${{matrix.addrsize}} CXXFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" CFLAGS="-m${{matrix.addrsize}} ${{matrix.cflags}}" make -j4 config=sanitize ${{ matrix.addrsize == '64' && 'native=1' || ''}} slua-tests
     - name: run tests
+      env:
+        # 32-bit ASAN has a much more limited memory space. If the quarantine zone eats up tons of memory,
+        # we don't have much to work with for our actual tests. Reduce the quarantine zone size
+        # for 32-bit specifically.
+        ASAN_OPTIONS: ${{ matrix.os.name == 'ubuntu-32bit' && 'quarantine_size_mb=64' || '' }}
       run: |
         ./slua-tests
         ./slua-tests --fflags=true
