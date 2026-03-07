@@ -1255,7 +1255,7 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
         lua_settop(L, ARG_REPL);
 
         // Push yield-safe string buffer, then wire buffer
-        lstrbuf_push(L);
+        luaYB_push(L);
         lua_newuserdatatagged(L, sizeof(MatchStateWire), UTAG_OPAQUE_BUFFER);  // wire at STACK_WIRE
     }
 
@@ -1321,17 +1321,17 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
                             continue;
                         // Flush literal run before this escape
                         if (i > run_start)
-                            strbuf_append_mem(L, buf, news + run_start, i - run_start);
+                            luaYB_appendmem(L, buf, news + run_start, i - run_start);
                         i++;
                         if (!isdigit(uchar(news[i])))
                         {
                             if (news[i] != L_ESC)
                                 luaL_error(L, "invalid use of '%c' in replacement string", L_ESC);
-                            strbuf_append_char(L, buf, news[i]);
+                            luaYB_appendchar(L, buf, news[i]);
                         }
                         else if (news[i] == '0')
                         {
-                            strbuf_append_mem(L, buf, src_str + src_off, end_off - src_off);
+                            luaYB_appendmem(L, buf, src_str + src_off, end_off - src_off);
                         }
                         else
                         {
@@ -1339,13 +1339,13 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
                             if (cap_idx >= nlevels)
                                 luaL_error(L, "invalid capture index %%%d", cap_idx + 1);
                             push_onecapture(&ms, cap_idx, match_start, match_end);
-                            strbuf_addvalue(L, buf);
+                            luaYB_addvalue(L, buf);
                         }
                         run_start = i + 1;
                     }
                     // Flush trailing literal run
                     if (run_start < repl_len)
-                        strbuf_append_mem(L, buf, news + run_start, repl_len - run_start);
+                        luaYB_appendmem(L, buf, news + run_start, repl_len - run_start);
                     goto gsub_advance;
                 }
             }
@@ -1355,19 +1355,19 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
             if (!lua_toboolean(L, -1))
             {
                 lua_pop(L, 1);
-                strbuf_append_mem(L, buf, src_str + src_off, end_off - src_off);
+                luaYB_appendmem(L, buf, src_str + src_off, end_off - src_off);
             }
             else if (!lua_isstring(L, -1))
                 luaL_error(L, "invalid replacement value (a %s)", luaL_typename(L, -1));
             else
-                strbuf_addvalue(L, buf);
+                luaYB_addvalue(L, buf);
 
         gsub_advance:
             if (end_off > src_off)
                 src_off = end_off;
             else if (src_off < (int)srcl)
             {
-                strbuf_append_char(L, buf, src_str[src_off]);
+                luaYB_appendchar(L, buf, src_str[src_off]);
                 ++src_off;
             }
             else
@@ -1377,7 +1377,7 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
         {
             if (src_off < (int)srcl)
             {
-                strbuf_append_char(L, buf, src_str[src_off]);
+                luaYB_appendchar(L, buf, src_str[src_off]);
                 ++src_off;
             }
             else
@@ -1391,8 +1391,8 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
     // Truncate stack to STACK_STRBUF to clean up leftover captures from the
     // last iteration, ensuring ci->top has room for the result push.
     lua_settop(L, STACK_STRBUF);
-    strbuf_append_mem(L, buf, src_str + src_off, srcl - src_off);
-    strbuf_tostring_inplace(L, STACK_STRBUF, true);
+    luaYB_appendmem(L, buf, src_str + src_off, srcl - src_off);
+    luaYB_tostring(L, STACK_STRBUF, true);
 
     lua_pushinteger(L, n);
     return 2;
