@@ -762,6 +762,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, i, 1);
     DEFINE_SLOT(int32_t, comma, 0);
+    DEFINE_SLOT(int32_t, json_pos, 0);
     slots.finalize();
 
     json = json_get_strbuf(l);
@@ -775,6 +776,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     YIELD_DISPATCH_END();
 
     for (; i <= array_length; ++i) {
+        json_pos = strbuf_length(json);
         if (comma++ > 0)
             strbuf_append_char(json, ',');
 
@@ -785,8 +787,16 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
             lua_gettable(l, -2);
         }
 
+        // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
+        bool skip;
         YIELD_HELPER(l, ELEMENT,
-            json_append_data(l, slots, cfg, current_depth, json));
+            skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
+        if (skip) {
+            strbuf_set_length(json, json_pos);
+            if (comma == 1) {
+                comma = 0;
+            }
+        }
 
         lua_pop(l, 1);
 
@@ -1035,6 +1045,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
     SlotManager slots(parent_slots);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, comma, 0);
+    DEFINE_SLOT(int32_t, json_pos, 0);
     slots.finalize();
 
     json = json_get_strbuf(l);
@@ -1052,6 +1063,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
 
     /* table, startkey */
     while (lua_next(l, -2) != 0) {
+        json_pos = strbuf_length(json);
         if (comma++ > 0)
             strbuf_append_char(json, ',');
 
@@ -1118,8 +1130,16 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
         }
 
         /* table, key, value */
+        // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
+        bool skip;
         YIELD_HELPER(l, VALUE,
-            json_append_data(l, slots, cfg, current_depth, json));
+            skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
+        if (skip) {
+            strbuf_set_length(json, json_pos);
+            if (comma == 1) {
+                comma = 0;
+            }
+        }
 
         lua_pop(l, 1);
         /* table, key */
@@ -1350,8 +1370,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         break;
     }
     default:
-        /* Remaining types (LUA_TFUNCTION, LUA_TUSERDATA, LUA_TTHREAD,
-         * and LUA_TLIGHTUSERDATA) cannot be serialised */
+        /* Remaining types (LUA_TFUNCTION, LUA_TTHREAD) cannot be serialised */
         if (cfg->encode_skip_unsupported_value_types) {
             return 1;
         } else {
@@ -1413,6 +1432,7 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
 
     strbuf_tostring_inplace(2, true);
     lua_settop(l, 2);
+    luau_interruptoncalltail(l);
     return 1;
 }
 
@@ -2052,6 +2072,25 @@ static inline void json_restore_offset(json_parse_t* json, int32_t ptr_offset)
     json->ptr = json->data + ptr_offset;
 }
 
+// ServerLua: Parse object key string + colon, push key onto Lua stack.
+static void json_parse_object_key(lua_State* l, json_parse_t* json)
+{
+    json_token_t token;
+    json_next_token(json, &token);
+    if (token.type != T_STRING)
+        json_throw_parse_error(l, json, "object key string", &token);
+
+    if (json->cfg->sl_tagged_types &&
+        json_parse_tagged_string(l, token.value.string, token.string_len)) {
+    } else {
+        lua_pushlstring(l, token.value.string, token.string_len);
+    }
+
+    json_next_token(json, &token);
+    if (token.type != T_COLON)
+        json_throw_parse_error(l, json, "colon", &token);
+}
+
 // ServerLua: Forward declarations for yieldable decode helpers
 static void json_process_value(lua_State* l, SlotManager& parent_slots,
                                 json_parse_t* json, json_token_t* token);
@@ -2074,11 +2113,9 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
     slots.finalize();
 
     json_restore_offset(json, ptr_offset);
+    json_decode_descend(l, json, 3);
 
     if (slots.isInit()) {
-        /* 3 slots required:
-         * .., table, key, value */
-        json_decode_descend(l, json, 3);
         lua_newtable(l);
 
         json_token_t token;
@@ -2090,20 +2127,9 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
             return;
         }
 
-        if (token.type != T_STRING)
-            json_throw_parse_error(l, json, "object key string", &token);
-
-        /* Push key - parse as tagged if sl_tagged_types is enabled */
-        if (json->cfg->sl_tagged_types &&
-            json_parse_tagged_string(l, token.value.string, token.string_len)) {
-            // Tagged key was pushed
-        } else {
-            lua_pushlstring(l, token.value.string, token.string_len);
-        }
-
-        json_next_token(json, &token);
-        if (token.type != T_COLON)
-            json_throw_parse_error(l, json, "colon", &token);
+        /* Rewind — let json_parse_object_key re-parse from the key token */
+        json->ptr = json->data + ptr_offset;
+        json_parse_object_key(l, json);
 
         /* Save offset after colon — process_value will parse the value token */
         ptr_offset = json_get_offset(json);
@@ -2136,20 +2162,7 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
         if (token.type != T_COMMA)
             json_throw_parse_error(l, json, "comma or object end", &token);
 
-        json_next_token(json, &token);
-        if (token.type != T_STRING)
-            json_throw_parse_error(l, json, "object key string", &token);
-
-        if (json->cfg->sl_tagged_types &&
-            json_parse_tagged_string(l, token.value.string, token.string_len)) {
-            // Tagged key was pushed
-        } else {
-            lua_pushlstring(l, token.value.string, token.string_len);
-        }
-
-        json_next_token(json, &token);
-        if (token.type != T_COLON)
-            json_throw_parse_error(l, json, "colon", &token);
+        json_parse_object_key(l, json);
 
         /* Save offset after colon — process_value will parse the value */
         ptr_offset = json_get_offset(json);
@@ -2175,11 +2188,9 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
     slots.finalize();
 
     json_restore_offset(json, ptr_offset);
+    json_decode_descend(l, json, 2);
 
     if (slots.isInit()) {
-        /* 2 slots required:
-         * .., table, value */
-        json_decode_descend(l, json, 2);
         lua_newtable(l);
 
         /* set array_mt on the table at the top of the stack */
@@ -2385,6 +2396,7 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     if (token.type != T_END)
         json_throw_parse_error(l, &json, "the end", &token);
 
+    luau_interruptoncalltail(l);
     return 1;
 }
 
