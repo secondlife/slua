@@ -63,6 +63,29 @@ typedef lua_YieldSafeStrBuf strbuf_t;
 // ServerLua: yieldable infrastructure for encode/decode
 #include "lyieldablemacros.h"
 
+// ServerLua: Shims restoring original cjson strbuf API — captures `l` from enclosing scope
+#define strbuf_init(s, len)              luaYB_init(l, (s), (len))
+#define strbuf_free(s)                   luaYB_free(l, (s))
+#define strbuf_resize(s, len)            luaYB_resize(l, (s), (len))
+#define strbuf_append_string(s, str)     luaYB_appendstr(l, (s), (str))
+#define strbuf_tostring_inplace(idx, f)  luaYB_tostring(l, (idx), (f))
+#define strbuf_reset(s)                  luaYB_reset(s)
+#define strbuf_allocated(s)              luaYB_allocated(s)
+#define strbuf_empty_length(s)           luaYB_space(s)
+#define strbuf_ensure_empty_length(s, n) luaYB_ensure(l, (s), (n))
+#define strbuf_empty_ptr(s)              luaYB_ptr(s)
+#define strbuf_set_length(s, n)          luaYB_setlen((s), (n))
+#define strbuf_extend_length(s, n)       luaYB_extend((s), (n))
+#define strbuf_length(s)                 luaYB_len(s)
+#define strbuf_append_char(s, c)         luaYB_appendchar(l, (s), (c))
+#define strbuf_append_char_unsafe(s, c)  luaYB_appendchar_unsafe((s), (c))
+#define strbuf_append_mem(s, c, n)       luaYB_appendmem(l, (s), (c), (n))
+#define strbuf_append_mem_unsafe(s, c, n) luaYB_appendmem_unsafe((s), (c), (n))
+#define strbuf_ensure_null(s)            luaYB_ensurenull(s)
+#define strbuf_string(s, len)            luaYB_data((s), (len))
+#define strbuf_pushresult(s)             luaYB_pushresult(l, (s))
+#define strbuf_addvalue(s)               luaYB_addvalue(l, (s))
+
 // ServerLua: internal configuration
 #define CJSON_MODNAME "lljson"
 // Ehhh, close enough. Luau is sort of a mutant Lua 5.1 with extras.
@@ -620,13 +643,13 @@ static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
      * This gains ~5% speedup. */
     if (len > SIZE_MAX / 6 - 3)
         abort(); /* Overflow check */
-    strbuf_ensure_empty_length(l, json, len * 6 + 2);
+    strbuf_ensure_empty_length(json, len * 6 + 2);
 
     strbuf_append_char_unsafe(json, '\"');
     for (i = 0; i < len; i++) {
         escstr = char2escape[(unsigned char)str[i]];
         if (escstr)
-            strbuf_append_string(l, json, escstr);
+            strbuf_append_string(json, escstr);
         else
             strbuf_append_char_unsafe(json, str[i]);
     }
@@ -744,7 +767,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     json = json_get_strbuf(l);
 
     if (slots.isInit())
-        strbuf_append_char(l, json, '[');
+        strbuf_append_char(json, '[');
 
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(ELEMENT);
@@ -753,7 +776,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
 
     for (; i <= array_length; ++i) {
         if (comma++ > 0)
-            strbuf_append_char(l, json, ',');
+            strbuf_append_char(json, ',');
 
         if (raw) {
             lua_rawgeti(l, -1, i);
@@ -770,7 +793,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
         YIELD_CHECK(l, NEXT_ELEMENT, LUA_INTERRUPT_LLLIB);
     }
 
-    strbuf_append_char(l, json, ']');
+    strbuf_append_char(json, ']');
 }
 
 static void json_append_number(lua_State *l, json_config_t *cfg,
@@ -780,7 +803,7 @@ static void json_append_number(lua_State *l, json_config_t *cfg,
 #if LUA_VERSION_NUM >= 503
     if (lua_isinteger(l, lindex)) {
         lua_Integer num = lua_tointeger(l, lindex);
-        strbuf_ensure_empty_length(l, json, FPCONV_G_FMT_BUFSIZE); /* max length of int64 is 19 */
+        strbuf_ensure_empty_length(json, FPCONV_G_FMT_BUFSIZE); /* max length of int64 is 19 */
         len = sprintf(strbuf_empty_ptr(json), LUA_INTEGER_FMT, num);
         strbuf_extend_length(json, len);
         return;
@@ -797,13 +820,13 @@ static void json_append_number(lua_State *l, json_config_t *cfg,
         /* Encode NaN/Infinity separately to ensure Javascript compatible
          * values are used. */
         if (isnan(num)) {
-            strbuf_append_mem(l, json, "NaN", 3);
+            strbuf_append_mem(json, "NaN", 3);
             return;
         }
     } else {
         /* Encode invalid numbers as "null" */
         if ( isnan(num)) {
-            strbuf_append_mem(l, json, "null", 4);
+            strbuf_append_mem(json, "null", 4);
             return;
         }
     }
@@ -814,14 +837,14 @@ static void json_append_number(lua_State *l, json_config_t *cfg,
         // Note that this is particular to the bit-ness of the FP representation, but
         // surely nobody's deserializing 256-bit FP values from JSON!
         if (signbit(num)) {
-            strbuf_append_string(l, json, "-1e9999");
+            strbuf_append_string(json, "-1e9999");
         } else {
-            strbuf_append_string(l, json, "1e9999");
+            strbuf_append_string(json, "1e9999");
         }
         return;
     }
 
-    strbuf_ensure_empty_length(l, json, FPCONV_G_FMT_BUFSIZE);
+    strbuf_ensure_empty_length(json, FPCONV_G_FMT_BUFSIZE);
     len = fpconv_g_fmt(strbuf_empty_ptr(json), num, cfg->encode_number_precision);
     strbuf_extend_length(json, len);
 }
@@ -832,31 +855,31 @@ static void json_append_coordinate_component(lua_State *l, strbuf_t *json, float
     char format_buf[64] = {};
     // Use shared helper to ensure consistent normalization of non-finite values
     size_t str_len = luai_formatfloat(format_buf, sizeof(format_buf), "%.6g", val);
-    strbuf_append_mem(l, json, format_buf, str_len);
+    strbuf_append_mem(json, format_buf, str_len);
 }
 
 // Helper to append a tagged vector value: !v<x,y,z> or tight: !v1,2,3
 static void json_append_tagged_vector(lua_State *l, strbuf_t *json, const float *a, bool tight = false) {
-    strbuf_append_string(l, json, tight ? "\"!v" : "\"!v<");
+    strbuf_append_string(json, tight ? "\"!v" : "\"!v<");
     json_append_coordinate_component(l, json, a[0], tight);
-    strbuf_append_char(l, json, ',');
+    strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[1], tight);
-    strbuf_append_char(l, json, ',');
+    strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[2], tight);
-    strbuf_append_string(l, json, tight ? "\"" : ">\"");
+    strbuf_append_string(json, tight ? "\"" : ">\"");
 }
 
 // Helper to append a tagged quaternion value: !q<x,y,z,w> or tight: !q,,,1
 static void json_append_tagged_quaternion(lua_State *l, strbuf_t *json, const float *a, bool tight = false) {
-    strbuf_append_string(l, json, tight ? "\"!q" : "\"!q<");
+    strbuf_append_string(json, tight ? "\"!q" : "\"!q<");
     json_append_coordinate_component(l, json, a[0], tight);
-    strbuf_append_char(l, json, ',');
+    strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[1], tight);
-    strbuf_append_char(l, json, ',');
+    strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[2], tight);
-    strbuf_append_char(l, json, ',');
+    strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[3], tight);
-    strbuf_append_string(l, json, tight ? "\"" : ">\"");
+    strbuf_append_string(json, tight ? "\"" : ">\"");
 }
 
 static void json_append_buffer(lua_State *l, strbuf_t *json, int lindex)
@@ -871,7 +894,7 @@ static void json_append_buffer(lua_State *l, strbuf_t *json, int lindex)
     if (encoded_len > 0)
     {
         // exclude the trailing null
-        strbuf_append_mem(l, json, encode_buf.data(), encoded_len - 1);
+        strbuf_append_mem(json, encode_buf.data(), encoded_len - 1);
     }
 }
 
@@ -930,14 +953,14 @@ static void json_append_tagged_uuid(lua_State *l, strbuf_t *json, int lindex, bo
             }
         }
         if (is_null) {
-            strbuf_append_string(l, json, "\"!u\"");
+            strbuf_append_string(json, "\"!u\"");
         } else {
             // Base64 encode - 16 bytes -> 24 chars, but we strip the '==' padding
             char encoded[25];
             apr_base64_encode_binary(encoded, uuid_bytes, 16);
-            strbuf_append_string(l, json, "\"!u");
-            strbuf_append_mem(l, json, encoded, 22);  // Strip '==' padding
-            strbuf_append_char(l, json, '"');
+            strbuf_append_string(json, "\"!u");
+            strbuf_append_mem(json, encoded, 22);  // Strip '==' padding
+            strbuf_append_char(json, '"');
         }
     } else {
         // Normal string form - output canonical UUID format
@@ -946,32 +969,32 @@ static void json_append_tagged_uuid(lua_State *l, strbuf_t *json, int lindex, bo
         // luaL_tolstring needs stack space for metatable lookup and potential __tostring call
         lua_checkstack(l, 5);
         const char *str = luaL_tolstring(l, lindex, &len);
-        strbuf_append_string(l, json, "\"!u");
-        strbuf_append_mem(l, json, str, len);
-        strbuf_append_char(l, json, '"');
+        strbuf_append_string(json, "\"!u");
+        strbuf_append_mem(json, str, len);
+        strbuf_append_char(json, '"');
         lua_settop(l, top);
     }
 }
 
 // Helper to append a tagged float: !f3.14 (used for all numeric keys in SL mode)
 static void json_append_tagged_float(lua_State *l, strbuf_t *json, double num, int precision) {
-    strbuf_append_string(l, json, "\"!f");
+    strbuf_append_string(json, "\"!f");
 
     if (isnan(num)) {
-        strbuf_append_mem(l, json, "NaN", 3);
+        strbuf_append_mem(json, "NaN", 3);
     } else if (isinf(num)) {
         // Use 1e9999 which overflows to infinity when parsed back
         if (signbit(num))
-            strbuf_append_string(l, json, "-1e9999");
+            strbuf_append_string(json, "-1e9999");
         else
-            strbuf_append_string(l, json, "1e9999");
+            strbuf_append_string(json, "1e9999");
     } else {
-        strbuf_ensure_empty_length(l, json, FPCONV_G_FMT_BUFSIZE);
+        strbuf_ensure_empty_length(json, FPCONV_G_FMT_BUFSIZE);
         int len = fpconv_g_fmt(strbuf_empty_ptr(json), num, precision);
         strbuf_extend_length(json, len);
     }
 
-    strbuf_append_char(l, json, '"');
+    strbuf_append_char(json, '"');
 }
 
 // Helper to append a string that may need ! escaping for SL tagged mode
@@ -982,7 +1005,7 @@ static void json_append_string_sl(lua_State *l, strbuf_t *json, int lindex) {
     // Check if string starts with '!' - needs escaping
     bool needs_escape = (len > 0 && str[0] == '!');
 
-    strbuf_ensure_empty_length(l, json, len * 6 + 4); // Extra space for potential !! prefix
+    strbuf_ensure_empty_length(json, len * 6 + 4); // Extra space for potential !! prefix
     strbuf_append_char_unsafe(json, '"');
 
     if (needs_escape)
@@ -991,7 +1014,7 @@ static void json_append_string_sl(lua_State *l, strbuf_t *json, int lindex) {
     for (size_t i = 0; i < len; i++) {
         const char *escstr = char2escape[(unsigned char)str[i]];
         if (escstr)
-            strbuf_append_string(l, json, escstr);
+            strbuf_append_string(json, escstr);
         else
             strbuf_append_char_unsafe(json, str[i]);
     }
@@ -1018,7 +1041,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
 
     /* Object */
     if (slots.isInit()) {
-        strbuf_append_char(l, json, '{');
+        strbuf_append_char(json, '{');
         lua_pushnil(l);
     }
 
@@ -1030,7 +1053,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
     /* table, startkey */
     while (lua_next(l, -2) != 0) {
         if (comma++ > 0)
-            strbuf_append_char(l, json, ',');
+            strbuf_append_char(json, ',');
 
         /* table, key, value */
         int keytype;
@@ -1051,9 +1074,9 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
                 break;
             }
             case LUA_TBUFFER: {
-                strbuf_append_string(l, json, "\"!d");
+                strbuf_append_string(json, "\"!d");
                 json_append_buffer(l, json, -2);
-                strbuf_append_char(l, json, '"');
+                strbuf_append_char(json, '"');
                 break;
             }
             case LUA_TUSERDATA: {
@@ -1070,23 +1093,23 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
                 break;
             }
             case LUA_TBOOLEAN:
-                strbuf_append_string(l, json, lua_toboolean(l, -2) ? "\"!b1\"" : "\"!b0\"");
+                strbuf_append_string(json, lua_toboolean(l, -2) ? "\"!b1\"" : "\"!b0\"");
                 break;
             default:
                 json_encode_exception(l, cfg, json, -2,
                                       "unsupported table key type");
                 /* never returns */
             }
-            strbuf_append_char(l, json, ':');
+            strbuf_append_char(json, ':');
         } else {
             // Standard JSON mode: only string and number keys
             if (keytype == LUA_TNUMBER) {
-                strbuf_append_char(l, json, '"');
+                strbuf_append_char(json, '"');
                 json_append_number(l, cfg, json, -2);
-                strbuf_append_mem(l, json, "\":", 2);
+                strbuf_append_mem(json, "\":", 2);
             } else if (keytype == LUA_TSTRING) {
                 json_append_string(l, json, -2);
-                strbuf_append_char(l, json, ':');
+                strbuf_append_char(json, ':');
             } else {
                 json_encode_exception(l, cfg, json, -2,
                                       "table key must be a number or string");
@@ -1104,7 +1127,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
         YIELD_CHECK(l, NEXT_PAIR, LUA_INTERRUPT_LLLIB);
     }
 
-    strbuf_append_char(l, json, '}');
+    strbuf_append_char(json, '}');
 }
 
 /* Serialise Lua data into JSON string. */
@@ -1169,9 +1192,9 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         break;
     case LUA_TBOOLEAN:
         if (lua_toboolean(l, -1))
-            strbuf_append_mem(l, json, "true", 4);
+            strbuf_append_mem(json, "true", 4);
         else
-            strbuf_append_mem(l, json, "false", 5);
+            strbuf_append_mem(json, "false", 5);
         break;
     case LUA_TTABLE:
     {
@@ -1244,14 +1267,14 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         break;
     }
     case LUA_TNIL:
-        strbuf_append_mem(l, json, "null", 4);
+        strbuf_append_mem(json, "null", 4);
         break;
     case LUA_TLIGHTUSERDATA: {
         void* json_internal_val;
         json_internal_val = lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL);
         if (json_internal_val) {
             if (json_internal_val == json_lightudata_mask(JSON_NULL)) {
-                strbuf_append_mem(l, json, "null", 4);
+                strbuf_append_mem(json, "null", 4);
                 break;
             } else if (json_internal_val == json_lightudata_mask(JSON_ARRAY)) {
                 YIELD_HELPER(l, APPEND_ARRAY_LUD,
@@ -1278,23 +1301,23 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             json_append_tagged_vector(l, json, a, cfg->sl_tight_encoding);
         } else {
             // We specifically want a short representation here, don't use %f!
-            strbuf_append_string(l, json, "\"<");
+            strbuf_append_string(json, "\"<");
             json_append_coordinate_component(l, json, a[0]);
-            strbuf_append_char(l, json, ',');
+            strbuf_append_char(json, ',');
             json_append_coordinate_component(l, json, a[1]);
-            strbuf_append_char(l, json, ',');
+            strbuf_append_char(json, ',');
             json_append_coordinate_component(l, json, a[2]);
-            strbuf_append_string(l, json, ">\"");
+            strbuf_append_string(json, ">\"");
         }
         break;
     }
     case LUA_TBUFFER: {
-        strbuf_append_char(l, json, '"');
+        strbuf_append_char(json, '"');
         if (cfg->sl_tagged_types)
-            strbuf_append_string(l, json, "!d");
+            strbuf_append_string(json, "!d");
 
         json_append_buffer(l, json, -1);
-        strbuf_append_char(l, json, '"');
+        strbuf_append_char(json, '"');
         break;
     }
     case LUA_TUSERDATA: {
@@ -1309,15 +1332,15 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             if (cfg->sl_tagged_types) {
                 json_append_tagged_quaternion(l, json, a, cfg->sl_tight_encoding);
             } else {
-                strbuf_append_string(l, json, "\"<");
+                strbuf_append_string(json, "\"<");
                 json_append_coordinate_component(l, json, a[0]);
-                strbuf_append_char(l, json, ',');
+                strbuf_append_char(json, ',');
                 json_append_coordinate_component(l, json, a[1]);
-                strbuf_append_char(l, json, ',');
+                strbuf_append_char(json, ',');
                 json_append_coordinate_component(l, json, a[2]);
-                strbuf_append_char(l, json, ',');
+                strbuf_append_char(json, ',');
                 json_append_coordinate_component(l, json, a[3]);
-                strbuf_append_string(l, json, ">\"");
+                strbuf_append_string(json, ">\"");
             }
         } else if (cfg->encode_skip_unsupported_value_types) {
             return 1;
@@ -1372,7 +1395,7 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
             lua_settop(l, 2);
         }
 
-        lstrbuf_push(l);
+        luaYB_push(l);
         lua_insert(l, 2);
         /* Stack: [opaque(1), strbuf(2), value(3)] */
 
@@ -1388,7 +1411,7 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
     YIELD_HELPER(l, APPEND_DATA,
         json_append_data(l, slots, &cfg, 0, buf));
 
-    strbuf_tostring_inplace(l, 2, true);
+    strbuf_tostring_inplace(2, true);
     lua_settop(l, 2);
     return 1;
 }
@@ -2325,7 +2348,7 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
             luaL_errorL(l, "JSON too large to decode");
 
         /* Create tmp strbuf, insert at pos 2, input string moves to pos 3 */
-        lstrbuf_push(l);
+        luaYB_push(l);
         lua_insert(l, 2);
         /* Stack: [opaque(1), strbuf(2), input_string(3)] */
 
