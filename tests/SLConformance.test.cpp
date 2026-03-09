@@ -730,6 +730,11 @@ TEST_CASE("Integer bitwise operations")
     runConformance("integer_bitwise.lua");
 }
 
+TEST_CASE("bit32.s32")
+{
+    runConformance("bit32_s32.lua");
+}
+
 // ServerLua: interrupt state for lljson yield tests
 static bool jsonInterruptEnabled = false;
 static int jsonYieldCount = 0;

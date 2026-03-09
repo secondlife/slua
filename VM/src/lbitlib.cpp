@@ -252,6 +252,43 @@ static int b_swap(lua_State* L)
     return 1;
 }
 
+// ServerLua: convert double to signed 32-bit via fmod (no UB for any input)
+static int32_t double_to_s32(double n)
+{
+    // NaN/Inf: i386 fistp returns INT32_MIN ("integer indefinite")
+    if (!isfinite(n))
+        return INT32_MIN;
+    double truncated;
+    modf(n, &truncated);
+    // fmod handles arbitrarily large values; result is in (-2^32, 2^32)
+    constexpr double kUint32Mod = (double)UINT32_MAX + 1.0;
+    constexpr double kInt32Upper = -(double)INT32_MIN;
+    double result = fmod(truncated, kUint32Mod);
+    // Wrap into signed 32-bit range [-2^31, 2^31)
+    if (result >= kInt32Upper)
+        result -= kUint32Mod;
+    else if (result < -kInt32Upper)
+        result += kUint32Mod;
+    return (int32_t)result;
+}
+
+// ServerLua: normalize to signed 32-bit range using pure floating-point math (no UB)
+static int b_s32(lua_State* L)
+{
+    lua_pushnumber(L, (double)double_to_s32(luaL_checknumber(L, 1)));
+    return 1;
+}
+
+// ServerLua: signed 32-bit multiply without float64 precision loss
+static int b_smul(lua_State* L)
+{
+    int32_t a = double_to_s32(luaL_checknumber(L, 1));
+    int32_t b = double_to_s32(luaL_checknumber(L, 2));
+    int32_t result = (int32_t)((int64_t)a * (int64_t)b);
+    lua_pushnumber(L, (double)result);
+    return 1;
+}
+
 static const luaL_Reg bitlib[] = {
     {"arshift", b_arshift},
     {"band", b_and},
@@ -265,6 +302,8 @@ static const luaL_Reg bitlib[] = {
     {"replace", b_replace},
     {"rrotate", b_rrot},
     {"rshift", b_rshift},
+    {"s32", b_s32},
+    {"smul", b_smul},
     {"countlz", b_countlz},
     {"countrz", b_countrz},
     {"byteswap", b_swap},
