@@ -104,6 +104,9 @@ static int lsl_key_ctor(lua_State *L)
         lua_pushvalue(L, 1);
         return 1;
     }
+    lua_settop(L, 1);
+    if (lua_isnil(L, 1))
+        return 1;
     size_t len;
     const char *data = luaL_checklstring(L, 1, &len);
     return luaSL_pushuuidlstring(L, data, len);
@@ -116,6 +119,9 @@ static int push_uuid_common(lua_State *L, const char *str, size_t len, bool comp
 static int lua_uuid_ctor(lua_State *L)
 {
     auto arg_type = lua_type(L, 1);
+    lua_settop(L, 1);
+    if (arg_type == LUA_TNIL)
+        return 1;
     if (arg_type == LUA_TUSERDATA)
     {
         // If this is already a UUID just return the same UUID.
@@ -1229,6 +1235,8 @@ static int lsl_to_vector(lua_State *L)
 {
     luaL_checkany(L, 1);
     lua_settop(L, 1);
+    if (lua_isnil(L, 1))
+        return 1;
     lua_pushunsigned(L, (unsigned int)LSLIType::LST_VECTOR);
     return lsl_must_cast_nil_default(L);
 }
@@ -1237,6 +1245,8 @@ static int lsl_to_quaternion(lua_State *L)
 {
     luaL_checkany(L, 1);
     lua_settop(L, 1);
+    if (lua_isnil(L, 1))
+        return 1;
     lua_pushunsigned(L, (unsigned int)LSLIType::LST_QUATERNION);
     return lsl_must_cast_nil_default(L);
 }

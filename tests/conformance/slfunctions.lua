@@ -58,8 +58,9 @@ assert(typeof(ll.Ceil(5)) == "number")
 -- These should all fail gracefully
 success, err = pcall(function() tovector(tovector) end)
 assert(string.match(err, "unable to cast!"))
-success, err = pcall(function() tovector(nil) end)
-assert(string.match(err, "unable to cast!"))
+assert(tovector(nil) == nil)
+assert(toquaternion(nil) == nil)
+assert(touuid(nil) == nil)
 
 assert(not pcall(function() tovector() end))
 assert(not pcall(function() toquaternion() end))
