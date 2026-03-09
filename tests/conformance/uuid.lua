@@ -22,8 +22,9 @@ tab[expected_key] = 2
 assert(tab[key] == 2)
 assert(tab[expected_key] == 2)
 
--- Invalid values result in nil
-assert(uuid('foo') == nil)
+-- with `uuid` conversion results are errors
+assert(pcall(uuid, 'foo') == false)
+-- with `touuid` we just return nil
 assert(touuid('foo') == nil)
 -- But the blank string is special-cased to mean `NULL_KEY`
 assert(uuid('') == uuid('00000000-0000-0000-0000-000000000000'))

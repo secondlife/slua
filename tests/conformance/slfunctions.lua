@@ -60,6 +60,7 @@ assert(tovector(tovector) == nil)
 assert(tovector(nil) == nil)
 assert(toquaternion(nil) == nil)
 assert(touuid(nil) == nil)
+assert(touuid(ZERO_ROTATION) == nil)
 
 assert(not pcall(function() tovector() end))
 assert(not pcall(function() toquaternion() end))

@@ -122,30 +122,34 @@ static bool parse_uuid_str(const char *in_string, size_t len, char *out, bool fl
 static int push_uuid_common(lua_State *L, const char *str, size_t len, bool compressed);
 
 // UUID constructor for Lua/SLua mode (strict + canonicalize)
-static int lua_uuid_ctor(lua_State *L)
+static bool _lsl_uuid_inner_ctor(lua_State *L)
 {
     auto arg_type = lua_type(L, 1);
     lua_settop(L, 1);
     if (arg_type == LUA_TUSERDATA)
     {
         // If this is already a UUID just return the same UUID.
-        bool compressed;
-        luaSL_checkuuid(L, 1, &compressed);
-        lua_pushvalue(L, 1);
-        return 1;
+        if (lua_userdatatag(L, 1) == UTAG_UUID)
+        {
+            lua_pushvalue(L, 1);
+            return true;
+        }
+        return false;
     }
     else if (arg_type == LUA_TBUFFER)
     {
         size_t buf_len = 0;
         auto *data = lua_tobuffer(L, 1, &buf_len);
         if (data && buf_len >= (size_t)UUID_BYTES)
-            return push_uuid_common(L, (const char*)data, UUID_BYTES, true);
-        luaL_errorL(L, "Buffer too short to be UUID, only %d bytes", (int)buf_len);
+        {
+            push_uuid_common(L, (const char*)data, UUID_BYTES, true);
+            return true;
+        }
+        return false;
     }
     else if (arg_type != LUA_TSTRING)
     {
-        lua_pushnil(L);
-        return 1;
+        return false;
     }
 
     size_t len;
@@ -154,22 +158,37 @@ static int lua_uuid_ctor(lua_State *L)
     // Empty string → NULL_KEY
     if (len == 0)
     {
-        return push_uuid_common(L, NULL_UUID, UUID_BYTES, true);
+        push_uuid_common(L, NULL_UUID, UUID_BYTES, true);
+        return true;
     }
 
     // Try flexible parsing (case-insensitive + broken format)
     char uuid_bytes[UUID_BYTES];
     if (parse_uuid_str(data, len, uuid_bytes, true))
     {
-        // Valid UUID → compressed binary
-        return push_uuid_common(L, uuid_bytes, UUID_BYTES, true);
+        // Valid UUID -> compressed binary
+        push_uuid_common(L, uuid_bytes, UUID_BYTES, true);
+        return true;
     }
-    else
+    return false;
+}
+static int lua_uuid_ctor(lua_State *L)
+{
+    if (!_lsl_uuid_inner_ctor(L))
     {
-        // Invalid UUID → nil
-        lua_pushnil(L);
+        luaL_argerrorL(L, 1, "Unable to convert to UUID");
+    }
+    return 1;
+}
+
+static int lua_touuid(lua_State *L)
+{
+    if (_lsl_uuid_inner_ctor(L))
+    {
         return 1;
     }
+    lua_pushnil(L);
+    return 1;
 }
 
 static std::string _float_to_str(float v, bool high_precision, bool neg_zero = true)
@@ -1608,7 +1627,8 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
     // ServerLua: `quaternion()` is an alias to `quaternion.create()`, so we need to add a metatable
     //  to the quaternion module which allows calling it.
     lua_newtable(L);
-    lua_pushcfunction(L, quaternion_call, "__call");
+    // Not conventional to not call this "__call", but this'll give better error messages.
+    lua_pushcfunction(L, quaternion_call, name);
     lua_setfield(L, -2, "__call");
 
     // We need to override __iter so generalized iteration doesn't try to use __call.
@@ -1632,6 +1652,7 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
 // ServerLua: callable uuid module
 static int uuid_call(lua_State *L)
 {
+    // First arg will be the uuid table, throw it away and call the usual constructor.
     luaL_checktype(L, 1, LUA_TTABLE);
     lua_remove(L, 1);
     return lua_uuid_ctor(L);
@@ -1651,7 +1672,7 @@ int luaopen_sl_uuid(lua_State* L)
     // ServerLua: `uuid()` is an alias to `uuid.create()`, so we need to add a metatable
     //  to the uuid module which allows calling it.
     lua_newtable(L);
-    lua_pushcfunction(L, uuid_call, "__call");
+    lua_pushcfunction(L, uuid_call, "uuid");
     lua_setfield(L, -2, "__call");
 
     // We need to override __iter so generalized iteration doesn't try to use __call.
@@ -1753,7 +1774,7 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
         // Create uuid module table
         luaopen_sl_uuid(L);
         LUAU_ASSERT(lua_gettop(L) == top);
-        lua_pushcfunction(L, lua_uuid_ctor, "touuid");
+        lua_pushcfunction(L, lua_touuid, "touuid");
         lua_setglobal(L, "touuid");
     }
 
