@@ -2380,7 +2380,10 @@ p_thread(Info *info) {                                          /* ... thread */
     pushpath(info, "[%d]", level++);
     WRITE_VALUE(eris_savestackidx(thread, uv->v) + 1, ares_size_t);
     eris_setobj(info->L, info->L->top - 1, uv->v);          /* ... thread obj */
-    lua_pushlightuserdata(info->L, uv);                  /* ... thread obj id */
+    // Use `uv->v` (stack slot address) with `LUTAG_ARES_UPREF as the key
+    // so we can have this point at the underlying value on the stack.
+    // `uv` itself is generally irrelevant.
+    lua_pushlightuserdatatagged(info->L, uv->v, LUTAG_ARES_UPREF); /* ... thread obj id */
     persist_keyed(info, LUA_TUPVAL);                        /* ... thread obj */
     poppath(info);
     eris_assert(uv_top == lua_gettop(info->L));

@@ -144,5 +144,54 @@ assert(tabs[3] == rtabs[3])
 assert(tabs[3].one == rtabs[3].one)
 assert(tabs[2].three == rtabs[2].three)
 
+-- open upvalue patching: closure on the stack (not executing) at yield time
+-- Regression test: p_thread's open upvalue section must use the same reftable key
+-- as p_closure so u_thread can patch closure upvalue references to be open.
+-- Without the fix, the inner closure's upvalues remain closed after unpersist,
+-- so writes from the closure go to a copy instead of the outer function's local.
+do
+    local co = coroutine.create(function()
+        local captured = nil
+        local function writer()
+            captured = "written"
+        end
+        -- Push writer onto the stack and yield before calling it.
+        -- This means writer (with its open upvalue for `captured`) is a raw
+        -- value on the coroutine's stack at persist time.
+        local f = writer
+        coroutine.yield()
+        -- After round-trip, call writer. Its upvalue must be open (pointing to
+        -- our stack slot for `captured`), not closed (pointing to a copy).
+        f()
+        return captured
+    end)
+
+    coroutine.resume(co)
+    co = ares.unpersist(uperms, ares.persist(perms, co))
+    local ok, result = coroutine.resume(co)
+    assert(ok)
+    assert(result == "written", "expected 'written', got " .. tostring(result))
+end
+
+-- same test but with two closures sharing the open upvalue
+do
+    local co = coroutine.create(function()
+        local shared = 0
+        local function inc() shared = shared + 1 end
+        local function get() return shared end
+        local fi, fg = inc, get
+        coroutine.yield()
+        fi()
+        fi()
+        return fg()
+    end)
+
+    coroutine.resume(co)
+    co = ares.unpersist(uperms, ares.persist(perms, co))
+    local ok, result = coroutine.resume(co)
+    assert(ok)
+    assert(result == 2, "expected 2, got " .. tostring(result))
+end
+
 print('OK')
 return 'OK'
