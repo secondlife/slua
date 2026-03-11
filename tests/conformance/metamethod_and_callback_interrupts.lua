@@ -23,7 +23,7 @@ end
 -- Create test object once to avoid intermediate function calls
 local obj = create_test_object()
 local obj_len = {}
-setmetatable(obj_len, {__len = test_callback})
+setmetatable(obj_len, {__jsontype = "array", __len = test_callback})
 
 -- Test __tostring (via luaL_callmeta path)
 reset_interrupt_test()

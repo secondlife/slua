@@ -61,10 +61,11 @@ typedef lua_YieldSafeStrBuf strbuf_t;
 #include "../lapi.h"
 #include "../lstate.h"
 #include "../ltable.h"
+#include "../lstring.h"
 // ServerLua: yieldable infrastructure for encode/decode
 #include "lyieldablemacros.h"
 
-// ServerLua: Shims restoring original cjson strbuf API — captures `l` from enclosing scope
+// ServerLua: Shims restoring original cjson strbuf API - captures `l` from enclosing scope
 #define strbuf_init(s, len)              luaYB_init(l, (s), (len))
 #define strbuf_free(s)                   luaYB_free(l, (s))
 #define strbuf_resize(s, len)            luaYB_resize(l, (s), (len))
@@ -89,17 +90,7 @@ typedef lua_YieldSafeStrBuf strbuf_t;
 
 // ServerLua: internal configuration
 #define CJSON_MODNAME "lljson"
-// Ehhh, close enough. Luau is sort of a mutant Lua 5.1 with extras.
-#define LUA_VERSION_NUM 501
-
-
-#ifndef CJSON_MODNAME
-#define CJSON_MODNAME   "cjson"
-#endif
-
-#ifndef CJSON_VERSION
 #define CJSON_VERSION   "2.1.0.11"
-#endif
 
 #ifdef _MSC_VER
 #define snprintf sprintf_s
@@ -109,19 +100,8 @@ typedef lua_YieldSafeStrBuf strbuf_t;
 #define isnan(x) _isnan(x)
 #endif
 
-#endif
-
-#ifdef _MSC_VER
-#define CJSON_EXPORT    __declspec(dllexport)
 #define strncasecmp(x,y,z) _strnicmp(x,y,z)
 #define strcasecmp _stricmp
-#else
-#define CJSON_EXPORT    extern
-#endif
-
-/* Workaround for Solaris platforms missing isinf() */
-#if !defined(isinf) && (defined(USE_INTERNAL_ISINF) || defined(MISSING_ISINF))
-#define isinf(x) (!isnan(x) && isnan((x) - (x)))
 #endif
 
 #ifdef __clang__
@@ -130,37 +110,30 @@ typedef lua_YieldSafeStrBuf strbuf_t;
 #endif
 #endif
 
-#define DEFAULT_SPARSE_CONVERT 0
-#define DEFAULT_SPARSE_RATIO 2
-#define DEFAULT_SPARSE_SAFE 10
-#define DEFAULT_ENCODE_MAX_DEPTH 100
-#define DEFAULT_DECODE_MAX_DEPTH 100
-#define DEFAULT_ENCODE_INVALID_NUMBERS 1
-#define DEFAULT_DECODE_INVALID_NUMBERS 1
-#define DEFAULT_ENCODE_NUMBER_PRECISION 14
-#define DEFAULT_ENCODE_EMPTY_TABLE_AS_OBJECT 1
-#define DEFAULT_DECODE_ARRAY_WITH_ARRAY_MT 0
-#define DEFAULT_ENCODE_ESCAPE_FORWARD_SLASH 0
-#define DEFAULT_ENCODE_SKIP_UNSUPPORTED_VALUE_TYPES 0
+#define JSON_SPARSE_RATIO 2
+#define JSON_SPARSE_SAFE 10
+#define JSON_MAX_DEPTH 100
+#define JSON_NUMBER_PRECISION 14
 #define DEFAULT_MAX_SIZE 60000
 
-#ifdef DISABLE_INVALID_NUMBERS
-#undef DEFAULT_DECODE_INVALID_NUMBERS
-#define DEFAULT_DECODE_INVALID_NUMBERS 0
-#endif
+// ServerLua: Fixed Lua stack positions for encode/decode.
+// SlotManager's opaque state always occupies position 1.
+enum class EncodeStack
+{
+    OPAQUE = 1,
+    STRBUF = 2,
+    CTX = 3,
+    REPLACER = 4,
+    VALUE = 5,
+};
 
-#if LONG_MAX > ((1UL << 31) - 1) && FALSE
-// This is unnecessary because we correctly tag lightuserdata under Luau
-#define json_lightudata_mask(ludata)                                         \
-    ((void *) ((uintptr_t) (ludata) & ((1UL << 47) - 1)))
-
-#else
-#define json_lightudata_mask(ludata)    (ludata)
-#endif
-
-#if LUA_VERSION_NUM >= 502
-#define lua_objlen(L,i)		luaL_len(L, (i))
-#endif
+enum class DecodeStack
+{
+    OPAQUE = 1,
+    STRBUF = 2,
+    INPUT = 3,
+    REVIVER = 4,
+};
 
 typedef enum {
     T_OBJ_BEGIN,
@@ -256,20 +229,11 @@ static void json_init_lookup_tables()
 }
 
 struct json_config_t {
-    int encode_sparse_convert = DEFAULT_SPARSE_CONVERT;
-    int encode_sparse_ratio = DEFAULT_SPARSE_RATIO;
-    int encode_sparse_safe = DEFAULT_SPARSE_SAFE;
-    int encode_max_depth = DEFAULT_ENCODE_MAX_DEPTH;
-    int encode_invalid_numbers = DEFAULT_ENCODE_INVALID_NUMBERS;
-    int encode_number_precision = DEFAULT_ENCODE_NUMBER_PRECISION;
-    int encode_empty_table_as_object = DEFAULT_ENCODE_EMPTY_TABLE_AS_OBJECT;
-    int encode_escape_forward_slash = DEFAULT_ENCODE_ESCAPE_FORWARD_SLASH;
-    int decode_invalid_numbers = DEFAULT_DECODE_INVALID_NUMBERS;
-    int decode_max_depth = DEFAULT_DECODE_MAX_DEPTH;
-    int decode_array_with_array_mt = DEFAULT_DECODE_ARRAY_WITH_ARRAY_MT;
-    int encode_skip_unsupported_value_types = DEFAULT_ENCODE_SKIP_UNSUPPORTED_VALUE_TYPES;
-    bool sl_tagged_types = false;  // When true, use !v, !q, !u, !i, !f tagging
-    bool sl_tight_encoding = false;  // When true, use compact format (no brackets, base64 UUIDs)
+    int encode_sparse_convert = 0;
+    bool sl_tagged_types = false;
+    bool sl_tight_encoding = false;
+    bool has_replacer = false;
+    bool skip_tojson = false;
 };
 
 typedef struct {
@@ -279,6 +243,7 @@ typedef struct {
     lua_YieldSafeStrBuf *tmp;
     json_config_t *cfg;
     int current_depth;
+    bool has_reviver;  // When true, a reviver function is on the decode stack
 } json_parse_t;
 
 typedef struct {
@@ -303,7 +268,7 @@ static const char *char2escape[256] = {
     "\\u0018", "\\u0019", "\\u001a", "\\u001b",
     "\\u001c", "\\u001d", "\\u001e", "\\u001f",
     NULL, NULL, "\\\"", NULL, NULL, NULL, NULL, NULL,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, "\\/",
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -331,271 +296,6 @@ static const char *char2escape[256] = {
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
-
-#if 0 // ServerLua: config functions unused, config is now stack-local RAII
-
-/* ===== CONFIGURATION ===== */
-
-static json_config_t *json_fetch_config(lua_State *l)
-{
-    json_config_t *cfg;
-
-    cfg = (json_config_t *)lua_touserdata(l, lua_upvalueindex(1));
-    if (!cfg)
-        luaL_error(l, "BUG: Unable to fetch CJSON configuration");
-
-    return cfg;
-}
-
-/* Ensure the correct number of arguments have been provided.
- * Pad with nil to allow other functions to simply check arg[i]
- * to find whether an argument was provided */
-static json_config_t *json_arg_init(lua_State *l, int args)
-{
-    luaL_argcheck(l, lua_gettop(l) <= args, args + 1,
-                  "found too many arguments");
-
-    while (lua_gettop(l) < args)
-        lua_pushnil(l);
-
-    return json_fetch_config(l);
-}
-
-/* Process integer options for configuration functions */
-static int json_integer_option(lua_State *l, int optindex, int *setting,
-                               int min, int max)
-{
-    char errmsg[64];
-    int value;
-
-    if (!lua_isnil(l, optindex)) {
-        value = luaL_checkinteger(l, optindex);
-        snprintf(errmsg, sizeof(errmsg), "expected integer between %d and %d", min, max);
-        luaL_argcheck(l, min <= value && value <= max, 1, errmsg);
-        *setting = value;
-    }
-
-    lua_pushinteger(l, *setting);
-
-    return 1;
-}
-
-/* Process enumerated arguments for a configuration function */
-static int json_enum_option(lua_State *l, int optindex, int *setting,
-                            const char **options, int bool_true)
-{
-    static const char *bool_options[] = { "off", "on", NULL };
-
-    if (!options) {
-        options = bool_options;
-        bool_true = 1;
-    }
-
-    if (!lua_isnil(l, optindex)) {
-        if (bool_true && lua_isboolean(l, optindex))
-            *setting = lua_toboolean(l, optindex) * bool_true;
-        else
-            *setting = luaL_checkoption(l, optindex, NULL, options);
-    }
-
-    if (bool_true && (*setting == 0 || *setting == bool_true))
-        lua_pushboolean(l, *setting);
-    else
-        lua_pushstring(l, options[*setting]);
-
-    return 1;
-}
-
-/* Configures handling of extremely sparse arrays:
- * convert: Convert extremely sparse arrays into objects? Otherwise error.
- * ratio: 0: always allow sparse; 1: never allow sparse; >1: use ratio
- * safe: Always use an array when the max index <= safe */
-static int json_cfg_encode_sparse_array(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 3);
-
-    json_enum_option(l, 1, &cfg->encode_sparse_convert, NULL, 1);
-    json_integer_option(l, 2, &cfg->encode_sparse_ratio, 0, INT_MAX);
-    json_integer_option(l, 3, &cfg->encode_sparse_safe, 0, INT_MAX);
-
-    return 3;
-}
-
-/* Configures the maximum number of nested arrays/objects allowed when
- * encoding */
-static int json_cfg_encode_max_depth(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    return json_integer_option(l, 1, &cfg->encode_max_depth, 1, INT_MAX);
-}
-
-/* Configures the maximum number of nested arrays/objects allowed when
- * encoding */
-static int json_cfg_decode_max_depth(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    return json_integer_option(l, 1, &cfg->decode_max_depth, 1, INT_MAX);
-}
-
-/* Configures number precision when converting doubles to text */
-static int json_cfg_encode_number_precision(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    return json_integer_option(l, 1, &cfg->encode_number_precision, 1, 16);
-}
-
-/* Configures how to treat empty table when encode lua table */
-static int json_cfg_encode_empty_table_as_object(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    return json_enum_option(l, 1, &cfg->encode_empty_table_as_object, NULL, 1);
-}
-
-/* Configures how to decode arrays */
-static int json_cfg_decode_array_with_array_mt(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    json_enum_option(l, 1, &cfg->decode_array_with_array_mt, NULL, 1);
-
-    return 1;
-}
-
-/* Configure how to treat invalid types */
-static int json_cfg_encode_skip_unsupported_value_types(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    json_enum_option(l, 1, &cfg->encode_skip_unsupported_value_types, NULL, 1);
-
-    return 1;
-}
-
-
-#if defined(DISABLE_INVALID_NUMBERS) && !defined(USE_INTERNAL_FPCONV)
-void json_verify_invalid_number_setting(lua_State *l, int *setting)
-{
-    if (*setting == 1) {
-        *setting = 0;
-        luaL_error(l, "Infinity, NaN, and/or hexadecimal numbers are not supported.");
-    }
-}
-#else
-#define json_verify_invalid_number_setting(l, s)    do { } while(0)
-#endif
-
-static int json_cfg_encode_invalid_numbers(lua_State *l)
-{
-    static const char *options[] = { "off", "on", "null", NULL };
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    json_enum_option(l, 1, &cfg->encode_invalid_numbers, options, 1);
-
-    json_verify_invalid_number_setting(l, &cfg->encode_invalid_numbers);
-
-    return 1;
-}
-
-static int json_cfg_decode_invalid_numbers(lua_State *l)
-{
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    json_enum_option(l, 1, &cfg->decode_invalid_numbers, NULL, 1);
-
-    json_verify_invalid_number_setting(l, &cfg->encode_invalid_numbers);
-
-    return 1;
-}
-
-static int json_cfg_encode_escape_forward_slash(lua_State *l)
-{
-    int            ret;
-    json_config_t *cfg = json_arg_init(l, 1);
-
-    ret = json_enum_option(l, 1, &cfg->encode_escape_forward_slash, NULL, 1);
-    if (cfg->encode_escape_forward_slash) {
-        char2escape['/'] = "\\/";
-    } else {
-        char2escape['/'] = NULL;
-    }
-    return ret;
-}
-
-static void json_create_config(lua_State *l)
-{
-    json_config_t *cfg;
-    int i;
-
-    cfg = (json_config_t *)lua_newuserdatatagged(l, sizeof(*cfg), UTAG_JSON_CONFIG);
-    if (!cfg)
-        abort();
-
-    memset(cfg, 0, sizeof(*cfg));
-
-    cfg->encode_sparse_convert = DEFAULT_SPARSE_CONVERT;
-    cfg->encode_sparse_ratio = DEFAULT_SPARSE_RATIO;
-    cfg->encode_sparse_safe = DEFAULT_SPARSE_SAFE;
-    cfg->encode_max_depth = DEFAULT_ENCODE_MAX_DEPTH;
-    cfg->decode_max_depth = DEFAULT_DECODE_MAX_DEPTH;
-    cfg->encode_invalid_numbers = DEFAULT_ENCODE_INVALID_NUMBERS;
-    cfg->decode_invalid_numbers = DEFAULT_DECODE_INVALID_NUMBERS;
-    cfg->encode_number_precision = DEFAULT_ENCODE_NUMBER_PRECISION;
-    cfg->encode_empty_table_as_object = DEFAULT_ENCODE_EMPTY_TABLE_AS_OBJECT;
-    cfg->decode_array_with_array_mt = DEFAULT_DECODE_ARRAY_WITH_ARRAY_MT;
-    cfg->encode_escape_forward_slash = DEFAULT_ENCODE_ESCAPE_FORWARD_SLASH;
-    cfg->encode_skip_unsupported_value_types = DEFAULT_ENCODE_SKIP_UNSUPPORTED_VALUE_TYPES;
-
-    /* Decoding init */
-
-    /* Tag all characters as an error */
-    for (i = 0; i < 256; i++)
-        cfg->ch2token[i] = T_ERROR;
-
-    /* Set tokens that require no further processing */
-    cfg->ch2token['{'] = T_OBJ_BEGIN;
-    cfg->ch2token['}'] = T_OBJ_END;
-    cfg->ch2token['['] = T_ARR_BEGIN;
-    cfg->ch2token[']'] = T_ARR_END;
-    cfg->ch2token[','] = T_COMMA;
-    cfg->ch2token[':'] = T_COLON;
-    cfg->ch2token['\0'] = T_END;
-    cfg->ch2token[' '] = T_WHITESPACE;
-    cfg->ch2token['\t'] = T_WHITESPACE;
-    cfg->ch2token['\n'] = T_WHITESPACE;
-    cfg->ch2token['\r'] = T_WHITESPACE;
-
-    /* Update characters that require further processing */
-    cfg->ch2token['f'] = T_UNKNOWN;     /* false? */
-    cfg->ch2token['i'] = T_UNKNOWN;     /* inf, ininity? */
-    cfg->ch2token['I'] = T_UNKNOWN;
-    cfg->ch2token['n'] = T_UNKNOWN;     /* null, nan? */
-    cfg->ch2token['N'] = T_UNKNOWN;
-    cfg->ch2token['t'] = T_UNKNOWN;     /* true? */
-    cfg->ch2token['"'] = T_UNKNOWN;     /* string? */
-    cfg->ch2token['+'] = T_UNKNOWN;     /* number? */
-    cfg->ch2token['-'] = T_UNKNOWN;
-    for (i = 0; i < 10; i++)
-        cfg->ch2token['0' + i] = T_UNKNOWN;
-
-    /* Lookup table for parsing escape characters */
-    for (i = 0; i < 256; i++)
-        cfg->escape2char[i] = 0;          /* String error */
-    cfg->escape2char['"'] = '"';
-    cfg->escape2char['\\'] = '\\';
-    cfg->escape2char['/'] = '/';
-    cfg->escape2char['b'] = '\b';
-    cfg->escape2char['t'] = '\t';
-    cfg->escape2char['n'] = '\n';
-    cfg->escape2char['f'] = '\f';
-    cfg->escape2char['r'] = '\r';
-    cfg->escape2char['u'] = 'u';          /* Unicode parsing required */
-}
-
-#endif // ServerLua: config functions unused
 
 /* ===== ENCODING ===== */
 
@@ -682,11 +382,11 @@ static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json)
     while (lua_next(l, -2) != 0) {
         /* table, key, value */
         if (lua_type(l, -2) == LUA_TNUMBER &&
-            (k = lua_tonumber(l, -2))) {
+            (k = lua_tonumber(l, -2)) != 0.0) {
             /* Integer >= 1 and in int range? (floor(inf)==inf, so check upper bound) */
             if (floor(k) == k && k >= 1 && k <= INT_MAX) {
                 if (k > max)
-                    max = k;
+                    max = (int32_t)k;
                 items++;
                 lua_pop(l, 1);
                 continue;
@@ -699,9 +399,8 @@ static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json)
     }
 
     /* Encode excessively sparse arrays as objects (if enabled) */
-    if (cfg->encode_sparse_ratio > 0 &&
-        max > items * cfg->encode_sparse_ratio &&
-        max > cfg->encode_sparse_safe) {
+    if (max > items * JSON_SPARSE_RATIO &&
+        max > JSON_SPARSE_SAFE) {
         if (!cfg->encode_sparse_convert)
             json_encode_exception(l, cfg, json, -1, "excessively sparse array");
 
@@ -724,7 +423,7 @@ static void json_check_encode_depth(lua_State *l, json_config_t *cfg,
      *
      * While this won't cause a crash due to the EXTRA_STACK reserve
      * slots, it would still be an improper use of the API. */
-    if (current_depth <= cfg->encode_max_depth && lua_checkstack(l, 3))
+    if (current_depth <= JSON_MAX_DEPTH && lua_checkstack(l, 7))
         return;
 
     luaL_error(l, "Cannot serialise, excessive nesting (%d)",
@@ -757,6 +456,10 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
         DEFAULT = 0,
         ELEMENT = 1,
         NEXT_ELEMENT = 2,
+        REPLACER_CHECK = 3,
+        REPLACER_CALL = 4,
+        TOJSON_CHECK = 5,
+        TOJSON_CALL = 6,
     };
 
     SlotManager slots(parent_slots);
@@ -764,6 +467,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     DEFINE_SLOT(int32_t, i, 1);
     DEFINE_SLOT(int32_t, comma, 0);
     DEFINE_SLOT(int32_t, json_pos, 0);
+    DEFINE_SLOT(bool, replacer_removed, false);
     slots.finalize();
 
     json = json_get_strbuf(l);
@@ -774,12 +478,14 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(ELEMENT);
     YIELD_DISPATCH(NEXT_ELEMENT);
+    YIELD_DISPATCH(REPLACER_CHECK);
+    YIELD_DISPATCH(REPLACER_CALL);
+    YIELD_DISPATCH(TOJSON_CHECK);
+    YIELD_DISPATCH(TOJSON_CALL);
     YIELD_DISPATCH_END();
 
     for (; i <= array_length; ++i) {
-        json_pos = strbuf_length(json);
-        if (comma++ > 0)
-            strbuf_append_char(json, ',');
+        replacer_removed = false;
 
         if (raw) {
             lua_rawgeti(l, -1, i);
@@ -787,19 +493,54 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
             lua_pushinteger(l, i);
             lua_gettable(l, -2);
         }
+        /* table, value */
 
-        // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
-        bool skip;
-        YIELD_HELPER(l, ELEMENT,
-            skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
-        if (skip) {
-            strbuf_set_length(json, json_pos);
-            if (comma == 1) {
-                comma = 0;
+        if (cfg->has_replacer) {
+            // Resolve __tojson before replacer (JS compat: toJSON -> replacer)
+            if (!cfg->skip_tojson && lua_istable(l, -1) && luaL_getmetafield(l, -1, "__tojson")) {
+                // Stack: table, value, __tojson_fn
+                lua_pushvalue(l, -2);                        // self
+                lua_pushvalue(l, (int)EncodeStack::CTX);     // ctx
+                YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
+                YIELD_CALL(l, 2, 1, TOJSON_CALL);
+                // Stack: table, value, resolved
+                lua_remove(l, -2);  // remove original value
+                // Stack: table, resolved
+            }
+
+            lua_pushvalue(l, (int)EncodeStack::REPLACER);
+            lua_pushinteger(l, i);     // key (1-based index)
+            lua_pushvalue(l, -3);      // value (possibly __tojson-resolved)
+            lua_pushvalue(l, -5);      // parent (the array table)
+            YIELD_CHECK(l, REPLACER_CHECK, LUA_INTERRUPT_LLLIB);
+            YIELD_CALL(l, 3, 1, REPLACER_CALL);
+            // Stack: table, value, result
+            if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
+                lua_pop(l, 2);  // pop result + value -> table
+                replacer_removed = true;
+            } else {
+                lua_remove(l, -2);  // remove original value -> table, result
             }
         }
 
-        lua_pop(l, 1);
+        if (!replacer_removed) {
+            json_pos = strbuf_length(json);
+            if (comma++ > 0)
+                strbuf_append_char(json, ',');
+
+            // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
+            bool skip;
+            YIELD_HELPER(l, ELEMENT,
+                skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
+            if (skip) {
+                strbuf_set_length(json, json_pos);
+                if (comma == 1) {
+                    comma = 0;
+                }
+            }
+
+            lua_pop(l, 1);
+        }
 
         YIELD_CHECK(l, NEXT_ELEMENT, LUA_INTERRUPT_LLLIB);
     }
@@ -807,39 +548,23 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     strbuf_append_char(json, ']');
 }
 
+// ServerLua: forward declaration for NaN handling in json_append_number
+static void json_append_tagged_float(lua_State *l, strbuf_t *json, double num, int precision);
+
 static void json_append_number(lua_State *l, json_config_t *cfg,
                                strbuf_t *json, int lindex)
 {
     int len;
-#if LUA_VERSION_NUM >= 503
-    if (lua_isinteger(l, lindex)) {
-        lua_Integer num = lua_tointeger(l, lindex);
-        strbuf_ensure_empty_length(json, FPCONV_G_FMT_BUFSIZE); /* max length of int64 is 19 */
-        len = sprintf(strbuf_empty_ptr(json), LUA_INTEGER_FMT, num);
-        strbuf_extend_length(json, len);
-        return;
-    }
-#endif
     double num = lua_tonumber(l, lindex);
 
-    if (cfg->encode_invalid_numbers == 0) {
-        /* Prevent encoding invalid numbers */
-        if (isnan(num))
-            json_encode_exception(l, cfg, json, lindex,
-                                  "must not be NaN");
-    } else if (cfg->encode_invalid_numbers == 1) {
-        /* Encode NaN/Infinity separately to ensure Javascript compatible
-         * values are used. */
-        if (isnan(num)) {
-            strbuf_append_mem(json, "NaN", 3);
-            return;
-        }
-    } else {
-        /* Encode invalid numbers as "null" */
-        if ( isnan(num)) {
+    // NaN has no JSON representation.
+    // slencode: tagged float for round-trip. encode: null (matches JSON.stringify).
+    if (isnan(num)) {
+        if (cfg->sl_tagged_types)
+            json_append_tagged_float(l, json, num, JSON_NUMBER_PRECISION);
+        else
             strbuf_append_mem(json, "null", 4);
-            return;
-        }
+        return;
     }
 
     if (isinf(num)) {
@@ -856,13 +581,16 @@ static void json_append_number(lua_State *l, json_config_t *cfg,
     }
 
     strbuf_ensure_empty_length(json, FPCONV_G_FMT_BUFSIZE);
-    len = fpconv_g_fmt(strbuf_empty_ptr(json), num, cfg->encode_number_precision);
+    len = fpconv_g_fmt(strbuf_empty_ptr(json), num, JSON_NUMBER_PRECISION);
     strbuf_extend_length(json, len);
 }
 
+static const float DEFAULT_VECTOR[3] = {0.0f, 0.0f, 0.0f};
+static const float DEFAULT_QUATERNION[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
 static void json_append_coordinate_component(lua_State *l, strbuf_t *json, float val, bool tight = false) {
-    if (tight && val == 0.0f)
-        return;  // Omit zeros in tight mode
+    if (tight && val == 0.0f && !signbit(val))
+        return;  // Omit positive zeros in tight mode
     char format_buf[256] = {};
     // Use shared helper to ensure consistent normalization of non-finite values
     size_t str_len = luai_formatfloat(format_buf, sizeof(format_buf), "%.6f", val);
@@ -870,9 +598,14 @@ static void json_append_coordinate_component(lua_State *l, strbuf_t *json, float
     strbuf_append_mem(json, format_buf, str_len);
 }
 
-// Helper to append a tagged vector value: !v<x,y,z> or tight: !v1,2,3
+// Helper to append a tagged vector value: !v<x,y,z> or tight: !v1,,3
+// ZERO_VECTOR in tight mode -> "!v"
 static void json_append_tagged_vector(lua_State *l, strbuf_t *json, const float *a, bool tight = false) {
     strbuf_append_string(json, tight ? "\"!v" : "\"!v<");
+    if (tight && memcmp(a, DEFAULT_VECTOR, sizeof(DEFAULT_VECTOR)) == 0) {
+        strbuf_append_char(json, '"');
+        return;
+    }
     json_append_coordinate_component(l, json, a[0], tight);
     strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[1], tight);
@@ -882,8 +615,13 @@ static void json_append_tagged_vector(lua_State *l, strbuf_t *json, const float 
 }
 
 // Helper to append a tagged quaternion value: !q<x,y,z,w> or tight: !q,,,1
+// ZERO_ROTATION (0,0,0,1) in tight mode -> "!q"
 static void json_append_tagged_quaternion(lua_State *l, strbuf_t *json, const float *a, bool tight = false) {
     strbuf_append_string(json, tight ? "\"!q" : "\"!q<");
+    if (tight && memcmp(a, DEFAULT_QUATERNION, sizeof(DEFAULT_QUATERNION)) == 0) {
+        strbuf_append_char(json, '"');
+        return;
+    }
     json_append_coordinate_component(l, json, a[0], tight);
     strbuf_append_char(json, ',');
     json_append_coordinate_component(l, json, a[1], tight);
@@ -1042,12 +780,17 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
         DEFAULT = 0,
         VALUE = 1,
         NEXT_PAIR = 2,
+        REPLACER_CHECK = 3,
+        REPLACER_CALL = 4,
+        TOJSON_CHECK = 5,
+        TOJSON_CALL = 6,
     };
 
     SlotManager slots(parent_slots);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, comma, 0);
     DEFINE_SLOT(int32_t, json_pos, 0);
+    DEFINE_SLOT(bool, replacer_removed, false);
     slots.finalize();
 
     json = json_get_strbuf(l);
@@ -1061,89 +804,125 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(VALUE);
     YIELD_DISPATCH(NEXT_PAIR);
+    YIELD_DISPATCH(REPLACER_CHECK);
+    YIELD_DISPATCH(REPLACER_CALL);
+    YIELD_DISPATCH(TOJSON_CHECK);
+    YIELD_DISPATCH(TOJSON_CALL);
     YIELD_DISPATCH_END();
 
     /* table, startkey */
     while (lua_next(l, -2) != 0) {
-        json_pos = strbuf_length(json);
-        if (comma++ > 0)
-            strbuf_append_char(json, ',');
-
         /* table, key, value */
-        int keytype;
-        keytype = lua_type(l, -2);
+        replacer_removed = false;
 
-        if (cfg->sl_tagged_types) {
-            // SL tagged mode: accept any key type and tag appropriately
-            switch (keytype) {
-            case LUA_TSTRING:
-                json_append_string_sl(l, json, -2);
-                break;
-            case LUA_TNUMBER:
-                json_append_tagged_float(l, json, lua_tonumber(l, -2), cfg->encode_number_precision);
-                break;
-            case LUA_TVECTOR: {
-                const float* a = lua_tovector(l, -2);
-                json_append_tagged_vector(l, json, a, cfg->sl_tight_encoding);
-                break;
+        if (cfg->has_replacer) {
+            // Resolve __tojson before replacer (JS compat: toJSON -> replacer)
+            if (!cfg->skip_tojson && lua_istable(l, -1) && luaL_getmetafield(l, -1, "__tojson")) {
+                // Stack: table, key, value, __tojson_fn
+                lua_pushvalue(l, -2);                        // self
+                lua_pushvalue(l, (int)EncodeStack::CTX);     // ctx
+                YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
+                YIELD_CALL(l, 2, 1, TOJSON_CALL);
+                // Stack: table, key, value, resolved
+                lua_remove(l, -2);  // remove original value
+                // Stack: table, key, resolved
             }
-            case LUA_TBUFFER: {
-                strbuf_append_string(json, "\"!d");
-                json_append_buffer(l, json, -2);
-                strbuf_append_char(json, '"');
-                break;
+
+            lua_pushvalue(l, (int)EncodeStack::REPLACER);
+            lua_pushvalue(l, -3);  // key
+            lua_pushvalue(l, -3);  // value (possibly __tojson-resolved)
+            lua_pushvalue(l, -6);  // parent (the object table)
+            YIELD_CHECK(l, REPLACER_CHECK, LUA_INTERRUPT_LLLIB);
+            YIELD_CALL(l, 3, 1, REPLACER_CALL);
+            // Stack: table, key, value, result
+            if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
+                lua_pop(l, 2);  // pop result + value -> table, key
+                replacer_removed = true;
+            } else {
+                lua_remove(l, -2);  // remove original value -> table, key, result
             }
-            case LUA_TUSERDATA: {
-                int tag = lua_userdatatag(l, -2);
-                if (tag == UTAG_UUID) {
-                    json_append_tagged_uuid(l, json, -2, cfg->sl_tight_encoding);
-                } else if (tag == UTAG_QUATERNION) {
-                    const float *a = luaSL_checkquaternion(l, -2);
-                    json_append_tagged_quaternion(l, json, a, cfg->sl_tight_encoding);
-                } else {
-                    json_encode_exception(l, cfg, json, -2,
-                                          "unsupported userdata type as table key");
+        }
+
+        if (!replacer_removed) {
+            json_pos = strbuf_length(json);
+            if (comma++ > 0)
+                strbuf_append_char(json, ',');
+
+            int keytype;
+            keytype = lua_type(l, -2);
+
+            if (cfg->sl_tagged_types) {
+                // SL tagged mode: accept any key type and tag appropriately
+                switch (keytype) {
+                case LUA_TSTRING:
+                    json_append_string_sl(l, json, -2);
+                    break;
+                case LUA_TNUMBER:
+                    json_append_tagged_float(l, json, lua_tonumber(l, -2), JSON_NUMBER_PRECISION);
+                    break;
+                case LUA_TVECTOR: {
+                    const float* a = lua_tovector(l, -2);
+                    json_append_tagged_vector(l, json, a, cfg->sl_tight_encoding);
+                    break;
                 }
-                break;
-            }
-            case LUA_TBOOLEAN:
-                strbuf_append_string(json, lua_toboolean(l, -2) ? "\"!b1\"" : "\"!b0\"");
-                break;
-            default:
-                json_encode_exception(l, cfg, json, -2,
-                                      "unsupported table key type");
-                /* never returns */
-            }
-            strbuf_append_char(json, ':');
-        } else {
-            // Standard JSON mode: only string and number keys
-            if (keytype == LUA_TNUMBER) {
-                strbuf_append_char(json, '"');
-                json_append_number(l, cfg, json, -2);
-                strbuf_append_mem(json, "\":", 2);
-            } else if (keytype == LUA_TSTRING) {
-                json_append_string(l, json, -2);
+                case LUA_TBUFFER: {
+                    strbuf_append_string(json, "\"!d");
+                    json_append_buffer(l, json, -2);
+                    strbuf_append_char(json, '"');
+                    break;
+                }
+                case LUA_TUSERDATA: {
+                    int tag = lua_userdatatag(l, -2);
+                    if (tag == UTAG_UUID) {
+                        json_append_tagged_uuid(l, json, -2, cfg->sl_tight_encoding);
+                    } else if (tag == UTAG_QUATERNION) {
+                        const float *a = luaSL_checkquaternion(l, -2);
+                        json_append_tagged_quaternion(l, json, a, cfg->sl_tight_encoding);
+                    } else {
+                        json_encode_exception(l, cfg, json, -2,
+                                              "unsupported userdata type as table key");
+                    }
+                    break;
+                }
+                case LUA_TBOOLEAN:
+                    strbuf_append_string(json, lua_toboolean(l, -2) ? "\"!b1\"" : "\"!b0\"");
+                    break;
+                default:
+                    json_encode_exception(l, cfg, json, -2,
+                                          "unsupported table key type");
+                    /* never returns */
+                }
                 strbuf_append_char(json, ':');
             } else {
-                json_encode_exception(l, cfg, json, -2,
-                                      "table key must be a number or string");
-                /* never returns */
+                // Standard JSON mode: only string and number keys
+                if (keytype == LUA_TNUMBER) {
+                    strbuf_append_char(json, '"');
+                    json_append_number(l, cfg, json, -2);
+                    strbuf_append_mem(json, "\":", 2);
+                } else if (keytype == LUA_TSTRING) {
+                    json_append_string(l, json, -2);
+                    strbuf_append_char(json, ':');
+                } else {
+                    json_encode_exception(l, cfg, json, -2,
+                                          "table key must be a number or string");
+                    /* never returns */
+                }
             }
-        }
 
-        /* table, key, value */
-        // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
-        bool skip;
-        YIELD_HELPER(l, VALUE,
-            skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
-        if (skip) {
-            strbuf_set_length(json, json_pos);
-            if (comma == 1) {
-                comma = 0;
+            /* table, key, value */
+            // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
+            bool skip;
+            YIELD_HELPER(l, VALUE,
+                skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
+            if (skip) {
+                strbuf_set_length(json, json_pos);
+                if (comma == 1) {
+                    comma = 0;
+                }
             }
-        }
 
-        lua_pop(l, 1);
+            lua_pop(l, 1);
+        }
         /* table, key */
 
         YIELD_CHECK(l, NEXT_PAIR, LUA_INTERRUPT_LLLIB);
@@ -1166,11 +945,11 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         TOJSON_CALL = 3,
         TOJSON_RECURSE = 4,
         APPEND_ARRAY_AUTO = 5,
-        APPEND_ARRAY_EMPTY = 6,
-        APPEND_ARRAY_LUD = 7,
-        TOJSON_CHECK = 8,
-        LEN_CHECK = 9,
-        LEN_CALL = 10,
+        APPEND_ARRAY_LUD = 6,
+        TOJSON_CHECK = 7,
+        LEN_CHECK = 8,
+        LEN_CALL = 9,
+        APPEND_OBJECT_MT = 10,
     };
 
     SlotManager slots(parent_slots);
@@ -1180,9 +959,9 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
     DEFINE_SLOT(bool, raw, true);
     DEFINE_SLOT(uint8_t, type, LUA_TNIL);
     DEFINE_SLOT(bool, as_array, false);
+    DEFINE_SLOT(bool, force_object, false);
     DEFINE_SLOT(bool, has_metatable, false);
     DEFINE_SLOT(int32_t, len, 0);
-    DEFINE_SLOT(bool, is_empty_array, false);
     slots.finalize();
 
     json = json_get_strbuf(l);
@@ -1194,10 +973,10 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
     YIELD_DISPATCH(TOJSON_CALL);
     YIELD_DISPATCH(TOJSON_RECURSE);
     YIELD_DISPATCH(APPEND_ARRAY_AUTO);
-    YIELD_DISPATCH(APPEND_ARRAY_EMPTY);
     YIELD_DISPATCH(APPEND_ARRAY_LUD);
     YIELD_DISPATCH(LEN_CHECK);
     YIELD_DISPATCH(LEN_CALL);
+    YIELD_DISPATCH(APPEND_OBJECT_MT);
     YIELD_DISPATCH_END();
 
     type = lua_type(l, -1);
@@ -1227,32 +1006,68 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         has_metatable = lua_getmetatable(l, -1);
 
         if (has_metatable) {
-            lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_ARRAY), LU_TAG_JSON_INTERNAL);
-            lua_rawget(l, LUA_REGISTRYINDEX);
-            as_array = lua_rawequal(l, -1, -2);
-            if (as_array) {
-                raw = true;
-                lua_pop(l, 2);
-                array_length = lua_objlen(l, -1);
-            } else {
-                raw = false;
-                lua_pop(l, 2);
-                if (luaL_getmetafield(l, -1, "__tojson")) {
-                    lua_pushvalue(l, -2);
-                    YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
-                    YIELD_CALL(l, 1, 1, TOJSON_CALL);
+            if (!cfg->sl_tagged_types) {
+                // ServerLua: Check __jsontype metamethod for shape control
+                lua_rawgetfield(l, -1, "__jsontype");
+                if (!lua_isnil(l, -1)) {
+                    if (!lua_isstring(l, -1))
+                        luaL_error(l, "invalid __jsontype value (expected string)");
+                    const char* jsontype;
+                    jsontype = lua_tostring(l, -1);
+                    if (strcmp(jsontype, "object") == 0) {
+                        force_object = true;
+                    } else if (strcmp(jsontype, "array") == 0) {
+                        as_array = true;
+                        raw = false;
+                    } else {
+                        luaL_error(l, "invalid __jsontype value: '%s' (expected \"array\" or \"object\")", jsontype);
+                    }
+                }
+                lua_pop(l, 1);  // pop __jsontype (or nil)
+            }
+
+            lua_pop(l, 1);  // pop metatable
+
+            // __tojson provides content, __jsontype provides shape
+            if (!cfg->skip_tojson && luaL_getmetafield(l, -1, "__tojson")) {
+                lua_pushvalue(l, -2);                           // self
+                lua_pushvalue(l, (int)EncodeStack::CTX);        // ctx table
+                YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
+                YIELD_CALL(l, 2, 1, TOJSON_CALL);
+                // Stack: ..., original_table, tojson_result
+                if (lua_istable(l, -1)) {
+                    // Table result: replace original, fall through to shape handling
+                    lua_remove(l, -2);
+                } else {
+                    // Non-table result: encode directly, shape hints don't apply
                     YIELD_HELPER(l, TOJSON_RECURSE,
                         json_append_data(l, slots, cfg, depth, json));
                     lua_pop(l, 1);
                     return 0;
                 }
+            }
+
+            if (force_object) {
+                YIELD_HELPER(l, APPEND_OBJECT_MT,
+                    json_append_object(l, slots, cfg, depth, json));
+                break;
+            }
+
+            if (as_array) {
+                // Validate: __jsontype="array" requires all keys to be positive integers
+                len = lua_array_length(l, cfg, json);
+                if (len < 0)
+                    luaL_error(l, "cannot encode as array: table has non-integer keys");
+
+                // __len overrides the detected length (validation already passed)
                 if (luaL_getmetafield(l, -1, "__len")) {
                     lua_pushvalue(l, -2);
                     YIELD_CHECK(l, LEN_CHECK, LUA_INTERRUPT_LLLIB);
                     YIELD_CALL(l, 1, 1, LEN_CALL);
                     array_length = lua_tonumber(l, -1);
                     lua_pop(l, 1);
-                    as_array = true;
+                } else {
+                    array_length = len;
                 }
             }
         }
@@ -1263,25 +1078,11 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         } else {
             len = lua_array_length(l, cfg, json);
 
-            if (len > 0 || (len == 0 && !cfg->encode_empty_table_as_object)) {
+            if (len >= 0) {
                 array_length = len;
                 YIELD_HELPER(l, APPEND_ARRAY_AUTO,
                     json_append_array(l, slots, cfg, depth, json, array_length, raw));
             } else {
-                if (has_metatable) {
-                    lua_getmetatable(l, -1);
-                    lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_EMPTY_ARRAY), LU_TAG_JSON_INTERNAL);
-                    lua_rawget(l, LUA_REGISTRYINDEX);
-                    is_empty_array = lua_rawequal(l, -1, -2);
-                    lua_pop(l, 2); /* pop pointer + metatable */
-                    if (is_empty_array) {
-                        array_length = lua_objlen(l, -1);
-                        raw = true;
-                        YIELD_HELPER(l, APPEND_ARRAY_EMPTY,
-                            json_append_array(l, slots, cfg, depth, json, array_length, raw));
-                        return 0;
-                    }
-                }
                 YIELD_HELPER(l, APPEND_OBJECT,
                     json_append_object(l, slots, cfg, depth, json));
             }
@@ -1289,16 +1090,19 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         break;
     }
     case LUA_TNIL:
-        strbuf_append_mem(json, "null", 4);
+        if (cfg->sl_tagged_types)
+            strbuf_append_mem(json, "\"!n\"", 4);
+        else
+            strbuf_append_mem(json, "null", 4);
         break;
     case LUA_TLIGHTUSERDATA: {
         void* json_internal_val;
         json_internal_val = lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL);
         if (json_internal_val) {
-            if (json_internal_val == json_lightudata_mask(JSON_NULL)) {
+            if (json_internal_val == JSON_NULL) {
                 strbuf_append_mem(json, "null", 4);
                 break;
-            } else if (json_internal_val == json_lightudata_mask(JSON_ARRAY)) {
+            } else if (json_internal_val == JSON_ARRAY) {
                 YIELD_HELPER(l, APPEND_ARRAY_LUD,
                     json_append_array(l, slots, cfg, depth, json, 0, 1));
                 break;
@@ -1309,11 +1113,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             break;
         }
 
-        if (cfg->encode_skip_unsupported_value_types) {
-            return 1;
-        } else {
-            json_encode_exception(l, cfg, json, -1, "type not supported");
-        }
+        json_encode_exception(l, cfg, json, -1, "type not supported");
         // Should never reach here.
         break;
     }
@@ -1364,8 +1164,6 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                 json_append_coordinate_component(l, json, a[3]);
                 strbuf_append_string(json, ">\"");
             }
-        } else if (cfg->encode_skip_unsupported_value_types) {
-            return 1;
         } else {
             json_encode_exception(l, cfg, json, -1, "type not supported");
         }
@@ -1373,12 +1171,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
     }
     default:
         /* Remaining types (LUA_TFUNCTION, LUA_TTHREAD) cannot be serialised */
-        if (cfg->encode_skip_unsupported_value_types) {
-            return 1;
-        } else {
-            json_encode_exception(l, cfg, json, -1, "type not supported");
-        }
-
+        json_encode_exception(l, cfg, json, -1, "type not supported");
         /* never returns */
     }
     return 0;
@@ -1393,14 +1186,20 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
     {
         DEFAULT = 0,
         APPEND_DATA = 1,
+        ROOT_TOJSON_CHECK = 2,
+        ROOT_TOJSON_CALL = 3,
+        ROOT_REPLACER_CHECK = 4,
+        ROOT_REPLACER_CALL = 5,
     };
 
     SlotManager slots(l, is_init);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(bool, tight_encoding, false);
+    DEFINE_SLOT(bool, skip_tojson, false);
     slots.finalize();
 
     json_config_t cfg;
+    cfg.skip_tojson = skip_tojson;
     if (sl_tagged) {
         cfg.sl_tagged_types = true;
         cfg.encode_sparse_convert = 1;
@@ -1410,30 +1209,101 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
     if (is_init) {
         // Args already validated by init wrapper.
         // SlotManager inserted nil at pos 1, original args shifted to pos 2+.
-        if (sl_tagged) {
-            tight_encoding = luaL_optboolean(l, 3, false);
-            cfg.sl_tight_encoding = tight_encoding;
-            lua_settop(l, 2);
+        // Stack: [opaque(1), value(2), opts_table?(3)]
+
+        // Extract all options from the table while it's at position 3.
+        // The table is never read again after init.
+        if (lua_istable(l, 3)) {
+            if (sl_tagged) {
+                lua_rawgetfield(l, 3, "tight");
+                tight_encoding = lua_toboolean(l, -1);
+                cfg.sl_tight_encoding = tight_encoding;
+                lua_pop(l, 1);
+            }
+            lua_rawgetfield(l, 3, "skip_tojson");
+            skip_tojson = lua_toboolean(l, -1);
+            cfg.skip_tojson = skip_tojson;
+            lua_pop(l, 1);
+            lua_rawgetfield(l, 3, "replacer");
+            if (!lua_isfunction(l, -1)) {
+                lua_pop(l, 1);
+                lua_pushnil(l);
+            }
+            // Stack: [opaque(1), value(2), opts(3), replacer_or_nil(4)]
+            lua_remove(l, 3);
+        } else {
+            lua_pushnil(l);
         }
+        // Stack: [opaque(1), value(2), replacer_or_nil(3)]
 
         luaYB_push(l);
-        lua_insert(l, 2);
-        /* Stack: [opaque(1), strbuf(2), value(3)] */
+        lua_insert(l, (int)EncodeStack::STRBUF);
+        // Stack: [opaque(1), strbuf(2), value(3), replacer_or_nil(4)]
+
+        // Create frozen context table for __tojson(self, ctx)
+        lua_newtable(l);
+        lua_pushstring(l, sl_tagged ? "sljson" : "json");
+        lua_rawsetfield(l, -2, "mode");
+        lua_pushboolean(l, tight_encoding);
+        lua_rawsetfield(l, -2, "tight");
+        lua_setreadonly(l, -1, true);
+        lua_insert(l, (int)EncodeStack::CTX);
+        // Stack: [opaque(1), strbuf(2), ctx(3), value(4), replacer_or_nil(5)]
+
+        // Insert replacer at its slot, pushing value to the top
+        lua_insert(l, (int)EncodeStack::REPLACER);
+        /* Stack: [opaque(1), strbuf(2), ctx(3), replacer_or_nil(4), value(5)] */
 
         lua_hardenstack(l, 1);
     }
 
+    cfg.has_replacer = !lua_isnil(l, (int)EncodeStack::REPLACER);
     strbuf_t* buf = json_get_strbuf(l);
 
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(APPEND_DATA);
+    YIELD_DISPATCH(ROOT_TOJSON_CHECK);
+    YIELD_DISPATCH(ROOT_TOJSON_CALL);
+    YIELD_DISPATCH(ROOT_REPLACER_CHECK);
+    YIELD_DISPATCH(ROOT_REPLACER_CALL);
     YIELD_DISPATCH_END();
 
+    // Resolve __tojson on root value before replacer (JS compat: toJSON -> replacer)
+    lua_checkstack(l, 4);
+    if (cfg.has_replacer && !cfg.skip_tojson && lua_istable(l, (int)EncodeStack::VALUE)
+        && luaL_getmetafield(l, (int)EncodeStack::VALUE, "__tojson")) {
+        lua_pushvalue(l, (int)EncodeStack::VALUE);     // self
+        lua_pushvalue(l, (int)EncodeStack::CTX);       // ctx
+        YIELD_CHECK(l, ROOT_TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
+        YIELD_CALL(l, 2, 1, ROOT_TOJSON_CALL);
+        // Stack: [..., resolved]
+        lua_replace(l, (int)EncodeStack::VALUE);
+    }
+
+    // Call replacer on root value: replacer(nil, value, nil)
+    if (cfg.has_replacer) {
+        lua_pushvalue(l, (int)EncodeStack::REPLACER);
+        lua_pushnil(l);                                // key = nil (root)
+        lua_pushvalue(l, (int)EncodeStack::VALUE);     // value (possibly __tojson-resolved)
+        lua_pushnil(l);                                // parent = nil (root)
+        YIELD_CHECK(l, ROOT_REPLACER_CHECK, LUA_INTERRUPT_LLLIB);
+        YIELD_CALL(l, 3, 1, ROOT_REPLACER_CALL);
+        // Stack: [..., result]
+        if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
+            lua_pop(l, 1);
+            // Replace value with JSON null
+            lua_pushlightuserdatatagged(l, JSON_NULL, LU_TAG_JSON_INTERNAL);
+        }
+        lua_replace(l, (int)EncodeStack::VALUE);
+    }
+
+    lua_pushvalue(l, (int)EncodeStack::VALUE);
+    lua_hardenstack(l, 1);
     YIELD_HELPER(l, APPEND_DATA,
         json_append_data(l, slots, &cfg, 0, buf));
 
-    strbuf_tostring_inplace(2, true);
-    lua_settop(l, 2);
+    lua_settop(l, (int)EncodeStack::STRBUF);
+    strbuf_tostring_inplace((int)EncodeStack::STRBUF, true);
     luau_interruptoncalltail(l);
     return 1;
 }
@@ -1441,7 +1311,10 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
 // ServerLua: init / continuation wrappers for json_encode
 static int json_encode_v0(lua_State* l)
 {
-    luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
+    int nargs = lua_gettop(l);
+    luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
+    if (nargs >= 2)
+        luaL_checktype(l, 2, LUA_TTABLE);
     return json_encode_common(l, true, false);
 }
 static int json_encode_v0_k(lua_State* l, int)
@@ -1451,7 +1324,10 @@ static int json_encode_v0_k(lua_State* l, int)
 }
 static int json_encode_sl_v0(lua_State* l)
 {
+    int nargs = lua_gettop(l);
     luaL_checkany(l, 1);
+    if (nargs >= 2)
+        luaL_checktype(l, 2, LUA_TTABLE);
     return json_encode_common(l, true, true);
 }
 static int json_encode_sl_v0_k(lua_State* l, int)
@@ -1522,16 +1398,29 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
     size_t payload_len = len - 2;
 
     switch (tag) {
+    case 'n':
+        // Nil: !n
+        if (payload_len != 0)
+            luaL_error(l, "malformed tagged nil: %s", str);
+        lua_pushnil(l);
+        return true;
+
     case '!':
         // Escaped '!' - push string with leading '!' stripped
         lua_pushlstring(l, str + 1, len - 1);
         return true;
 
     case 'v': {
-        // Vector: !v<x,y,z> (normal) or !v1,2,3 (tight)
+        // Vector: !v<x,y,z> (normal) or !v1,2,3 (tight) or !v (ZERO_VECTOR)
         float x, y, z;
 
-        if (payload_len > 0 && payload[0] == '<') {
+        if (payload_len == 0) {
+            // ZERO_VECTOR shorthand
+            lua_pushvector(l, 0.0f, 0.0f, 0.0f);
+            return true;
+        }
+
+        if (payload[0] == '<') {
             // Normal format with brackets
             if (payload_len < 5 || payload[payload_len - 1] != '>')
                 luaL_error(l, "malformed tagged vector: %s", str);
@@ -1565,10 +1454,16 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
     }
 
     case 'q': {
-        // Quaternion: !q<x,y,z,w> (normal) or !q,,,1 (tight)
+        // Quaternion: !q<x,y,z,w> (normal) or !q,,,1 (tight) or !q (ZERO_ROTATION)
         float x, y, z, w;
 
-        if (payload_len > 0 && payload[0] == '<') {
+        if (payload_len == 0) {
+            // ZERO_ROTATION shorthand (0,0,0,1)
+            luaSL_pushquaternion(l, 0.0f, 0.0f, 0.0f, 1.0f);
+            return true;
+        }
+
+        if (payload[0] == '<') {
             // Normal format with brackets
             if (payload_len < 7 || payload[payload_len - 1] != '>')
                 luaL_error(l, "malformed tagged quaternion: %s", str);
@@ -1995,10 +1890,6 @@ static void json_next_token(json_parse_t *json, json_token_t *token)
         json_next_string_token(json, token);
         return;
     } else if (ch == '-' || ('0' <= ch && ch <= '9')) {
-        if (!json->cfg->decode_invalid_numbers && json_is_invalid_number(json)) {
-            json_set_token_error(token, json, "invalid number");
-            return;
-        }
         json_next_number_token(json, token);
         return;
     } else if (!strncmp(json->ptr, "true", 4)) {
@@ -2015,13 +1906,10 @@ static void json_next_token(json_parse_t *json, json_token_t *token)
         token->type = T_NULL;
         json->ptr += 4;
         return;
-    } else if (json->cfg->decode_invalid_numbers &&
-               json_is_invalid_number(json)) {
-        /* When decode_invalid_numbers is enabled, only attempt to process
-         * numbers we know are invalid JSON (Inf, NaN, hex)
+    } else if (json_is_invalid_number(json)) {
+        /* Only attempt to process numbers we know are invalid JSON (Inf, NaN, hex).
          * This is required to generate an appropriate token error,
-         * otherwise all bad tokens will register as "invalid number"
-         */
+         * otherwise all bad tokens will register as "invalid number" */
         json_next_number_token(json, token);
         return;
     }
@@ -2060,7 +1948,7 @@ static void json_decode_descend(lua_State *l, json_parse_t *json, int slots)
 {
     json->current_depth++;
 
-    if (json->current_depth <= json->cfg->decode_max_depth &&
+    if (json->current_depth <= JSON_MAX_DEPTH &&
         lua_checkstack(l, slots)) {
         return;
     }
@@ -2112,6 +2000,8 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
         DEFAULT = 0,
         VALUE = 1,
         NEXT_PAIR = 2,
+        REVIVER_CHECK = 3,
+        REVIVER_CALL = 4,
     };
 
     SlotManager slots(parent_slots);
@@ -2120,7 +2010,8 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
     slots.finalize();
 
     json_restore_offset(json, ptr_offset);
-    json_decode_descend(l, json, 3);
+    // ServerLua: 7 slots for table, key, value + reviver call args
+    json_decode_descend(l, json, 7);
 
     if (slots.isInit()) {
         lua_newtable(l);
@@ -2134,29 +2025,56 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
             return;
         }
 
-        /* Rewind — let json_parse_object_key re-parse from the key token */
+        /* Rewind - let json_parse_object_key re-parse from the key token */
         json->ptr = json->data + ptr_offset;
         json_parse_object_key(l, json);
 
-        /* Save offset after colon — process_value will parse the value token */
+        /* Save offset after colon - process_value will parse the value token */
         ptr_offset = json_get_offset(json);
     }
 
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(VALUE);
     YIELD_DISPATCH(NEXT_PAIR);
+    YIELD_DISPATCH(REVIVER_CHECK);
+    YIELD_DISPATCH(REVIVER_CALL);
     YIELD_DISPATCH_END();
 
     while (1) {
         /* Fetch value */
+        /* Stack before: [..., table, key] */
         {
             json_token_t token;
             YIELD_HELPER(l, VALUE,
                 json_process_value(l, slots, json, &token));
         }
+        /* Stack after: [..., table, key, value] */
 
-        /* Set key = value */
-        lua_rawset(l, -3);
+        // Save offset past the parsed value so reviver yields resume correctly
+        ptr_offset = json_get_offset(json);
+
+        if (json->has_reviver) {
+            // Call reviver(key, value, parent)
+            lua_pushvalue(l, (int)DecodeStack::REVIVER);
+            lua_pushvalue(l, -3);  // key
+            lua_pushvalue(l, -3);  // value
+            lua_pushvalue(l, -6);  // parent (the object table)
+            YIELD_CHECK(l, REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
+            YIELD_CALL(l, 3, 1, REVIVER_CALL);
+            // Stack: [..., table, key, value, result]
+            if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
+                // Omit this key/value pair entirely
+                lua_pop(l, 3); // pop result, value, key
+            } else {
+                // Replace value with result, then rawset
+                lua_remove(l, -2); // remove original value
+                // Stack: [..., table, key, result]
+                lua_rawset(l, -3);
+            }
+        } else {
+            /* Set key = value */
+            lua_rawset(l, -3);
+        }
 
         json_token_t token;
         json_next_token(json, &token);
@@ -2171,7 +2089,7 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
 
         json_parse_object_key(l, json);
 
-        /* Save offset after colon — process_value will parse the value */
+        /* Save offset after colon - process_value will parse the value */
         ptr_offset = json_get_offset(json);
 
         YIELD_CHECK(l, NEXT_PAIR, LUA_INTERRUPT_LLLIB);
@@ -2186,28 +2104,26 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
         DEFAULT = 0,
         ELEMENT = 1,
         NEXT_ELEMENT = 2,
+        REVIVER_CHECK = 3,
+        REVIVER_CALL = 4,
     };
 
     SlotManager slots(parent_slots);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, ptr_offset, json_get_offset(json));
     DEFINE_SLOT(int32_t, i, 1);
+    // Track the next index for insertion (may differ from i when reviver removes elements)
+    DEFINE_SLOT(int32_t, insert_idx, 1);
     slots.finalize();
 
     json_restore_offset(json, ptr_offset);
-    json_decode_descend(l, json, 2);
+    // ServerLua: 6 slots for table, value + reviver call args
+    json_decode_descend(l, json, 6);
 
     if (slots.isInit()) {
         lua_newtable(l);
 
-        /* set array_mt on the table at the top of the stack */
-        if (json->cfg->decode_array_with_array_mt) {
-            lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_ARRAY), LU_TAG_JSON_INTERNAL);
-            lua_rawget(l, LUA_REGISTRYINDEX);
-            lua_setmetatable(l, -2);
-        }
-
-        /* Peek at first token — check for empty array */
+        /* Peek at first token - check for empty array */
         const char* before = json->ptr;
         json_token_t token;
         json_next_token(json, &token);
@@ -2218,7 +2134,7 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
             return;
         }
 
-        /* Restore ptr — process_value will parse the first element token */
+        /* Restore ptr - process_value will parse the first element token */
         json->ptr = before;
         ptr_offset = json_get_offset(json);
     }
@@ -2226,6 +2142,8 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(ELEMENT);
     YIELD_DISPATCH(NEXT_ELEMENT);
+    YIELD_DISPATCH(REVIVER_CHECK);
+    YIELD_DISPATCH(REVIVER_CALL);
     YIELD_DISPATCH_END();
 
     for (; ; i++) {
@@ -2234,18 +2152,43 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
             YIELD_HELPER(l, ELEMENT,
                 json_process_value(l, slots, json, &token));
         }
+        /* Stack: [..., table, value] */
 
-        lua_rawseti(l, -2, i);            /* arr[i] = value */
+        // Save offset past the parsed value so reviver yields resume correctly
+        ptr_offset = json_get_offset(json);
+
+        if (json->has_reviver) {
+            lua_pushvalue(l, (int)DecodeStack::REVIVER);
+            lua_pushinteger(l, i);     // key (1-based source index)
+            lua_pushvalue(l, -3);      // value
+            lua_pushvalue(l, -5);      // parent (the array table)
+            YIELD_CHECK(l, REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
+            YIELD_CALL(l, 3, 1, REVIVER_CALL);
+            // Stack: [..., table, value, result]
+            if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
+                // Omit this element - don't insert, don't increment insert_idx
+                lua_pop(l, 2); // pop result and value
+            } else {
+                // Replace value with result
+                lua_remove(l, -2); // remove original value
+                // Stack: [..., table, result]
+                lua_rawseti(l, -2, insert_idx);
+                insert_idx++;
+            }
+        } else {
+            lua_rawseti(l, -2, i);    /* arr[i] = value */
+        }
 
         json_token_t token;
         json_next_token(json, &token);
 
         if (token.type == T_ARR_END) {
             // ServerLua: shrink the array to fit the contents, if necessary
+            int final_len = json->has_reviver ? (insert_idx - 1) : i;
             LuaTable *t = hvalue(luaA_toobject(l, -1));
-            if (t->sizearray != i)
+            if (t->sizearray != final_len && !t->readonly)
             {
-                luaH_resizearray(l, t, i);
+                luaH_resizearray(l, t, final_len);
             }
 
             json_decode_ascend(json);
@@ -2255,7 +2198,7 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
         if (token.type != T_COMMA)
             json_throw_parse_error(l, json, "comma or array end", &token);
 
-        /* Save offset after comma — process_value will parse the next element */
+        /* Save offset after comma - process_value will parse the next element */
         ptr_offset = json_get_offset(json);
 
         YIELD_CHECK(l, NEXT_ELEMENT, LUA_INTERRUPT_LLLIB);
@@ -2337,6 +2280,8 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     {
         DEFAULT = 0,
         PROCESS_VALUE = 1,
+        ROOT_REVIVER_CHECK = 2,
+        ROOT_REVIVER_CALL = 3,
     };
 
     SlotManager slots(l, is_init);
@@ -2345,14 +2290,36 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     slots.finalize();
 
     json_config_t cfg;
-    if (sl_tagged)
+    if (sl_tagged) {
         cfg.sl_tagged_types = true;
+    }
 
     if (is_init) {
         /* Args already validated by init wrapper.
-         * SlotManager inserted nil at pos 1, input string shifted to pos 2. */
+         * SlotManager inserted nil at pos 1, original args shifted to pos 2+.
+         * Stack: [opaque(1), input_string(2), reviver?(3)] */
+
+        // Ensure reviver or nil occupies a stack slot (will become pos 4 after strbuf insert)
+        if (lua_gettop(l) < 3)
+            lua_pushnil(l);
+
+        // ServerLua: Create decode scratch buffer in memcat 1 - it's an
+        // internal intermediary, not user-visible output. Pre-size to
+        // json_len so _unsafe appends can't overflow (decoded <= input).
+        // This is only safe because JSON escapes can never produce output
+        // larger than the escape sequence.
+        {
+            // Normally we would use memcat 0 for things that aren't to be "charged"
+            // against the user's memory usage, but use 1 so we can distinguish it
+            // from more mundane VM-internal allocations.
+            [[maybe_unused]] MemcatGuard mcg(l, 1);
+            luaYB_push(l);
+        }
+        lua_insert(l, (int)DecodeStack::STRBUF);
+        /* Stack: [opaque(1), strbuf(2), input_string(3), reviver_or_nil(4)] */
+
         size_t json_len;
-        const char* json_data = lua_tolstring(l, 2, &json_len);
+        const char* json_data = lua_tolstring(l, (int)DecodeStack::INPUT, &json_len);
 
         /* Detect Unicode other than UTF-8 (see RFC 4627, Sec 3)
          *
@@ -2365,28 +2332,14 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
         if (json_len > DEFAULT_MAX_SIZE)
             luaL_errorL(l, "JSON too large to decode");
 
-        // ServerLua: Create decode scratch buffer in memcat 1 — it's an
-        // internal intermediary, not user-visible output. Pre-size to
-        // json_len so _unsafe appends can't overflow (decoded <= input).
-        // This is only safe because JSON escapes can never produce output
-        // larger than the escape sequence.
-        {
-            // Normally we would use memcat 0 for things that aren't to be "charged"
-            // against the user's memory usage, but use 1 so we can distinguish it
-            // from more mundane VM-internal allocations.
-            [[maybe_unused]] MemcatGuard mcg(l, 1);
-            luaYB_push(l);
-        }
-        lua_insert(l, 2);
         strbuf_ensure_empty_length(json_get_strbuf(l), json_len);
-        /* Stack: [opaque(1), strbuf(2), input_string(3)] */
 
         lua_hardenstack(l, 1);
     }
 
     /* Reconstruct json_parse_t from stack and slots */
     size_t json_len;
-    const char* json_data = lua_tolstring(l, 3, &json_len);
+    const char* json_data = lua_tolstring(l, (int)DecodeStack::INPUT, &json_len);
     strbuf_t* tmp = json_get_strbuf(l);
 
     json_parse_t json;
@@ -2395,9 +2348,12 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     json.ptr = json_data + ptr_offset;
     json.current_depth = 0;
     json.tmp = tmp;
+    json.has_reviver = !lua_isnil(l, (int)DecodeStack::REVIVER);
 
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(PROCESS_VALUE);
+    YIELD_DISPATCH(ROOT_REVIVER_CHECK);
+    YIELD_DISPATCH(ROOT_REVIVER_CALL);
     YIELD_DISPATCH_END();
 
     {
@@ -2409,10 +2365,33 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     ptr_offset = (int32_t)(json.ptr - json.data);
 
     /* Ensure there is no more input left */
-    json_token_t token;
-    json_next_token(&json, &token);
-    if (token.type != T_END)
-        json_throw_parse_error(l, &json, "the end", &token);
+    {
+        json_token_t token;
+        json_next_token(&json, &token);
+        if (token.type != T_END)
+            json_throw_parse_error(l, &json, "the end", &token);
+    }
+
+    // Call reviver on root value if present
+    if (json.has_reviver) {
+        // Stack: [..., decoded_value]
+        lua_checkstack(l, 4);
+        lua_pushvalue(l, (int)DecodeStack::REVIVER);  // reviver
+        lua_pushnil(l);        // key = nil (root)
+        lua_pushvalue(l, -3);  // decoded value
+        lua_pushnil(l);        // parent = nil (root)
+        YIELD_CHECK(l, ROOT_REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
+        YIELD_CALL(l, 3, 1, ROOT_REVIVER_CALL);
+        // Stack: [..., decoded_value, result]
+        if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
+            lua_pop(l, 2);
+            // Return lljson.null - decode must return a value
+            lua_pushlightuserdatatagged(l, JSON_NULL, LU_TAG_JSON_INTERNAL);
+        } else {
+            // Replace decoded value with result
+            lua_remove(l, -2);
+        }
+    }
 
     luau_interruptoncalltail(l);
     return 1;
@@ -2421,8 +2400,11 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
 // ServerLua: init / continuation wrappers for json_decode
 static int json_decode_v0(lua_State* l)
 {
-    luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
+    int nargs = lua_gettop(l);
+    luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     luaL_checkstring(l, 1);
+    if (nargs >= 2)
+        luaL_checktype(l, 2, LUA_TFUNCTION);
     return json_decode_common(l, true, false);
 }
 static int json_decode_v0_k(lua_State* l, int)
@@ -2432,8 +2414,11 @@ static int json_decode_v0_k(lua_State* l, int)
 }
 static int json_decode_sl_v0(lua_State* l)
 {
-    luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
+    int nargs = lua_gettop(l);
+    luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     luaL_checkstring(l, 1);
+    if (nargs >= 2)
+        luaL_checktype(l, 2, LUA_TFUNCTION);
     return json_decode_common(l, true, true);
 }
 static int json_decode_sl_v0_k(lua_State* l, int)
@@ -2444,60 +2429,6 @@ static int json_decode_sl_v0_k(lua_State* l, int)
 
 /* ===== INITIALISATION ===== */
 
-#if 0 // ServerLua: unused
-#if !defined(LUA_VERSION_NUM) || LUA_VERSION_NUM < 502
-/* Compatibility for Lua 5.1 and older LuaJIT.
- *
- * compat_luaL_setfuncs() is used to create a module table where the functions
- * have json_config_t as their first upvalue. Code borrowed from Lua 5.2
- * source's luaL_setfuncs().
- */
-static void compat_luaL_setfuncs(lua_State *l, const luaL_Reg *reg, int nup)
-{
-    int i;
-
-    luaL_checkstack(l, nup, "too many upvalues");
-    for (; reg->name != NULL; reg++) {  /* fill the table with given functions */
-        for (i = 0; i < nup; i++)  /* copy upvalues to the top */
-            lua_pushvalue(l, -nup);
-        lua_pushcclosure(l, reg->func, reg->name, nup);  /* closure with those upvalues */
-        lua_setfield(l, -(nup + 2), reg->name);
-    }
-    lua_pop(l, nup);  /* remove upvalues */
-}
-#else
-#define compat_luaL_setfuncs(L, reg, nup) luaL_setfuncs(L, reg, nup)
-#endif
-
-/* Call target function in protected mode with all supplied args.
- * Assumes target function only returns a single non-nil value.
- * Convert and return thrown errors as: nil, "error message" */
-static int json_protect_conversion(lua_State *l)
-{
-    int err;
-
-    /* Deliberately throw an error for invalid arguments */
-    luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
-
-    /* pcall() the function stored as upvalue(1) */
-    lua_pushvalue(l, lua_upvalueindex(1));
-    lua_insert(l, 1);
-    err = lua_pcall(l, 1, 1, 0);
-    if (!err)
-        return 1;
-
-    if (err == LUA_ERRRUN) {
-        lua_pushnil(l);
-        lua_insert(l, -2);
-        return 2;
-    }
-
-    /* Since we are not using a custom error handler, the only remaining
-     * errors are memory related */
-    luaL_error(l, "Memory allocation error in CJSON protected call");
-}
-#endif
-
 /* Return cjson module table */
 static int lua_cjson_new(lua_State *l)
 {
@@ -2507,11 +2438,22 @@ static int lua_cjson_new(lua_State *l)
 
     lua_setlightuserdataname(l, LU_TAG_JSON_INTERNAL, "lljson_constant");
 
-    /* Test if array metatables are in registry */
-    lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_EMPTY_ARRAY), LU_TAG_JSON_INTERNAL);
+    // ServerLua: intern strings used per-call during encode/decode init
+    luaS_fix(luaS_newliteral(l, "mode"));
+    luaS_fix(luaS_newliteral(l, "json"));
+    luaS_fix(luaS_newliteral(l, "sljson"));
+    luaS_fix(luaS_newliteral(l, "tight"));
+    luaS_fix(luaS_newliteral(l, "replacer"));
+    luaS_fix(luaS_newliteral(l, "__tojson"));
+    luaS_fix(luaS_newliteral(l, "__jsontype"));
+    luaS_fix(luaS_newliteral(l, "array"));
+    luaS_fix(luaS_newliteral(l, "object"));
+
+    /* Test if array/object metatables are in registry */
+    lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
     lua_rawget(l, LUA_REGISTRYINDEX);
     if (lua_isnil(l, -1)) {
-        /* Create array metatables.
+        /* Create shape metatables.
          *
          * If multiple calls to lua_cjson_new() are made,
          * this prevents overriding the tables at the given
@@ -2519,16 +2461,20 @@ static int lua_cjson_new(lua_State *l)
          */
         lua_pop(l, 1);
 
-        /* empty_array_mt */
-        lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_EMPTY_ARRAY), LU_TAG_JSON_INTERNAL);
+        /* array_mt */
+        lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
         lua_newtable(l);
+        lua_pushliteral(l, "array");
+        lua_setfield(l, -2, "__jsontype");
         lua_setreadonly(l, -1, true);
         lua_fixvalue(l, -1);
         lua_rawset(l, LUA_REGISTRYINDEX);
 
-        /* array_mt */
-        lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_ARRAY), LU_TAG_JSON_INTERNAL);
+        /* object_mt */
+        lua_pushlightuserdatatagged(l, JSON_OBJECT, LU_TAG_JSON_INTERNAL);
         lua_newtable(l);
+        lua_pushliteral(l, "object");
+        lua_setfield(l, -2, "__jsontype");
         lua_setreadonly(l, -1, true);
         lua_fixvalue(l, -1);
         lua_rawset(l, LUA_REGISTRYINDEX);
@@ -2553,51 +2499,46 @@ static int lua_cjson_new(lua_State *l)
     lua_pushlightuserdatatagged(l, JSON_NULL, LU_TAG_JSON_INTERNAL);
     lua_setfield(l, -2, "null");
 
-    /* Set cjson.empty_array_mt */
-    lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_EMPTY_ARRAY), LU_TAG_JSON_INTERNAL);
-    lua_rawget(l, LUA_REGISTRYINDEX);
-    lua_setfield(l, -2, "empty_array_mt");
+    /* Set cjson.remove - sentinel to omit values in reviver/replacer */
+    lua_pushlightuserdatatagged(l, JSON_REMOVE, LU_TAG_JSON_INTERNAL);
+    lua_setfield(l, -2, "remove");
 
     /* Set cjson.array_mt */
-    lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_ARRAY), LU_TAG_JSON_INTERNAL);
+    lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
     lua_rawget(l, LUA_REGISTRYINDEX);
     lua_setfield(l, -2, "array_mt");
 
-    /* Set cjson.empty_array, this is just the lightuserdata, not a table! */
-    lua_pushlightuserdatatagged(l, json_lightudata_mask(JSON_ARRAY), LU_TAG_JSON_INTERNAL);
+    /* Set cjson.object_mt */
+    lua_pushlightuserdatatagged(l, JSON_OBJECT, LU_TAG_JSON_INTERNAL);
+    lua_rawget(l, LUA_REGISTRYINDEX);
+    lua_setfield(l, -2, "object_mt");
+
+    /* Set cjson.empty_array / empty_object - frozen tables with cloned shape metatables.
+     * Cloned (not shared with array_mt/object_mt) to avoid Ares duplicate-permanent-object errors. */
+    lua_newtable(l);
+    lua_newtable(l);
+    lua_pushliteral(l, "array");
+    lua_setfield(l, -2, "__jsontype");
+    lua_setreadonly(l, -1, true);
+    lua_fixvalue(l, -1);
+    lua_setmetatable(l, -2);
+    lua_setreadonly(l, -1, true);
+    lua_fixvalue(l, -1);
     lua_setfield(l, -2, "empty_array");
 
-    /* Set module name / version fields */
-    lua_pushliteral(l, CJSON_MODNAME);
-    lua_setfield(l, -2, "_NAME");
-    lua_pushliteral(l, CJSON_VERSION);
-    lua_setfield(l, -2, "_VERSION");
+    lua_newtable(l);
+    lua_newtable(l);
+    lua_pushliteral(l, "object");
+    lua_setfield(l, -2, "__jsontype");
+    lua_setreadonly(l, -1, true);
+    lua_fixvalue(l, -1);
+    lua_setmetatable(l, -2);
+    lua_setreadonly(l, -1, true);
+    lua_fixvalue(l, -1);
+    lua_setfield(l, -2, "empty_object");
 
     return 1;
 }
-
-#if 0 // ServerLua: unused
-/* Return cjson.safe module table */
-static int lua_cjson_safe_new(lua_State *l)
-{
-    const char *func[] = { "decode", "encode", NULL };
-    int i;
-
-    lua_cjson_new(l);
-
-    /* Fix new() method */
-    lua_pushcfunction(l, lua_cjson_safe_new, "new");
-    lua_setfield(l, -2, "new");
-
-    for (i = 0; func[i]; i++) {
-        lua_getfield(l, -1, func[i]);
-        lua_pushcclosure(l, json_protect_conversion, func[i], 1);
-        lua_setfield(l, -2, func[i]);
-    }
-
-    return 1;
-}
-#endif
 
 int luaopen_cjson(lua_State *l)
 {
@@ -2610,16 +2551,6 @@ int luaopen_cjson(lua_State *l)
     /* Return cjson table */
     return 1;
 }
-
-#if 0 // ServerLua: unused
-int luaopen_cjson_safe(lua_State *l)
-{
-    lua_cjson_safe_new(l);
-
-    /* Return cjson.safe table */
-    return 1;
-}
-#endif
 
 /* vi:ai et sw=4 ts=4:
  */

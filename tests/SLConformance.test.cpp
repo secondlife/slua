@@ -735,60 +735,68 @@ TEST_CASE("bit32.s32")
     runConformance("bit32_s32.lua");
 }
 
-// ServerLua: interrupt state for lljson yield tests
+// ServerLua: shared interrupt infrastructure for lljson yield tests
 static bool jsonInterruptEnabled = false;
 static int jsonYieldCount = 0;
 
-TEST_CASE("lljson")
+static void setupJsonInterruptInfra(lua_State* L)
 {
     jsonInterruptEnabled = false;
     jsonYieldCount = 0;
 
-    runConformance("lljson.lua", nullptr, [](lua_State* L) {
-        lua_pushcfunction(
-            L,
-            [](lua_State* L) -> int
-            {
-                jsonYieldCount = 0;
-                return 0;
-            },
-            "clear_check_count"
-        );
-        lua_setglobal(L, "clear_check_count");
-
-        lua_pushcfunction(
-            L,
-            [](lua_State* L) -> int
-            {
-                lua_pushinteger(L, jsonYieldCount);
-                return 1;
-            },
-            "get_check_count"
-        );
-        lua_setglobal(L, "get_check_count");
-
-        lua_pushcfunction(
-            L,
-            [](lua_State* L) -> int
-            {
-                jsonInterruptEnabled = true;
-                return 0;
-            },
-            "enable_check_interrupt"
-        );
-        lua_setglobal(L, "enable_check_interrupt");
-
-        // ServerLua: Interrupt handler that yields on every YIELD_CHECK hit
-        lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+    lua_pushcfunction(
+        L,
+        [](lua_State* L) -> int
         {
-            if (gc != LUA_INTERRUPT_LLLIB)
-                return;
-            if (!jsonInterruptEnabled)
-                return;
-            jsonYieldCount++;
-            lua_yield(L, 0);
-        };
-    });
+            jsonYieldCount = 0;
+            return 0;
+        },
+        "clear_check_count"
+    );
+    lua_setglobal(L, "clear_check_count");
+
+    lua_pushcfunction(
+        L,
+        [](lua_State* L) -> int
+        {
+            lua_pushinteger(L, jsonYieldCount);
+            return 1;
+        },
+        "get_check_count"
+    );
+    lua_setglobal(L, "get_check_count");
+
+    lua_pushcfunction(
+        L,
+        [](lua_State* L) -> int
+        {
+            jsonInterruptEnabled = true;
+            return 0;
+        },
+        "enable_check_interrupt"
+    );
+    lua_setglobal(L, "enable_check_interrupt");
+
+    lua_callbacks(L)->interrupt = [](lua_State* L, int gc)
+    {
+        if (gc != LUA_INTERRUPT_LLLIB)
+            return;
+        if (!jsonInterruptEnabled)
+            return;
+        jsonYieldCount++;
+        lua_yield(L, 0);
+    };
+}
+
+TEST_CASE("lljson")
+{
+    runConformance("lljson.lua", nullptr, setupJsonInterruptInfra);
+}
+
+TEST_CASE("lljson_replacer")
+{
+    runConformance("lljson_replacer.lua", nullptr, setupJsonInterruptInfra);
+    runConformance("lljson_typedjson.lua", nullptr, setupJsonInterruptInfra);
 }
 
 TEST_CASE("llbase64")
