@@ -230,6 +230,7 @@ static void json_init_lookup_tables()
 
 struct json_config_t {
     int encode_sparse_convert = 0;
+    bool allow_sparse = false;
     bool sl_tagged_types = false;
     bool sl_tight_encoding = false;
     bool has_replacer = false;
@@ -368,7 +369,7 @@ static void json_append_tostring(lua_State *l, strbuf_t *json, int lindex)
  * -1   object (not a pure array)
  * >=0  elements in array
  */
-static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json)
+static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json, bool force = false)
 {
     double k;
     int max;
@@ -399,7 +400,7 @@ static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json)
     }
 
     /* Encode excessively sparse arrays as objects (if enabled) */
-    if (max > items * JSON_SPARSE_RATIO &&
+    if (!force && max > items * JSON_SPARSE_RATIO &&
         max > JSON_SPARSE_SAFE) {
         if (!cfg->encode_sparse_convert)
             json_encode_exception(l, cfg, json, -1, "excessively sparse array");
@@ -1055,7 +1056,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
 
             if (as_array) {
                 // Validate: __jsontype="array" requires all keys to be positive integers
-                len = lua_array_length(l, cfg, json);
+                len = lua_array_length(l, cfg, json, true);
                 if (len < 0)
                     luaL_error(l, "cannot encode as array: table has non-integer keys");
 
@@ -1076,7 +1077,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             YIELD_HELPER(l, APPEND_ARRAY,
                 json_append_array(l, slots, cfg, depth, json, array_length, raw));
         } else {
-            len = lua_array_length(l, cfg, json);
+            len = lua_array_length(l, cfg, json, cfg->allow_sparse);
 
             if (len >= 0) {
                 array_length = len;
@@ -1223,6 +1224,9 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
             lua_rawgetfield(l, 3, "skip_tojson");
             skip_tojson = lua_toboolean(l, -1);
             cfg.skip_tojson = skip_tojson;
+            lua_pop(l, 1);
+            lua_rawgetfield(l, 3, "allow_sparse");
+            cfg.allow_sparse = lua_toboolean(l, -1);
             lua_pop(l, 1);
             lua_rawgetfield(l, 3, "replacer");
             if (!lua_isfunction(l, -1)) {

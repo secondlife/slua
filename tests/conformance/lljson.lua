@@ -40,6 +40,11 @@ assert(not pcall(function() lljson.encode({[vector.one]=1}) end))
 assert(lljson.encode({[4]=1}) == '[null,null,null,1]')
 -- But not _really_ sparse arrays
 assert(not pcall(function() lljson.encode({[200]=1}) end))
+-- Unless it's specifically an array
+local sparse_result = `[{string.rep("null,", 199)}1]`
+assert(lljson.encode(setmetatable({[200]=1}, lljson.array_mt)) == sparse_result)
+-- Or via the allow_sparse option
+assert(lljson.encode({[200]=1}, {allow_sparse=true}) == sparse_result)
 
 -- Vector is allowed to have NaN because it turns into a string.
 local nan_vec = vector(math.huge, -math.huge, 0/0)
