@@ -381,6 +381,43 @@ do
 end
 
 -- ============================================
+-- Reviver visitation order
+-- ============================================
+
+-- Helpers: collect visited keys, encode to JSON for easy comparison.
+-- nil (root) is recorded as lljson.null so it survives in the array.
+local function check_reviver_order(json_str, expected)
+    local order = {}
+    lljson.decode(json_str, function(key, value)
+        table.insert(order, if key == nil then lljson.null else key)
+        return value
+    end)
+    local got = lljson.encode(order)
+    assert(got == expected, `expected {expected}, got {got}`)
+end
+
+local function check_replacer_order(value, expected)
+    local order = {}
+    lljson.encode(value, {replacer = function(key, value)
+        table.insert(order, if key == nil then lljson.null else key)
+        return value
+    end})
+    local got = lljson.encode(order)
+    assert(got == expected, `expected {expected}, got {got}`)
+end
+
+-- Revivers do depth-first, leaf-first visitation
+check_reviver_order('{"a":{"b":{"c":1}}}', '["c","b","a",null]')
+check_reviver_order('[{"a":1},{"b":2}]', '["a",1,"b",2,null]')
+check_reviver_order('{"x":[1,2],"y":[3,4]}', '[1,2,"x",1,2,"y",null]')
+check_reviver_order('{"a":1,"b":2,"c":3}', '["a","b","c",null]')
+
+-- Replacers do depth-first, container-first visitation
+check_replacer_order({a = {b = 1, c = 2}}, '[null,"a","c","b"]')
+check_replacer_order({{a = 1}, {b = 2}}, '[null,1,"a",2,"b"]')
+check_replacer_order({a = 1, b = 2, c = 3}, '[null,"a","c","b"]')
+
+-- ============================================
 -- skip_tojson option
 -- ============================================
 
