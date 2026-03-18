@@ -1816,34 +1816,19 @@ static int json_is_invalid_number(json_parse_t *json)
     return 0;
 }
 
+// ServerLua: use fpconv_strtod for all numbers; the T_INTEGER path via strtoll
+// silently clamped values exceeding LLONG_MAX (e.g. 1e20 -> 9223372036854776000).
+// Luau has no separate integer type, so the distinction was meaningless anyway.
 static void json_next_number_token(json_parse_t *json, json_token_t *token)
 {
     char *endptr;
-    long long tmpval = strtoll(json->ptr, &endptr, 10);
-    if (json->ptr == endptr || *endptr == '.' || *endptr == 'e' ||
-        *endptr == 'E' || *endptr == 'x') {
-        token->type = T_NUMBER;
-        token->value.number = fpconv_strtod(json->ptr, &endptr);
-        if (json->ptr == endptr) {
-            json_set_token_error(token, json, "invalid number");
-            return;
-        }
-    } else if (tmpval > INT32_MAX || tmpval < INT32_MIN) {
-        /* Typical Lua builds typedef ptrdiff_t to lua_Integer. If tmpval is
-         * outside the range of that type, we need to use T_NUMBER to avoid
-         * truncation.
-         */
-        // ServerLua: In our case, it's actually `typedef`'d to `int`,
-        // but similar logic applies.
-        token->type = T_NUMBER;
-        token->value.number = (double)tmpval;
-    } else {
-        token->type = T_INTEGER;
-        token->value.integer = (int)tmpval;
+    token->type = T_NUMBER;
+    token->value.number = fpconv_strtod(json->ptr, &endptr);
+    if (json->ptr == endptr) {
+        json_set_token_error(token, json, "invalid number");
+        return;
     }
-    json->ptr = endptr;     /* Skip the processed number */
-
-    return;
+    json->ptr = endptr;
 }
 
 /* Fills in the token struct.
@@ -2249,10 +2234,8 @@ static void json_process_value(lua_State* l, SlotManager& parent_slots,
         }
         break;
     case T_NUMBER:
-        lua_pushnumber(l, token->value.number);
-        break;
     case T_INTEGER:
-        lua_pushinteger(l, token->value.integer);
+        lua_pushnumber(l, token->value.number);
         break;
     case T_BOOLEAN:
         lua_pushboolean(l, token->value.boolean);

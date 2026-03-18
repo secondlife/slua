@@ -764,5 +764,8 @@ consume_nocheck(function()
     assert(captured_mode == "sljson")
 end)
 
+-- Numbers exceeding int64 range should parse correctly, not clamp to LLONG_MAX
+assert(lljson.decode("100000000000000000000") == 1e20)
+assert(lljson.decode("-100000000000000000000") == -1e20)
 
 return 'OK'
