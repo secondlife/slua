@@ -903,6 +903,10 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
                 } else if (keytype == LUA_TSTRING) {
                     json_append_string(l, json, -2);
                     strbuf_append_char(json, ':');
+                // ServerLua: allow UUID keys, encoded as their string form
+                } else if (keytype == LUA_TUSERDATA && lua_userdatatag(l, -2) == UTAG_UUID) {
+                    json_append_tostring(l, json, -2);
+                    strbuf_append_char(json, ':');
                 } else {
                     json_encode_exception(l, cfg, json, -2,
                                           "table key must be a number or string");

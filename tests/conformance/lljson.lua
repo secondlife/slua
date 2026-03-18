@@ -578,6 +578,12 @@ assert(getmetatable(lljson.empty_object) ~= lljson.object_mt)
 assert(getmetatable(lljson.empty_array).__jsontype == "array")
 assert(getmetatable(lljson.empty_object).__jsontype == "object")
 
+-- UUID table keys should encode as their string form
+assert(
+    lljson.encode({[uuid("12345678-1234-1234-1234-123456789abc")]="hello" }) ==
+    '{"12345678-1234-1234-1234-123456789abc":"hello"}'
+)
+
 -- Enable interrupt-driven yields for remaining tests.
 enable_check_interrupt()
 
