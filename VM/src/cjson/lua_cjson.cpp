@@ -433,7 +433,8 @@ static void json_check_encode_depth(lua_State *l, json_config_t *cfg,
 
 // ServerLua: Forward declarations for yieldable encode helpers
 static int json_append_data(lua_State* l, SlotManager& parent_slots,
-                                       json_config_t* cfg, int current_depth, strbuf_t* json);
+                                       json_config_t* cfg, int current_depth, strbuf_t* json,
+                                       bool skip_tojson_once = false);
 static void json_append_array(lua_State* l, SlotManager& parent_slots,
                                          json_config_t* cfg, int current_depth,
                                          strbuf_t* json, int array_length, int raw);
@@ -532,7 +533,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
             // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
             bool skip;
             YIELD_HELPER(l, ELEMENT,
-                skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
+                skip = (bool)json_append_data(l, slots, cfg, current_depth, json, cfg->has_replacer));
             if (skip) {
                 strbuf_set_length(json, json_pos);
                 if (comma == 1) {
@@ -918,7 +919,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
             // Not a slot: assigned by YIELD_HELPER before read, no goto crosses this decl.
             bool skip;
             YIELD_HELPER(l, VALUE,
-                skip = (bool)json_append_data(l, slots, cfg, current_depth, json));
+                skip = (bool)json_append_data(l, slots, cfg, current_depth, json, cfg->has_replacer));
             if (skip) {
                 strbuf_set_length(json, json_pos);
                 if (comma == 1) {
@@ -939,7 +940,8 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
 /* Serialise Lua data into JSON string. */
 // ServerLua: Yieldable version of json_append_data.
 static int json_append_data(lua_State* l, SlotManager& parent_slots,
-                             json_config_t* cfg, int current_depth, strbuf_t* json)
+                             json_config_t* cfg, int current_depth, strbuf_t* json,
+                             bool skip_tojson_once)
 {
     YIELDABLE_RETURNS(0);
     enum class Phase : uint8_t
@@ -1034,7 +1036,9 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             lua_pop(l, 1);  // pop metatable
 
             // __tojson provides content, __jsontype provides shape
-            if (!cfg->skip_tojson && luaL_getmetafield(l, -1, "__tojson")) {
+            // skip_tojson_once suppresses __tojson for direct replacer returns,
+            // This is for symmetry with JS where `toJSON()` is never executed on replacer returns.
+            if (!cfg->skip_tojson && !skip_tojson_once && luaL_getmetafield(l, -1, "__tojson")) {
                 lua_pushvalue(l, -2);                           // self
                 lua_pushvalue(l, (int)EncodeStack::CTX);        // ctx table
                 YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
@@ -1308,7 +1312,7 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
     lua_pushvalue(l, (int)EncodeStack::VALUE);
     lua_hardenstack(l, 1);
     YIELD_HELPER(l, APPEND_DATA,
-        json_append_data(l, slots, &cfg, 0, buf));
+        json_append_data(l, slots, &cfg, 0, buf, cfg.has_replacer));
 
     lua_settop(l, (int)EncodeStack::STRBUF);
     strbuf_tostring_inplace((int)EncodeStack::STRBUF, true);

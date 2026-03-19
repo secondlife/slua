@@ -259,6 +259,16 @@ do
     assert(r == '51', "root __tojson + replacer: expected 51, got " .. r)
 end
 
+-- __tojson is NOT called on the replacer's return value
+do
+    local bomb = { __tojson = function() error("__tojson should not be called on replacer return") end }
+    local r = lljson.encode(42, {replacer = function(key, value)
+        if key == nil then return setmetatable({x = 1}, bomb) end
+        return value
+    end})
+    assert(r == '{"x":1}', 'expected {"x":1}, got ' .. r)
+end
+
 -- Root replacer: replacer receives (nil, value, nil) for root
 do
     local r = lljson.encode({1, 2, 3}, {replacer = function(key, value, parent)
