@@ -618,6 +618,19 @@ local function consume_nocheck(f, ...)
     return consume_impl(false, false, f, ...)
 end
 
+-- Trailing garbage in tagged values should error
+assert(not pcall(lljson.sldecode, '"!f3.14$$$$"'))
+assert(not pcall(lljson.sldecode, '"!v1,2,3junk"'))
+assert(not pcall(lljson.sldecode, '"!q1,2,3,4junk"'))
+assert(not pcall(lljson.sldecode, '"!q2e3,,0x16,,xyzzz"'))
+assert(not pcall(lljson.sldecode, '"!v<1,2,3>junk"'))
+assert(not pcall(lljson.sldecode, '"!q<1,2,3,4>junk"'))
+-- Whitespace around components/delimiters is OK (matches tonumber())
+assert(lljson.sldecode('"!f3.14 "') == 3.14)
+assert(lljson.sldecode('"!f 3.14"') == 3.14)
+assert(lljson.sldecode('"!v< 1 , 2 , 3 >"') == vector(1, 2, 3))
+assert(lljson.sldecode('"!q< 1 , 2 , 3 , 4 >"') == quaternion(1, 2, 3, 4))
+
 -- Shared metatables for yield tests
 local yield_tojson_mt = { __tojson = function(self)
     coroutine.yield()

@@ -1380,6 +1380,20 @@ static int decode_hex4(const char *hex)
             digit[3];
 }
 
+// ServerLua: skip whitespace, matching tonumber() tolerance
+static inline const char *skip_ws(const char *p) {
+    while (isspace((unsigned char)*p)) p++;
+    return p;
+}
+
+// ServerLua: skip whitespace, expect delimiter, advance past it
+static const char *expect(const char *p, char c, lua_State *l, const char *tag, const char *str) {
+    p = skip_ws(p);
+    if (*p != c)
+        luaL_error(l, "malformed tagged %s: %s", tag, str);
+    return p + 1;
+}
+
 // Helper to parse a tight component (empty string = 0.0f)
 static float parse_tight_component(const char **ptr, char delimiter) {
     const char *p = *ptr;
@@ -1389,7 +1403,7 @@ static float parse_tight_component(const char **ptr, char delimiter) {
     }
     char *end;
     float val = strtof(p, &end);
-    *ptr = end;
+    *ptr = skip_ws(end);
     return val;
 }
 
@@ -1430,31 +1444,22 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
 
         if (payload[0] == '<') {
             // Normal format with brackets
-            if (payload_len < 5 || payload[payload_len - 1] != '>')
-                luaL_error(l, "malformed tagged vector: %s", str);
-
             char *end;
             x = strtof(payload + 1, &end);
-            if (*end != ',')
-                luaL_error(l, "malformed tagged vector: %s", str);
-            y = strtof(end + 1, &end);
-            if (*end != ',')
-                luaL_error(l, "malformed tagged vector: %s", str);
-            z = strtof(end + 1, &end);
-            if (*end != '>')
+            y = strtof(expect(end, ',', l, "vector", str), &end);
+            z = strtof(expect(end, ',', l, "vector", str), &end);
+            if (*skip_ws(expect(end, '>', l, "vector", str)) != '\0')
                 luaL_error(l, "malformed tagged vector: %s", str);
         } else {
             // Tight format: !v1,2,3 or !v,,1 (empty = 0)
             const char *p = payload;
             x = parse_tight_component(&p, ',');
-            if (*p != ',')
-                luaL_error(l, "malformed tagged vector: %s", str);
-            p++;
+            p = expect(p, ',', l, "vector", str);
             y = parse_tight_component(&p, ',');
-            if (*p != ',')
-                luaL_error(l, "malformed tagged vector: %s", str);
-            p++;
+            p = expect(p, ',', l, "vector", str);
             z = parse_tight_component(&p, '\0');
+            if (*skip_ws(p) != '\0')
+                luaL_error(l, "malformed tagged vector: %s", str);
         }
 
         lua_pushvector(l, x, y, z);
@@ -1473,38 +1478,25 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
 
         if (payload[0] == '<') {
             // Normal format with brackets
-            if (payload_len < 7 || payload[payload_len - 1] != '>')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-
             char *end;
             x = strtof(payload + 1, &end);
-            if (*end != ',')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-            y = strtof(end + 1, &end);
-            if (*end != ',')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-            z = strtof(end + 1, &end);
-            if (*end != ',')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-            w = strtof(end + 1, &end);
-            if (*end != '>')
+            y = strtof(expect(end, ',', l, "quaternion", str), &end);
+            z = strtof(expect(end, ',', l, "quaternion", str), &end);
+            w = strtof(expect(end, ',', l, "quaternion", str), &end);
+            if (*skip_ws(expect(end, '>', l, "quaternion", str)) != '\0')
                 luaL_error(l, "malformed tagged quaternion: %s", str);
         } else {
             // Tight format: !q,,,1 (empty = 0)
             const char *p = payload;
             x = parse_tight_component(&p, ',');
-            if (*p != ',')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-            p++;
+            p = expect(p, ',', l, "quaternion", str);
             y = parse_tight_component(&p, ',');
-            if (*p != ',')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-            p++;
+            p = expect(p, ',', l, "quaternion", str);
             z = parse_tight_component(&p, ',');
-            if (*p != ',')
-                luaL_error(l, "malformed tagged quaternion: %s", str);
-            p++;
+            p = expect(p, ',', l, "quaternion", str);
             w = parse_tight_component(&p, '\0');
+            if (*skip_ws(p) != '\0')
+                luaL_error(l, "malformed tagged quaternion: %s", str);
         }
 
         luaSL_pushquaternion(l, x, y, z, w);
@@ -1547,7 +1539,7 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
         // Float: !f3.14 or !fNaN or !f1e9999 (infinity)
         char *end;
         double num = fpconv_strtod(payload, &end);
-        if (end == payload)
+        if (end == payload || *skip_ws(end) != '\0')
             luaL_error(l, "malformed tagged float: %s", str);
         lua_pushnumber(l, num);
         return true;
