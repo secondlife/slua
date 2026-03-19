@@ -909,7 +909,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
                     strbuf_append_char(json, ':');
                 } else {
                     json_encode_exception(l, cfg, json, -2,
-                                          "table key must be a number or string");
+                                          "table key must be a number, string, or uuid");
                     /* never returns */
                 }
             }
