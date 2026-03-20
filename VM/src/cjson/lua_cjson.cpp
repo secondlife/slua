@@ -133,6 +133,8 @@ enum class DecodeStack
     STRBUF = 2,
     INPUT = 3,
     REVIVER = 4,
+    CTX = 5,
+    PATH = 6,
 };
 
 typedef enum {
@@ -245,6 +247,7 @@ typedef struct {
     json_config_t *cfg;
     int current_depth;
     bool has_reviver;  // When true, a reviver function is on the decode stack
+    bool has_path;     // When true, a path table is on the decode stack
 } json_parse_t;
 
 typedef struct {
@@ -1999,8 +2002,8 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
     slots.finalize();
 
     json_restore_offset(json, ptr_offset);
-    // ServerLua: 7 slots for table, key, value + reviver call args
-    json_decode_descend(l, json, 7);
+    // ServerLua: 8 slots for table, key, value + reviver call args + ctx
+    json_decode_descend(l, json, 8);
 
     if (slots.isInit()) {
         lua_newtable(l);
@@ -2030,6 +2033,13 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
     YIELD_DISPATCH_END();
 
     while (1) {
+        // Push key onto path before parsing the value
+        if (json->has_path) {
+            int path_len = lua_objlen(l, (int)DecodeStack::PATH);
+            lua_pushvalue(l, -1);
+            lua_rawseti(l, (int)DecodeStack::PATH, path_len + 1);
+        }
+
         /* Fetch value */
         /* Stack before: [..., table, key] */
         {
@@ -2043,13 +2053,14 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
         ptr_offset = json_get_offset(json);
 
         if (json->has_reviver) {
-            // Call reviver(key, value, parent)
+            // Call reviver(key, value, parent, ctx)
             lua_pushvalue(l, (int)DecodeStack::REVIVER);
             lua_pushvalue(l, -3);  // key
             lua_pushvalue(l, -3);  // value
             lua_pushvalue(l, -6);  // parent (the object table)
+            lua_pushvalue(l, (int)DecodeStack::CTX);
             YIELD_CHECK(l, REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
-            YIELD_CALL(l, 3, 1, REVIVER_CALL);
+            YIELD_CALL(l, 4, 1, REVIVER_CALL);
             // Stack: [..., table, key, value, result]
             if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
                 // Omit this key/value pair entirely
@@ -2063,6 +2074,13 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
         } else {
             /* Set key = value */
             lua_rawset(l, -3);
+        }
+
+        // Pop key from path
+        if (json->has_path) {
+            int path_len = lua_objlen(l, (int)DecodeStack::PATH);
+            lua_pushnil(l);
+            lua_rawseti(l, (int)DecodeStack::PATH, path_len);
         }
 
         json_token_t token;
@@ -2106,8 +2124,8 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
     slots.finalize();
 
     json_restore_offset(json, ptr_offset);
-    // ServerLua: 6 slots for table, value + reviver call args
-    json_decode_descend(l, json, 6);
+    // ServerLua: 7 slots for table, value + reviver call args + ctx
+    json_decode_descend(l, json, 7);
 
     if (slots.isInit()) {
         lua_newtable(l);
@@ -2136,6 +2154,13 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
     YIELD_DISPATCH_END();
 
     for (; ; i++) {
+        // Push index onto path before parsing the element
+        if (json->has_path) {
+            int path_len = lua_objlen(l, (int)DecodeStack::PATH);
+            lua_pushinteger(l, i);
+            lua_rawseti(l, (int)DecodeStack::PATH, path_len + 1);
+        }
+
         {
             json_token_t token;
             YIELD_HELPER(l, ELEMENT,
@@ -2151,8 +2176,9 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
             lua_pushinteger(l, i);     // key (1-based source index)
             lua_pushvalue(l, -3);      // value
             lua_pushvalue(l, -5);      // parent (the array table)
+            lua_pushvalue(l, (int)DecodeStack::CTX);
             YIELD_CHECK(l, REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
-            YIELD_CALL(l, 3, 1, REVIVER_CALL);
+            YIELD_CALL(l, 4, 1, REVIVER_CALL);
             // Stack: [..., table, value, result]
             if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
                 // Omit this element - don't insert, don't increment insert_idx
@@ -2166,6 +2192,13 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
             }
         } else {
             lua_rawseti(l, -2, i);    /* arr[i] = value */
+        }
+
+        // Pop index from path
+        if (json->has_path) {
+            int path_len = lua_objlen(l, (int)DecodeStack::PATH);
+            lua_pushnil(l);
+            lua_rawseti(l, (int)DecodeStack::PATH, path_len);
         }
 
         json_token_t token;
@@ -2284,11 +2317,29 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     if (is_init) {
         /* Args already validated by init wrapper.
          * SlotManager inserted nil at pos 1, original args shifted to pos 2+.
-         * Stack: [opaque(1), input_string(2), reviver?(3)] */
+         * Stack: [opaque(1), input_string(2), arg2?(3)] */
 
-        // Ensure reviver or nil occupies a stack slot (will become pos 4 after strbuf insert)
+        bool path_enabled = false;
+
+        // Normalize: ensure arg2 slot exists
         if (lua_gettop(l) < 3)
             lua_pushnil(l);
+
+        // If arg 2 is an options table, extract reviver and path
+        if (lua_istable(l, 3)) {
+            lua_rawgetfield(l, 3, "track_path");
+            path_enabled = lua_toboolean(l, -1);
+            lua_pop(l, 1);
+
+            lua_rawgetfield(l, 3, "reviver");
+            if (!lua_isfunction(l, -1)) {
+                lua_pop(l, 1);
+                lua_pushnil(l);
+            }
+            // Stack: [opaque(1), input(2), opts(3), reviver_or_nil(4)]
+            lua_remove(l, 3);
+        }
+        // Stack: [opaque(1), input(2), reviver_or_nil(3)]
 
         // ServerLua: Create decode scratch buffer in memcat 1 - it's an
         // internal intermediary, not user-visible output. Pre-size to
@@ -2304,6 +2355,19 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
         }
         lua_insert(l, (int)DecodeStack::STRBUF);
         /* Stack: [opaque(1), strbuf(2), input_string(3), reviver_or_nil(4)] */
+
+        // Create frozen ctx table and path table (or nil)
+        if (path_enabled) {
+            lua_newtable(l);
+        } else {
+            lua_pushnil(l);
+        }
+        lua_newtable(l);
+        lua_pushvalue(l, -2);
+        lua_rawsetfield(l, -2, "path");
+        lua_setreadonly(l, -1, true);
+        lua_insert(l, -2);
+        /* Stack: [opaque(1), strbuf(2), input(3), reviver(4), ctx(5), path_or_nil(6)] */
 
         size_t json_len;
         const char* json_data = lua_tolstring(l, (int)DecodeStack::INPUT, &json_len);
@@ -2336,6 +2400,7 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     json.current_depth = 0;
     json.tmp = tmp;
     json.has_reviver = !lua_isnil(l, (int)DecodeStack::REVIVER);
+    json.has_path = !lua_isnil(l, (int)DecodeStack::PATH);
 
     YIELD_DISPATCH_BEGIN(phase, slots);
     YIELD_DISPATCH(PROCESS_VALUE);
@@ -2362,13 +2427,14 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     // Call reviver on root value if present
     if (json.has_reviver) {
         // Stack: [..., decoded_value]
-        lua_checkstack(l, 4);
+        lua_checkstack(l, 5);
         lua_pushvalue(l, (int)DecodeStack::REVIVER);  // reviver
         lua_pushnil(l);        // key = nil (root)
         lua_pushvalue(l, -3);  // decoded value
         lua_pushnil(l);        // parent = nil (root)
+        lua_pushvalue(l, (int)DecodeStack::CTX);
         YIELD_CHECK(l, ROOT_REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
-        YIELD_CALL(l, 3, 1, ROOT_REVIVER_CALL);
+        YIELD_CALL(l, 4, 1, ROOT_REVIVER_CALL);
         // Stack: [..., decoded_value, result]
         if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
             lua_pop(l, 2);
@@ -2390,8 +2456,8 @@ static int json_decode_v0(lua_State* l)
     int nargs = lua_gettop(l);
     luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     luaL_checkstring(l, 1);
-    if (nargs >= 2)
-        luaL_checktype(l, 2, LUA_TFUNCTION);
+    if (nargs >= 2 && !lua_isfunction(l, 2) && !lua_istable(l, 2))
+        luaL_argerror(l, 2, "expected function or table");
     return json_decode_common(l, true, false);
 }
 static int json_decode_v0_k(lua_State* l, int)
@@ -2404,8 +2470,8 @@ static int json_decode_sl_v0(lua_State* l)
     int nargs = lua_gettop(l);
     luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     luaL_checkstring(l, 1);
-    if (nargs >= 2)
-        luaL_checktype(l, 2, LUA_TFUNCTION);
+    if (nargs >= 2 && !lua_isfunction(l, 2) && !lua_istable(l, 2))
+        luaL_argerror(l, 2, "expected function or table");
     return json_decode_common(l, true, true);
 }
 static int json_decode_sl_v0_k(lua_State* l, int)
@@ -2431,6 +2497,9 @@ static int lua_cjson_new(lua_State *l)
     luaS_fix(luaS_newliteral(l, "sljson"));
     luaS_fix(luaS_newliteral(l, "tight"));
     luaS_fix(luaS_newliteral(l, "replacer"));
+    luaS_fix(luaS_newliteral(l, "reviver"));
+    luaS_fix(luaS_newliteral(l, "track_path"));
+    luaS_fix(luaS_newliteral(l, "path"));
     luaS_fix(luaS_newliteral(l, "__tojson"));
     luaS_fix(luaS_newliteral(l, "__jsontype"));
     luaS_fix(luaS_newliteral(l, "array"));

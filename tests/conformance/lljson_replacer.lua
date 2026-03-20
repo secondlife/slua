@@ -526,6 +526,77 @@ do
 end
 
 -- ============================================
+-- Reviver ctx and path tracking
+-- ============================================
+
+-- ctx is always passed as 4th arg and is frozen
+do
+    local seen_ctx
+    lljson.decode('{"a":1}', function(key, value, parent, ctx)
+        if key == "a" then seen_ctx = ctx end
+        return value
+    end)
+    assert(type(seen_ctx) == "table", "ctx should be a table")
+    assert(table.isfrozen(seen_ctx), "ctx should be frozen")
+end
+
+-- ctx.path is nil by default (function reviver)
+do
+    local seen_path_nil = false
+    lljson.decode('{"a":1}', function(key, value, parent, ctx)
+        if key == "a" then seen_path_nil = (ctx.path == nil) end
+        return value
+    end)
+    assert(seen_path_nil, "ctx.path should be nil by default")
+end
+
+-- path tracking: nested object
+do
+    local paths = {}
+    lljson.decode('{"a":{"b":1}}', { reviver = function(key, value, parent, ctx)
+        paths[key or "ROOT"] = table.clone(ctx.path)
+        return value
+    end, track_path = true })
+    assert(lljson.encode(paths["b"]) == '["a","b"]')
+    assert(lljson.encode(paths["a"]) == '["a"]')
+    assert(lljson.encode(paths["ROOT"]) == '[]')
+end
+
+-- path tracking: arrays with integer indices
+do
+    local paths = {}
+    lljson.decode('[1,[2,3]]', { reviver = function(key, value, parent, ctx)
+        if type(value) == "number" then
+            paths[value] = table.clone(ctx.path)
+        end
+        return value
+    end, track_path = true })
+    assert(lljson.encode(paths) == '[[1],[2,1],[2,2]]')
+end
+
+-- path tracking via options table works with sldecode
+do
+    local paths = {}
+    lljson.sldecode('{"a":1}', { reviver = function(key, value, parent, ctx)
+        paths[key or "ROOT"] = table.clone(ctx.path)
+        return value
+    end, track_path = true })
+    assert(lljson.encode(paths["a"]) == '["a"]')
+end
+
+-- ctx is passed with options table (no path)
+do
+    local seen_ctx
+    lljson.decode('{"a":1}', { reviver = function(key, value, parent, ctx)
+        if key == "a" then seen_ctx = ctx end
+        return value
+    end })
+    assert(type(seen_ctx) == "table", "ctx should be passed with options table too")
+    assert(table.isfrozen(seen_ctx), "ctx should be frozen with options table")
+    assert(seen_ctx.path == nil, "ctx.path should be nil without path=true")
+end
+
+-- ============================================
 -- Interrupt tests for replacer/reviver
 -- ============================================
 
@@ -601,6 +672,24 @@ consume_nocheck(function()
         return value
     end})
     assert(r == "[1,3,5,7,9]")
+end)
+
+-- decode with path tracking: exercises path table surviving Ares round-trip
+consume(function()
+    local src = '{"a":{"b":1,"c":2},"d":[3,4,5],"e":{"f":{"g":6}},"h":7,"i":8}'
+    local paths = {}
+    local t = lljson.decode(src, { reviver = function(key, value, parent, ctx)
+        if type(value) == "number" then
+            paths[value] = table.clone(ctx.path)
+            return value * 10
+        end
+        return value
+    end, track_path = true })
+    assert(t.a.b == 10 and t.a.c == 20)
+    assert(t.d[1] == 30 and t.d[2] == 40 and t.d[3] == 50)
+    assert(t.e.f.g == 60)
+    assert(t.h == 70 and t.i == 80)
+    assert(lljson.encode(paths) == '[["a","b"],["a","c"],["d",1],["d",2],["d",3],["e","f","g"],["h"],["i"]]')
 end)
 
 return 'OK'
