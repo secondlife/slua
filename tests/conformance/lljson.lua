@@ -57,10 +57,14 @@ assert(lljson.decode('null') ~= nil)
 assert(lljson.decode("true") == true)
 -- Yay, you can actually use unicode escapes.
 assert(lljson.decode('"\\u0020"') == " ")
--- TODO: should this have the custom array metatable where appropriate?
---       could people override it if it did?
-assert(getmetatable(lljson.decode('[]')) == nil)
-assert(getmetatable(lljson.decode('{}')) == nil)
+-- decode() sets array_mt/object_mt for round-trippability
+assert(getmetatable(lljson.decode('[]')) == lljson.array_mt)
+assert(getmetatable(lljson.decode('{}')) == lljson.object_mt)
+assert(getmetatable(lljson.decode('[1,2]')) == lljson.array_mt)
+assert(getmetatable(lljson.decode('{"a":1}')) == lljson.object_mt)
+-- round-trips preserve shape
+assert(lljson.encode(lljson.decode('[]')) == '[]')
+assert(lljson.encode(lljson.decode('{}')) == '{}')
 assert(lljson.decode('[5]')[1] == 5)
 assert(lljson.decode('{"foo":5}').foo == 5)
 -- Don't automatically cast these
@@ -440,14 +444,18 @@ assert(not pcall(lljson.encode, 1, "string"))
 assert(not pcall(lljson.slencode, 1, "string"))
 assert(not pcall(lljson.slencode, 1, true))
 
--- sldecode does not set array metatables (slencode ignores them, so attaching would be dishonest)
+-- sldecode does not set metatables (slencode ignores them, so attaching would be dishonest)
 do
     assert(getmetatable(lljson.sldecode("[]")) == nil)
     assert(getmetatable(lljson.sldecode("[1,2,3]")) == nil)
-    -- Standard decode: also no metatables
-    assert(getmetatable(lljson.decode("[]")) == nil)
-    assert(getmetatable(lljson.decode("[1,2]")) == nil)
-    -- Round-trip: non-empty array auto-detected, no metatable needed
+    assert(getmetatable(lljson.sldecode("{}")) == nil)
+    assert(getmetatable(lljson.sldecode('{"a":1}')) == nil)
+    -- Standard decode sets metatables
+    assert(getmetatable(lljson.decode("[]")) == lljson.array_mt)
+    assert(getmetatable(lljson.decode("[1,2]")) == lljson.array_mt)
+    assert(getmetatable(lljson.decode("{}")) == lljson.object_mt)
+    assert(getmetatable(lljson.decode('{"a":1}')) == lljson.object_mt)
+    -- sldecode round-trip: non-empty array auto-detected, no metatable needed
     local decoded = lljson.sldecode(lljson.slencode({1, 2, 3}))
     assert(decoded[1] == 1 and decoded[2] == 2 and decoded[3] == 3)
     assert(getmetatable(decoded) == nil)

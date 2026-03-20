@@ -273,7 +273,7 @@ do
     local revived = tj:decode(str)
     assert(revived.x == 1)
     assert(revived.y == 2)
-    assert(getmetatable(revived) == nil)
+    assert(getmetatable(revived) == lljson.object_mt)
 end
 
 -- slencode/sldecode round-trip

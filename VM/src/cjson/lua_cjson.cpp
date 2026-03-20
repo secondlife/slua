@@ -2007,6 +2007,11 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
 
     if (slots.isInit()) {
         lua_newtable(l);
+        if (!json->cfg->sl_tagged_types) {
+            lua_pushlightuserdatatagged(l, JSON_OBJECT, LU_TAG_JSON_INTERNAL);
+            lua_rawget(l, LUA_REGISTRYINDEX);
+            lua_setmetatable(l, -2);
+        }
 
         json_token_t token;
         json_next_token(json, &token);
@@ -2129,6 +2134,11 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
 
     if (slots.isInit()) {
         lua_newtable(l);
+        if (!json->cfg->sl_tagged_types) {
+            lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
+            lua_rawget(l, LUA_REGISTRYINDEX);
+            lua_setmetatable(l, -2);
+        }
 
         /* Peek at first token - check for empty array */
         const char* before = json->ptr;
