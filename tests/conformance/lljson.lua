@@ -580,9 +580,9 @@ assert(table.isfrozen(lljson.empty_object))
 assert(lljson.empty_object ~= nil)
 assert(lljson.empty_object ~= lljson.null)
 assert(lljson.empty_object ~= lljson.empty_array)
--- Metatables are cloned (not shared with array_mt/object_mt) for Ares compatibility
-assert(getmetatable(lljson.empty_array) ~= lljson.array_mt)
-assert(getmetatable(lljson.empty_object) ~= lljson.object_mt)
+-- Metatables are shared with array_mt/object_mt
+assert(getmetatable(lljson.empty_array) == lljson.array_mt)
+assert(getmetatable(lljson.empty_object) == lljson.object_mt)
 assert(getmetatable(lljson.empty_array).__jsontype == "array")
 assert(getmetatable(lljson.empty_object).__jsontype == "object")
 

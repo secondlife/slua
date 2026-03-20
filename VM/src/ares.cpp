@@ -3034,6 +3034,11 @@ static void scan_metatable(lua_State *L, bool forUnpersist, const std::string& p
     // Register the metatable as a permanent
     std::string mt_name = prefix + "/mt";
 
+    // empty_array/empty_object are special, they share array_mt/object_mt, which are
+    // registered under their canonical names. Skip the alias to avoid duplicates.
+    if (mt_name == "g/lljson/empty_array/mt" || mt_name == "g/lljson/empty_object/mt")
+        return;
+
     if (forUnpersist) {
         lua_pushstring(L, mt_name.c_str());      // ... perms obj_table mt name
         lua_pushvalue(L, -2);                    // ... perms obj_table mt name mt

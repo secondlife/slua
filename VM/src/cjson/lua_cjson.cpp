@@ -2533,7 +2533,6 @@ static int lua_cjson_new(lua_State *l)
         lua_pushliteral(l, "array");
         lua_setfield(l, -2, "__jsontype");
         lua_setreadonly(l, -1, true);
-        lua_fixvalue(l, -1);
         lua_rawset(l, LUA_REGISTRYINDEX);
 
         /* object_mt */
@@ -2542,7 +2541,6 @@ static int lua_cjson_new(lua_State *l)
         lua_pushliteral(l, "object");
         lua_setfield(l, -2, "__jsontype");
         lua_setreadonly(l, -1, true);
-        lua_fixvalue(l, -1);
         lua_rawset(l, LUA_REGISTRYINDEX);
     } else {
         lua_pop(l, 1);
@@ -2572,32 +2570,27 @@ static int lua_cjson_new(lua_State *l)
     /* Set cjson.array_mt */
     lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
     lua_rawget(l, LUA_REGISTRYINDEX);
+    lua_fixvalue(l, -1);
     lua_setfield(l, -2, "array_mt");
 
     /* Set cjson.object_mt */
     lua_pushlightuserdatatagged(l, JSON_OBJECT, LU_TAG_JSON_INTERNAL);
     lua_rawget(l, LUA_REGISTRYINDEX);
+    lua_fixvalue(l, -1);
     lua_setfield(l, -2, "object_mt");
 
-    /* Set cjson.empty_array / empty_object - frozen tables with cloned shape metatables.
-     * Cloned (not shared with array_mt/object_mt) to avoid Ares duplicate-permanent-object errors. */
+    /* Set cjson.empty_array / empty_object - frozen sentinel tables sharing array_mt/object_mt. */
     lua_newtable(l);
-    lua_newtable(l);
-    lua_pushliteral(l, "array");
-    lua_setfield(l, -2, "__jsontype");
-    lua_setreadonly(l, -1, true);
-    lua_fixvalue(l, -1);
+    lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
+    lua_rawget(l, LUA_REGISTRYINDEX);
     lua_setmetatable(l, -2);
     lua_setreadonly(l, -1, true);
     lua_fixvalue(l, -1);
     lua_setfield(l, -2, "empty_array");
 
     lua_newtable(l);
-    lua_newtable(l);
-    lua_pushliteral(l, "object");
-    lua_setfield(l, -2, "__jsontype");
-    lua_setreadonly(l, -1, true);
-    lua_fixvalue(l, -1);
+    lua_pushlightuserdatatagged(l, JSON_OBJECT, LU_TAG_JSON_INTERNAL);
+    lua_rawget(l, LUA_REGISTRYINDEX);
     lua_setmetatable(l, -2);
     lua_setreadonly(l, -1, true);
     lua_fixvalue(l, -1);
