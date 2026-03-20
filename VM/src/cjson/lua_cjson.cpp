@@ -1208,10 +1208,12 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(bool, tight_encoding, false);
     DEFINE_SLOT(bool, skip_tojson, false);
+    DEFINE_SLOT(bool, allow_sparse, false);
     slots.finalize();
 
     json_config_t cfg;
     cfg.skip_tojson = skip_tojson;
+    cfg.allow_sparse = allow_sparse;
     if (sl_tagged) {
         cfg.sl_tagged_types = true;
         cfg.encode_sparse_convert = 1;
@@ -1233,11 +1235,10 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
                 lua_pop(l, 1);
             }
             lua_rawgetfield(l, 3, "skip_tojson");
-            skip_tojson = lua_toboolean(l, -1);
-            cfg.skip_tojson = skip_tojson;
+            cfg.skip_tojson = skip_tojson = lua_toboolean(l, -1);
             lua_pop(l, 1);
             lua_rawgetfield(l, 3, "allow_sparse");
-            cfg.allow_sparse = lua_toboolean(l, -1);
+            allow_sparse = cfg.allow_sparse = lua_toboolean(l, -1);
             lua_pop(l, 1);
             lua_rawgetfield(l, 3, "replacer");
             if (!lua_isfunction(l, -1)) {
