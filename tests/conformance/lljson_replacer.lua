@@ -269,6 +269,21 @@ do
     assert(r == '{"x":1}', 'expected {"x":1}, got ' .. r)
 end
 
+-- Replacer return's __jsontype determines shape, not the original's (both directions)
+do
+    local r = lljson.encode(setmetatable({1, 2, 3}, lljson.object_mt), {replacer = function(key, value)
+        if key == nil then return setmetatable({10, 20}, lljson.array_mt) end
+        return value
+    end})
+    assert(r == '[10,20]', `replacer array_mt should override original object_mt: got {r}`)
+
+    r = lljson.encode(setmetatable({10, 20}, lljson.array_mt), {replacer = function(key, value)
+        if key == nil then return setmetatable({30, 40}, lljson.object_mt) end
+        return value
+    end})
+    assert(r == '{"1":30,"2":40}', `replacer object_mt should override original array_mt: got {r}`)
+end
+
 -- Root replacer: replacer receives (nil, value, nil) for root
 do
     local r = lljson.encode({1, 2, 3}, {replacer = function(key, value, parent)

@@ -558,6 +558,19 @@ do
     }
     assert(not pcall(lljson.encode, setmetatable({}, bad_tojson_mt)))
 
+    -- Original's __jsontype wins over __tojson result's metatable (both directions)
+    local arr_orig_mt = {
+        __jsontype = "array",
+        __tojson = function() return setmetatable({10, 20}, lljson.object_mt) end,
+    }
+    assert(lljson.encode(setmetatable({}, arr_orig_mt)) == '[10,20]')
+
+    local obj_orig_mt = {
+        __jsontype = "object",
+        __tojson = function() return setmetatable({10, 20}, lljson.array_mt) end,
+    }
+    assert(lljson.encode(setmetatable({}, obj_orig_mt)) == '{"1":10,"2":20}')
+
     -- Invalid __jsontype value errors
     local bad_mt = {__jsontype = "invalid"}
     assert(not pcall(lljson.encode, setmetatable({}, bad_mt)))
