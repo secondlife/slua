@@ -229,6 +229,8 @@ static void validategraylist(global_State* g, GCObject* o)
     while (o)
     {
         LUAU_ASSERT(isgray(o));
+        // ServerLua: fixed non-thread objects must never be on gray lists
+        LUAU_ASSERT(!isfixed(o) || o->gch.tt == LUA_TTHREAD);
 
         switch (o->gch.tt)
         {

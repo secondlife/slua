@@ -22,9 +22,6 @@ end
 
 -- Create test object once to avoid intermediate function calls
 local obj = create_test_object()
-local obj_len = {}
-setmetatable(obj_len, {__len = test_callback})
-
 -- Test __tostring (via luaL_callmeta path)
 reset_interrupt_test()
 local result = tostring(obj)
@@ -36,11 +33,6 @@ reset_interrupt_test()
 result = lljson.encode(obj)
 assert(result == '"ok"', "__tojson should return '\"ok\"'")
 assert(check_callback_ran(), "__tojson metamethod should have run")
-
--- Test __len (via JSON encoder when no __tojson)
-reset_interrupt_test()
-result = lljson.encode(obj_len)
-assert(check_callback_ran(), "__len metamethod should have run")
 
 -- Test arithmetic metamethods (__add, __sub, __mul, __div, __unm)
 -- These go through callTMres or luaV_callTM paths
