@@ -25,7 +25,7 @@ assert(lljson.encode({foo=lljson.null}) == '{"foo":null}')
 assert(lljson.encode(vector(1, 2.5, 22.0 / 7.0)) == '"<1,2.5,3.142857>"')
 assert(lljson.encode(quaternion(1, 2.5, 22.0 / 7.0, 4)) == '"<1,2.5,3.142857,4>"')
 
--- metatables without __jsontype/__tojson are ignored
+-- metatables without __jsonhint/__tojson are ignored
 local SomeMT = {}
 function SomeMT.whatever(...)
     error("Placeholder function called")
@@ -491,96 +491,96 @@ do
 end
 
 -- ============================================
--- __jsontype metamethod
+-- __jsonhint metamethod
 -- ============================================
 do
-    -- Custom metatable with __jsontype = "array"
-    local arr_mt = {__jsontype = "array"}
+    -- Custom metatable with __jsonhint = "array"
+    local arr_mt = {__jsonhint = "array"}
     assert(lljson.encode(setmetatable({}, arr_mt)) == "[]")
     assert(lljson.encode(setmetatable({1, 2, 3}, arr_mt)) == "[1,2,3]")
 
-    -- Custom metatable with __jsontype = "object"
-    local obj_mt = {__jsontype = "object"}
+    -- Custom metatable with __jsonhint = "object"
+    local obj_mt = {__jsonhint = "object"}
     assert(lljson.encode(setmetatable({}, obj_mt)) == "{}")
     assert(lljson.encode(setmetatable({1, 2}, obj_mt)) == '{"1":1,"2":2}')
 
-    -- __jsontype + __index: metamethods used for element access
+    -- __jsonhint + __index: metamethods used for element access
     local proxy_mt = {
-        __jsontype = "array",
+        __jsonhint = "array",
         __len = function() return 3 end,
         __index = function(_, k) return k * 10 end,
     }
     assert(lljson.encode(setmetatable({}, proxy_mt)) == "[10,20,30]")
 
-    -- __jsontype + __len (custom length)
+    -- __jsonhint + __len (custom length)
     local len_mt = {
-        __jsontype = "array",
+        __jsonhint = "array",
         __len = function() return 2 end,
     }
     assert(lljson.encode(setmetatable({10, 20, 30}, len_mt)) == "[10,20]")
 
-    -- __tojson provides content, __jsontype provides shape (orthogonal)
+    -- __tojson provides content, __jsonhint provides shape (orthogonal)
     -- scalar __tojson result: shape is irrelevant
     local scalar_mt = {
-        __jsontype = "object",
+        __jsonhint = "object",
         __tojson = function(self) return self.a end,
     }
     assert(lljson.encode(setmetatable({a = 1}, scalar_mt)) == '1')
 
-    -- table __tojson result + __jsontype = "array": shape applied to result
+    -- table __tojson result + __jsonhint = "array": shape applied to result
     local arr_tojson_mt = {
-        __jsontype = "array",
+        __jsonhint = "array",
         __tojson = function(self) return {self[1] * 10} end,
     }
     assert(lljson.encode(setmetatable({5}, arr_tojson_mt)) == '[50]')
 
     -- __tojson converts string-keyed table to array-compatible result
     local convert_mt = {
-        __jsontype = "array",
+        __jsonhint = "array",
         __tojson = function(self) return {self.x, self.y} end,
     }
     assert(lljson.encode(setmetatable({x = 1, y = 2}, convert_mt)) == '[1,2]')
 
-    -- table __tojson result + __jsontype = "object": shape applied to result
+    -- table __tojson result + __jsonhint = "object": shape applied to result
     local obj_tojson_mt = {
-        __jsontype = "object",
+        __jsonhint = "object",
         __tojson = function() return {1, 2} end,
     }
     assert(lljson.encode(setmetatable({}, obj_tojson_mt)) == '{"1":1,"2":2}')
 
-    -- __jsontype = "array" on table with string keys (no __tojson) -> error
-    assert(not pcall(lljson.encode, setmetatable({x = 1}, {__jsontype = "array"})))
+    -- __jsonhint = "array" on table with string keys: hint ignored, encoded as object
+    assert(lljson.encode(setmetatable({x = 1}, {__jsonhint = "array"})) == '{"x":1}')
 
-    -- __jsontype = "array" + __tojson returning string-keyed table -> error
-    local bad_tojson_mt = {
-        __jsontype = "array",
+    -- __jsonhint = "array" + __tojson returning string-keyed table: hint ignored
+    local fallback_tojson_mt = {
+        __jsonhint = "array",
         __tojson = function() return {x = 1} end,
     }
-    assert(not pcall(lljson.encode, setmetatable({}, bad_tojson_mt)))
+    assert(lljson.encode(setmetatable({}, fallback_tojson_mt)) == '{"x":1}')
 
-    -- Original's __jsontype wins over __tojson result's metatable (both directions)
+    -- Original's __jsonhint wins over __tojson result's metatable (both directions)
     local arr_orig_mt = {
-        __jsontype = "array",
+        __jsonhint = "array",
         __tojson = function() return setmetatable({10, 20}, lljson.object_mt) end,
     }
     assert(lljson.encode(setmetatable({}, arr_orig_mt)) == '[10,20]')
 
     local obj_orig_mt = {
-        __jsontype = "object",
+        __jsonhint = "object",
         __tojson = function() return setmetatable({10, 20}, lljson.array_mt) end,
     }
     assert(lljson.encode(setmetatable({}, obj_orig_mt)) == '{"1":10,"2":20}')
 
-    -- Invalid __jsontype value errors
-    local bad_mt = {__jsontype = "invalid"}
+    -- Invalid __jsonhint value errors
+    local bad_mt = {__jsonhint = "invalid"}
     assert(not pcall(lljson.encode, setmetatable({}, bad_mt)))
 
-    -- Non-string __jsontype value errors
-    assert(not pcall(lljson.encode, setmetatable({}, {__jsontype = 42})))
-    assert(not pcall(lljson.encode, setmetatable({}, {__jsontype = true})))
+    -- Non-string __jsonhint value errors
+    assert(not pcall(lljson.encode, setmetatable({}, {__jsonhint = 42})))
+    assert(not pcall(lljson.encode, setmetatable({}, {__jsonhint = true})))
 
-    -- slencode ignores __jsontype
-    local slen_mt = {__jsontype = "object"}
+    -- slencode ignores __jsonhint
+    local slen_mt = {__jsonhint = "object"}
     assert(lljson.slencode(setmetatable({1, 2}, slen_mt)) == "[1,2]")
     assert(lljson.slencode(setmetatable({}, slen_mt)) == "[]")
 end
@@ -596,8 +596,8 @@ assert(lljson.empty_object ~= lljson.empty_array)
 -- Metatables are shared with array_mt/object_mt
 assert(getmetatable(lljson.empty_array) == lljson.array_mt)
 assert(getmetatable(lljson.empty_object) == lljson.object_mt)
-assert(getmetatable(lljson.empty_array).__jsontype == "array")
-assert(getmetatable(lljson.empty_object).__jsontype == "object")
+assert(getmetatable(lljson.empty_array).__jsonhint == "array")
+assert(getmetatable(lljson.empty_object).__jsonhint == "object")
 
 -- UUID table keys should encode as their string form
 assert(
@@ -657,7 +657,7 @@ local yield_tojson_mt = { __tojson = function(self)
     coroutine.yield()
     return self.val
 end }
-local yield_len_mt = { __jsontype = "array", __len = function(self)
+local yield_len_mt = { __jsonhint = "array", __len = function(self)
     coroutine.yield()
     return self.n
 end, __tojson = function(self)

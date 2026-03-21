@@ -269,7 +269,7 @@ do
     assert(r == '{"x":1}', 'expected {"x":1}, got ' .. r)
 end
 
--- Replacer return's __jsontype determines shape, not the original's (both directions)
+-- Replacer return's __jsonhint determines shape, not the original's (both directions)
 do
     local r = lljson.encode(setmetatable({1, 2, 3}, lljson.object_mt), {replacer = function(key, value)
         if key == nil then return setmetatable({10, 20}, lljson.array_mt) end

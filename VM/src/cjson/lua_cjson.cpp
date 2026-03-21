@@ -1017,28 +1017,28 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
 
         if (has_metatable) {
             if (!cfg->sl_tagged_types) {
-                // ServerLua: Check __jsontype metamethod for shape control
-                lua_rawgetfield(l, -1, "__jsontype");
+                // ServerLua: Check __jsonhint metamethod for shape control
+                lua_rawgetfield(l, -1, "__jsonhint");
                 if (!lua_isnil(l, -1)) {
                     if (!lua_isstring(l, -1))
-                        luaL_error(l, "invalid __jsontype value (expected string)");
-                    const char* jsontype;
-                    jsontype = lua_tostring(l, -1);
-                    if (strcmp(jsontype, "object") == 0) {
+                        luaL_error(l, "invalid __jsonhint value (expected string)");
+                    const char* jsonhint;
+                    jsonhint = lua_tostring(l, -1);
+                    if (strcmp(jsonhint, "object") == 0) {
                         force_object = true;
-                    } else if (strcmp(jsontype, "array") == 0) {
+                    } else if (strcmp(jsonhint, "array") == 0) {
                         as_array = true;
                         raw = false;
                     } else {
-                        luaL_error(l, "invalid __jsontype value: '%s' (expected \"array\" or \"object\")", jsontype);
+                        luaL_error(l, "invalid __jsonhint value: '%s' (expected \"array\" or \"object\")", jsonhint);
                     }
                 }
-                lua_pop(l, 1);  // pop __jsontype (or nil)
+                lua_pop(l, 1);  // pop __jsonhint (or nil)
             }
 
             lua_pop(l, 1);  // pop metatable
 
-            // __tojson provides content, __jsontype provides shape
+            // __tojson provides content, __jsonhint provides shape
             // skip_tojson_once suppresses __tojson for direct replacer returns,
             // This is for symmetry with JS where `toJSON()` is never executed on replacer returns.
             if (!cfg->skip_tojson && !skip_tojson_once && luaL_getmetafield(l, -1, "__tojson")) {
@@ -1066,13 +1066,12 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             }
 
             if (as_array) {
-                // Validate: __jsontype="array" requires all keys to be positive integers
+                // __jsonhint="array" is a soft hint: if the table has non-integer
+                // keys, fall through to auto-detection (unambiguously an object).
                 len = lua_array_length(l, cfg, json, true);
-                if (len < 0)
-                    luaL_error(l, "cannot encode as array: table has non-integer keys");
-
-                // __len overrides the detected length (validation already passed)
-                if (luaL_getmetafield(l, -1, "__len")) {
+                if (len < 0) {
+                    as_array = false;
+                } else if (luaL_getmetafield(l, -1, "__len")) {
                     lua_pushvalue(l, -2);
                     YIELD_CHECK(l, LEN_CHECK, LUA_INTERRUPT_LLLIB);
                     YIELD_CALL(l, 1, 1, LEN_CALL);
@@ -2512,7 +2511,7 @@ static int lua_cjson_new(lua_State *l)
     luaS_fix(luaS_newliteral(l, "track_path"));
     luaS_fix(luaS_newliteral(l, "path"));
     luaS_fix(luaS_newliteral(l, "__tojson"));
-    luaS_fix(luaS_newliteral(l, "__jsontype"));
+    luaS_fix(luaS_newliteral(l, "__jsonhint"));
     luaS_fix(luaS_newliteral(l, "array"));
     luaS_fix(luaS_newliteral(l, "object"));
 
@@ -2532,7 +2531,7 @@ static int lua_cjson_new(lua_State *l)
         lua_pushlightuserdatatagged(l, JSON_ARRAY, LU_TAG_JSON_INTERNAL);
         lua_newtable(l);
         lua_pushliteral(l, "array");
-        lua_setfield(l, -2, "__jsontype");
+        lua_setfield(l, -2, "__jsonhint");
         lua_setreadonly(l, -1, true);
         lua_rawset(l, LUA_REGISTRYINDEX);
 
@@ -2540,7 +2539,7 @@ static int lua_cjson_new(lua_State *l)
         lua_pushlightuserdatatagged(l, JSON_OBJECT, LU_TAG_JSON_INTERNAL);
         lua_newtable(l);
         lua_pushliteral(l, "object");
-        lua_setfield(l, -2, "__jsontype");
+        lua_setfield(l, -2, "__jsonhint");
         lua_setreadonly(l, -1, true);
         lua_rawset(l, LUA_REGISTRYINDEX);
     } else {
