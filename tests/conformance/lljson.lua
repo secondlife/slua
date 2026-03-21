@@ -504,20 +504,13 @@ do
     assert(lljson.encode(setmetatable({}, obj_mt)) == "{}")
     assert(lljson.encode(setmetatable({1, 2}, obj_mt)) == '{"1":1,"2":2}')
 
-    -- __jsonhint + __index: metamethods used for element access
+    -- __index and __len are NOT consulted during encode: raw values and length are used
     local proxy_mt = {
         __jsonhint = "array",
-        __len = function() return 3 end,
-        __index = function(_, k) return k * 10 end,
+        __index = function(_, k) return k * 100 end,
+        __len = function() return 1 end,
     }
-    assert(lljson.encode(setmetatable({}, proxy_mt)) == "[10,20,30]")
-
-    -- __jsonhint + __len (custom length)
-    local len_mt = {
-        __jsonhint = "array",
-        __len = function() return 2 end,
-    }
-    assert(lljson.encode(setmetatable({10, 20, 30}, len_mt)) == "[10,20]")
+    assert(lljson.encode(setmetatable({1, 2, 3}, proxy_mt)) == '[1,2,3]')
 
     -- __tojson provides content, __jsonhint provides shape (orthogonal)
     -- scalar __tojson result: shape is irrelevant
@@ -657,14 +650,6 @@ local yield_tojson_mt = { __tojson = function(self)
     coroutine.yield()
     return self.val
 end }
-local yield_len_mt = { __jsonhint = "array", __len = function(self)
-    coroutine.yield()
-    return self.n
-end, __tojson = function(self)
-    local t = {}
-    for i = 1, self.n do t[i] = self[i] end
-    return t
-end }
 
 -- encode flat array: exercises ELEMENT/NEXT_ELEMENT yield path
 assert(consume(function()
@@ -731,17 +716,12 @@ consume(function()
     assert(t.pos == vector(1, 2, 3) and t.id == uuid("12345678-1234-1234-1234-123456789abc"))
 end)
 
--- __len that yields: exercises LEN_CHECK/LEN_CALL yield path
-assert(consume_nocheck(function()
-    return lljson.encode(setmetatable({10, 20, 30, n = 3}, yield_len_mt))
-end) == "[10,20,30]")
-
--- deeply nested encode: arrays of objects of arrays with __tojson and __len at multiple levels
+-- deeply nested encode: arrays of objects of arrays with __tojson at multiple levels
 consume_nocheck(function()
     local r = lljson.encode({
         items = {
             {name = "a", tags = {1, 2, 3}},
-            {name = "b", tags = setmetatable({10, 20, n = 2}, yield_len_mt)},
+            {name = "b", tags = {10, 20}},
             {name = "c", custom = setmetatable({val = "hello"}, yield_tojson_mt)},
         },
         meta = {

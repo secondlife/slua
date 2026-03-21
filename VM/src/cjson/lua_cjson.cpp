@@ -440,7 +440,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                                        bool skip_tojson_once = false);
 static void json_append_array(lua_State* l, SlotManager& parent_slots,
                                          json_config_t* cfg, int current_depth,
-                                         strbuf_t* json, int array_length, int raw);
+                                         strbuf_t* json, int array_length);
 static void json_append_object(lua_State* l, SlotManager& parent_slots,
                                           json_config_t* cfg, int current_depth, strbuf_t* json);
 
@@ -453,7 +453,7 @@ static strbuf_t* json_get_strbuf(lua_State* l)
 
 static void json_append_array(lua_State* l, SlotManager& parent_slots,
                                          json_config_t* cfg, int current_depth,
-                                         strbuf_t* json, int array_length, int raw)
+                                         strbuf_t* json, int array_length)
 {
     YIELDABLE_RETURNS_VOID;
     enum class Phase : uint8_t
@@ -492,12 +492,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
     for (; i <= array_length; ++i) {
         replacer_removed = false;
 
-        if (raw) {
-            lua_rawgeti(l, -1, i);
-        } else {
-            lua_pushinteger(l, i);
-            lua_gettable(l, -2);
-        }
+        lua_rawgeti(l, -1, i);
         /* table, value */
 
         if (cfg->has_replacer) {
@@ -957,16 +952,13 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
         APPEND_ARRAY_AUTO = 5,
         APPEND_ARRAY_LUD = 6,
         TOJSON_CHECK = 7,
-        LEN_CHECK = 8,
-        LEN_CALL = 9,
-        APPEND_OBJECT_MT = 10,
+        APPEND_OBJECT_MT = 8,
     };
 
     SlotManager slots(parent_slots);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, depth, current_depth);
     DEFINE_SLOT(int32_t, array_length, 0);
-    DEFINE_SLOT(bool, raw, true);
     DEFINE_SLOT(uint8_t, type, LUA_TNIL);
     DEFINE_SLOT(bool, as_array, false);
     DEFINE_SLOT(bool, force_object, false);
@@ -984,8 +976,6 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
     YIELD_DISPATCH(TOJSON_RECURSE);
     YIELD_DISPATCH(APPEND_ARRAY_AUTO);
     YIELD_DISPATCH(APPEND_ARRAY_LUD);
-    YIELD_DISPATCH(LEN_CHECK);
-    YIELD_DISPATCH(LEN_CALL);
     YIELD_DISPATCH(APPEND_OBJECT_MT);
     YIELD_DISPATCH_END();
 
@@ -1028,7 +1018,6 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                         force_object = true;
                     } else if (strcmp(jsonhint, "array") == 0) {
                         as_array = true;
-                        raw = false;
                     } else {
                         luaL_error(l, "invalid __jsonhint value: '%s' (expected \"array\" or \"object\")", jsonhint);
                     }
@@ -1071,12 +1060,6 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                 len = lua_array_length(l, cfg, json, true);
                 if (len < 0) {
                     as_array = false;
-                } else if (luaL_getmetafield(l, -1, "__len")) {
-                    lua_pushvalue(l, -2);
-                    YIELD_CHECK(l, LEN_CHECK, LUA_INTERRUPT_LLLIB);
-                    YIELD_CALL(l, 1, 1, LEN_CALL);
-                    array_length = lua_tonumber(l, -1);
-                    lua_pop(l, 1);
                 } else {
                     array_length = len;
                 }
@@ -1085,14 +1068,14 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
 
         if (as_array) {
             YIELD_HELPER(l, APPEND_ARRAY,
-                json_append_array(l, slots, cfg, depth, json, array_length, raw));
+                json_append_array(l, slots, cfg, depth, json, array_length));
         } else {
             len = lua_array_length(l, cfg, json, cfg->allow_sparse);
 
             if (len >= 0) {
                 array_length = len;
                 YIELD_HELPER(l, APPEND_ARRAY_AUTO,
-                    json_append_array(l, slots, cfg, depth, json, array_length, raw));
+                    json_append_array(l, slots, cfg, depth, json, array_length));
             } else {
                 YIELD_HELPER(l, APPEND_OBJECT,
                     json_append_object(l, slots, cfg, depth, json));
@@ -1115,7 +1098,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                 break;
             } else if (json_internal_val == JSON_ARRAY) {
                 YIELD_HELPER(l, APPEND_ARRAY_LUD,
-                    json_append_array(l, slots, cfg, depth, json, 0, 1));
+                    json_append_array(l, slots, cfg, depth, json, 0));
                 break;
             }
         } else if (lua_tolightuserdatatagged(l, -1, LU_TAG_LSL_INTEGER) != nullptr) {
