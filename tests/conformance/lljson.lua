@@ -716,6 +716,14 @@ consume(function()
     assert(t.pos == vector(1, 2, 3) and t.id == uuid("12345678-1234-1234-1234-123456789abc"))
 end)
 
+-- allow_sparse preserved across yields
+consume_nocheck(function()
+    local sparse = {}
+    sparse[200] = 1
+    local r = lljson.encode(sparse, {allow_sparse = true})
+    assert(r == `[{string.rep("null,", 199)}1]`)
+end)
+
 -- deeply nested encode: arrays of objects of arrays with __tojson at multiple levels
 consume_nocheck(function()
     local r = lljson.encode({
