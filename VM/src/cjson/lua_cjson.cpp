@@ -1224,6 +1224,8 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
             lua_pop(l, 1);
             lua_rawgetfield(l, 3, "replacer");
             if (!lua_isfunction(l, -1)) {
+                if (!lua_isnil(l, -1))
+                    luaL_error(l, "'replacer' must be a function");
                 lua_pop(l, 1);
                 lua_pushnil(l);
             }
@@ -2326,6 +2328,8 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
 
             lua_rawgetfield(l, 3, "reviver");
             if (!lua_isfunction(l, -1)) {
+                if (!lua_isnil(l, -1))
+                    luaL_error(l, "'reviver' must be a function");
                 lua_pop(l, 1);
                 lua_pushnil(l);
             }

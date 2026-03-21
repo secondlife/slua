@@ -443,6 +443,8 @@ assert(lljson.slencode(42) == "42")
 assert(not pcall(lljson.encode, 1, "string"))
 assert(not pcall(lljson.slencode, 1, "string"))
 assert(not pcall(lljson.slencode, 1, true))
+assert(not pcall(lljson.encode, {}, {replacer = "oops"}))
+assert(not pcall(lljson.decode, "[]", {reviver = "oops"}))
 
 -- sldecode does not set metatables (slencode ignores them, so attaching would be dishonest)
 do
