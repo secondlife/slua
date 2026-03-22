@@ -30,9 +30,6 @@ void luaL_openlibs(lua_State* L)
         lua_pushstring(L, lib->name);
         lua_call(L, 1, 0);
     }
-
-    // ServerLua: Register the UTAG_STRBUF GC destructor.
-    luaYB_setup(L);
 }
 
 void luaL_sandbox(lua_State* L)

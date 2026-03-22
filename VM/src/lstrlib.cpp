@@ -7,6 +7,7 @@
 
 // ServerLua: yieldable pattern-matching replacements.
 #include "lyieldstrlib.h"
+#include "lstrbuf.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -1713,6 +1714,9 @@ int luaopen_string(lua_State* L)
     lua_setfield(L, -2, "gsub");
 
     createmetatable(L);
+
+    // ServerLua: Register the UTAG_STRBUF GC destructor.
+    luaYB_setup(L);
 
     return 1;
 }
