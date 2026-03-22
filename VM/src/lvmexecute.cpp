@@ -2733,7 +2733,7 @@ reentry:
                     // ServerLua: Phase 2 — re-entry after iterator returned (from RET or
                     // continuation resume). Results are already at ra+3; copy first result
                     // to iteration index and branch.
-                    if (L->ci->flags & LUA_CALLINFO_INSN_SUSPENDED)
+                    if (LUAU_UNLIKELY(L->ci->flags & LUA_CALLINFO_INSN_SUSPENDED))
                     {
                         L->ci->flags &= ~LUA_CALLINFO_INSN_SUSPENDED;
                         ra = VM_REG(LUAU_INSN_A(insn));
