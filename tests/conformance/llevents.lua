@@ -292,4 +292,16 @@ end
 
 assert(lljson.encode(yield_order) == "[1,2]")
 
+-- Make sure that the :adjustDamage()
+local damage_triggered = false
+LLEvents:once('on_damage', function(detected)
+    local ev = detected[5]
+    -- Just check that this doesn't fail
+    ev:adjustDamage(0)
+    assert(ev.canAdjustDamage == true)
+    damage_triggered = true
+end)
+LLEvents:_handleEvent("on_damage", 7)
+assert(damage_triggered)
+
 return 'OK'

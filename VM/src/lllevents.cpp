@@ -93,7 +93,7 @@ static int detected_event_adjust_damage(lua_State *L)
 
     double damage = luaL_checknumber(L, 2);
 
-    lua_getglobal(lua_mainthread(L), "ll");
+    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "ll");
     lua_rawgetfield(L, -1, "AdjustDamage");
     lua_pushinteger(L, detected_event->index);
     lua_pushnumber(L, damage);

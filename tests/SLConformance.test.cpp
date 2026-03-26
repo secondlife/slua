@@ -837,6 +837,11 @@ TEST_CASE("Ares Scavenger")
     runConformance("ares_scavenger.lua");
 }
 
+static const luaL_Reg test_ll_events_lib[] = {
+    {"AdjustDamage", [](lua_State *L) {return 0;}},
+    {nullptr, nullptr}
+};
+
 TEST_CASE("LLEvents")
 {
     runConformance("llevents.lua", nullptr, [](lua_State *L) {
@@ -851,6 +856,8 @@ TEST_CASE("LLEvents")
             }
             return true;
         };
+
+        luaL_register_noclobber(L, LUA_LLLIBNAME, test_ll_events_lib);
     });
 }
 
