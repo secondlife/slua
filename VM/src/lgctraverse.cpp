@@ -23,7 +23,7 @@
 typedef struct ReachableContext
 {
     std::queue<GCObject*> queue;
-    std::unordered_set<void*> visited;
+    std::unordered_set<const void*> visited;
 } ReachableContext;
 
 static void enqueueobj(ReachableContext* ctx, GCObject* obj)
@@ -285,7 +285,7 @@ static size_t calctruegcosize(GCObject *obj)
 // In a lot of ways, the logical size of allocations leaks into the API contract in SL.
 // This isn't ideal, since the sizes of structs and pointers can vary based on padding,
 // the platform, and the bitness of the platform.
-static size_t calcgcosize(GCObject *obj)
+size_t luaC_calclogicalgcosize(GCObject *obj)
 {
     // These are either arbitrary or based on 32-bit x86 sizes.
     constexpr size_t BASE_STRING_COST = 16;
@@ -404,7 +404,7 @@ void luaC_enumreachableuserallocs(
 
         // Call the user-provided traversal callback
         if (current->gch.memcat >= LUA_FIRST_USER_MEMCAT)
-            node(context, current, current->gch.tt, current->gch.memcat, calcgcosize(current));
+            node(context, current, current->gch.tt, current->gch.memcat, luaC_calclogicalgcosize(current));
 
         // Take any new references the current node has and add them to the queue
         traverseobj(&ctx, current);
@@ -416,13 +416,21 @@ lua_OpaqueGCObjectSet luaC_collectfreeobjects(lua_State* L)
     lua_OpaqueGCObjectSet free_objects;
     ReachableContext ctx;
 
-    ctx.queue.push(obj2gco(L));
+    const auto *gt_gco = obj2gco(L->gt);
+
     ctx.visited.insert(obj2gco(L));
+
+    traverseobj(&ctx, obj2gco(L));
 
     while (!ctx.queue.empty())
     {
         GCObject* current = ctx.queue.front();
         ctx.queue.pop();
+
+        // Don't try to mark the globals table for the user's root thread as free,
+        // and don't even bother traversing it
+        if (current == gt_gco)
+            continue;
 
         // Collect user memcat objects into the set
         if (current->gch.memcat >= LUA_FIRST_USER_MEMCAT)

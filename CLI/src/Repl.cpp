@@ -175,6 +175,20 @@ static int lua_collectgarbage(lua_State* L)
     luaL_error(L, "collectgarbage must be called with 'count' or 'collect'");
 }
 
+static int lua_graphheap_wrapper(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    lua_graphheap(replState, path);
+    return 0;
+}
+
+static int lua_graphuserheap_wrapper(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    lua_graphuserheap(replState, path, nullptr);
+    return 0;
+}
+
 #ifdef CALLGRIND
 static int lua_callgrind(lua_State* L)
 {
@@ -281,6 +295,8 @@ void setupState(lua_State* L)
     static const luaL_Reg funcs[] = {
         {"loadstring", lua_loadstring},
         {"collectgarbage", lua_collectgarbage},
+        {"graphheap", lua_graphheap_wrapper},
+        {"graphuserheap", lua_graphuserheap_wrapper},
 #ifdef CALLGRIND
         {"callgrind", lua_callgrind},
 #endif
@@ -665,22 +681,12 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
 
     // module needs to run in a new thread, isolated from the rest
     lua_State* L = lua_newthread(GL);
+    replState = L;
 
     lua_setmemcat(GL, 0);
 
     // new thread needs to have the globals sandboxed
     luaL_sandboxthread(L);
-
-    if (sl)
-    {
-        luaSL_createeventmanager(L);
-        lua_ref(L, -1);
-        lua_pushvalue(L, -1);
-        lua_setglobal(L, "LLEvents");
-        luaSL_createtimermanager(L);
-        lua_ref(L, -1);
-        lua_setglobal(L, "LLTimers");
-    }
 
     std::string chunkname = "@" + normalizePath(name);
 
@@ -705,10 +711,25 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     }
     int status = 0;
 
-    lua_setmemcat(L, 0);
     if (luau_load(L, chunkname.c_str(), bytecode.data(), bytecode.size(), 0) == 0)
     {
-        lua_setmemcat(L, LUA_FIRST_USER_MEMCAT);
+        replFreeObjects = lua_collectfreeobjects(L);
+        // The thread and its globals table are per-script state, not free, even though
+        // they were already on the stack.
+        replFreeObjects.erase(lua_topointer(L, LUA_GLOBALSINDEX));
+        replFreeObjects.erase((const void*)L);
+        replBytecodeSize = bytecode.size();
+
+        if (sl)
+        {
+            luaSL_createeventmanager(L);
+            lua_ref(L, -1);
+            lua_pushvalue(L, -1);
+            lua_setglobal(L, "LLEvents");
+            luaSL_createtimermanager(L);
+            lua_ref(L, -1);
+            lua_setglobal(L, "LLTimers");
+        }
         if (codegen)
         {
             Luau::CodeGen::CompilationOptions nativeOptions;

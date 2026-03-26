@@ -2153,6 +2153,11 @@ void lua_graphheap(lua_State *L, const char *out)
     luaX_graphheap(L, out);
 }
 
+void lua_graphuserheap(lua_State *L, const char *out, const lua_OpaqueGCObjectSet *free_objects)
+{
+    luaX_graphuserheap(L, out, free_objects);
+}
+
 void lua_gcvalidate(lua_State *L)
 {
     luaC_validate(L);

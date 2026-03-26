@@ -160,7 +160,7 @@ typedef int lua_Integer;
 typedef unsigned lua_Unsigned;
 
 // ServerLua: opaque set of GC object pointers for per-script memory accounting
-typedef std::unordered_set<void*> lua_OpaqueGCObjectSet;
+typedef std::unordered_set<const void*> lua_OpaqueGCObjectSet;
 
 /*
 ** state manipulation
@@ -425,6 +425,7 @@ LUA_API lua_Alloc lua_getallocf(lua_State* L, void** ud);
 // ServerLua: GC additions
 LUA_API void lua_fixallcollectable(lua_State *L);
 LUA_API void lua_graphheap(lua_State *L, const char *out);
+LUA_API void lua_graphuserheap(lua_State *L, const char *out, const lua_OpaqueGCObjectSet *free_objects);
 LUA_API void lua_dumpgc(lua_State *L, const char *out);
 LUA_API void lua_gcvalidate(lua_State *L);
 // Add utility for marking something on the stack as being un-collectable

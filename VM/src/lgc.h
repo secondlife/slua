@@ -151,5 +151,7 @@ LUAI_FUNC void luaC_enumreachableuserallocs(
     const lua_OpaqueGCObjectSet* free_objects
 );
 LUAI_FUNC lua_OpaqueGCObjectSet luaC_collectfreeobjects(lua_State* L);
+LUAI_FUNC size_t luaC_calclogicalgcosize(GCObject* obj);
+
 LUAI_FUNC int64_t luaC_allocationrate(lua_State* L);
 LUAI_FUNC const char* luaC_statename(int state);
