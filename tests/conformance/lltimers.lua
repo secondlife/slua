@@ -135,6 +135,10 @@ local success, err = pcall(function()
 end)
 assert(success == false)
 
+-- Test NaN interval
+assert_errors(function() LLTimers:every(0/0, function() end) end, "timer interval must be a positive number or 0")
+assert_errors(function() LLTimers:once(0/0, function() end) end, "timer interval must be a positive number or 0")
+
 -- Test zero interval (0 means "ASAP" and is valid)
 timer1_count = 0
 local function zero_interval_handler()
