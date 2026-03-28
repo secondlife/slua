@@ -407,6 +407,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
                             return 1;
                         }
                         memset(quat, 0, sizeof(float) * 4);
+                        quat[3] = 1.0f;
                     }
                     luaSL_pushquaternion(L, quat[0], quat[1], quat[2], quat[3]);
                     return 1;

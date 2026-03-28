@@ -523,6 +523,7 @@ tests()
     ensureFloatEqual("((float) \"1.5\")", ((float) "1.5"), 1.5);
     ensureVectorEqual("((vector) \"<1,2,3>\")", ((vector) "<1,2,3>"), <1,2,3>);
     ensureRotationEqual("((quaternion) \"<1,2,3,4>\")", ((quaternion) "<1,2,3,4>"), <1,2,3,4>);
+    ensureRotationEqual("((quaternion) \"foo\")", ((quaternion) "foo"), ZERO_ROTATION);
     ensureStringEqual("((string) <1,2,3>)", ((string) <1,2,3>), "<1.00000, 2.00000, 3.00000>");
     ensureStringEqual("((string) <1,2,3,4>)", ((string) <1,2,3,4>), "<1.00000, 2.00000, 3.00000, 4.00000>");
     ensureStringEqual("((string) [1,2.5,<1,2,3>])", ((string) [1,2.5,<1,2,3>]), "12.500000<1.000000, 2.000000, 3.000000>");
