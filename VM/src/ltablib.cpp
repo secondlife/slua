@@ -263,10 +263,14 @@ static int tappend(lua_State* L)
 // so it makes sense to provide as a first-class member of the stdlib.
 static int textend(lua_State* L)
 {
-    lua_checkstack(L, 6);
-
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TTABLE);
+
+    // ignore further arguments
+    lua_settop(L, 2);
+
+    lua_checkstack(L, 6);
+
     int dn = lua_objlen(L, 1);
     int sn = lua_objlen(L, 2);
 

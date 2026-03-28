@@ -860,6 +860,11 @@ do
   -- Returns destination table
   local t6 = {1, 2}
   assert(table.extend(t6, {3, 4}) == t6)
+
+  -- Extra args ignored
+  local t7 = {1, 2}
+  assert(table.extend(t7, {3,4}, {5,6}, {7,8}) == t7)
+  assert(table.concat(t7, ',') == "1,2,3,4")
 end
 
-return"OK"
+return "OK"
