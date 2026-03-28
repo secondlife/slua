@@ -81,6 +81,8 @@ default
         checkTruth("huge indices2", (string)llList2List(NUMBERS, 201, 200) == "0123456789");
         checkTruth("huge indices3", (string)llList2List(NUMBERS, 1, 200) == "123456789");
         checkTruth("llDumpList2String", llDumpList2String(l, "|") == "1|1.100000|foo|00000000-0000-0000-0000-000000000000|<1.000000, 2.000000, 3.000000>|<1.000000, 2.000000, 3.000000, 4.000000>");
+        checkTruth("llDumpList2String", llDumpList2String([], "|") == "");
+        checkTruth("llDumpList2String", llDumpList2String([1], "|") == "1");
 
         list nums = [1, 2, 3, 4, 5, 6];
         checkTruth("deletelist1", (string)llDeleteSubList(nums, 1, 2) == "1456");

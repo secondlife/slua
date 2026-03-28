@@ -7,6 +7,7 @@
 #include "ltable.h"
 #include "lapi.h"
 #include "llsl.h"
+#include "lstrbuf.h"
 #include "mono_strings.h"
 #include "lgcgraph.h"
 
@@ -392,22 +393,19 @@ static int ll_dumplist2string(lua_State *L)
         return 1;
     }
 
-    lua_checkstack(L, 4);
+    const char *sep = nullptr;
+    size_t sep_size = 0;
+    sep = lua_tolstring(L, 2, &sep_size);
 
-    // Assume at least 1 character per item + separator length for our initial capacity.
-    // This is essentially a minimum but gets us in the right ballpark without counting everything
-    // StringBuilder will allocate more as needed.
-    // Set the max capacity to 64k (the max script size) + a little slop.
-    static const int max_size = 65 * 1024;
-    bool first = true;
-    lua_pushstring(L, "");
+    lua_checkstack(L, 5);
+
+    auto *strbuf = luaYB_push(L);
     for(int i=0; i<len; ++i)
     {
-        if (first)
-            lua_pushstring(L, "");
-        else
-            lua_pushvalue(L, 2);
-        first = false;
+        if (i != 0)
+        {
+            luaYB_appendmem(L, strbuf, sep, sep_size);
+        }
 
         // Unlike (string)list_val, this doesn't keep negative zero.
         lua_pushcfunction(L, lsl_cast_list_elem_poszero, "lsl_cast_list_elem_poszero");
@@ -418,13 +416,10 @@ static int ll_dumplist2string(lua_State *L)
         if (lua_type(L, -1) == LUA_TNIL)
             luaL_errorL(L, "non-LSL value in list");
 
-        lua_concat(L, 3);
-        if (lua_strlen(L, 3) > max_size)
-        {
-            luaD_throw(L, LUA_ERRMEM);
-        }
+        luaYB_addvalue(L, strbuf);
     }
 
+    luaYB_pushresult(L, strbuf);
     return 1;
 }
 
