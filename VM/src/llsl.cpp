@@ -598,6 +598,7 @@ static int lsl_table_concat(lua_State *L)
     if (lua_type(L, 1) != LUA_TTABLE && lua_type(L, 2) != LUA_TTABLE)
         luaL_errorL(L, "At least one argument must be a table");
 
+    lua_settop(L, 2);
     lua_checkstack(L, 4);
 
     // Note: reversed because of LSL evaluation order!
