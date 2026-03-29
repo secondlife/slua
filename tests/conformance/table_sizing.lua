@@ -265,6 +265,22 @@ table.shrink(t, true)
 -- Falls back to max_used_idx since boundary shrink would grow table
 check_sizes(t, 52, 0, "shrink_sparse fallback - boundary too expensive")
 
+-- shrink_sparse with large hash and few sparse elements doesn't OOM
+-- When hash capacity wouldn't change, elements are inserted directly without resize
+t = {}
+for i = 1, 16 do t[i] = i end
+for i = 1, 1025 do t[`k{i}`] = i end
+for i = 2, 15 do t[i] = nil end
+-- boundary=0, max_used_idx=16, hash=1025 in 2048-capacity node
+assert(#t == 16, "len before shrink")
+table.shrink(t, true)
+-- Sparse element t[16] moves to hash, array shrinks to 1 (preserving first elem)
+check_sizes(t, 1, 2048, "shrink_sparse without hash resize")
+assert(t[16] == 16, "sparse element preserved")
+assert(t[1] == 1, "left element preserved")
+assert(t.k1 == 1, "hash element preserved")
+assert(#t == 1, "boundary correct after sparse elements moved to hash")
+
 -- Idempotent - second shrink is no-op
 t = make_array(1000)
 for i = 501, 1000 do t[i] = nil end

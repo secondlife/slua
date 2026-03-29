@@ -1063,17 +1063,14 @@ void luaH_overrideiterorder(lua_State* L, LuaTable* t, int override)
 }
 
 // ServerLua: shrink table to optimal size
+// If shrink_sparse=false (default), elements stay in their current part (array or hash).
+// If shrink_sparse=true, sparse array elements beyond boundary may move to hash to save memory.
 void luaH_shrink(lua_State* L, LuaTable* t, bool shrink_sparse)
 {
-    // Shrink table to reduce memory usage.
-    // If shrink_sparse=false (default), elements stay in their current part (array or hash).
-    // If shrink_sparse=true, sparse array elements beyond boundary may move to hash to save memory.
-
-    // No-op for empty tables
-    if (!t->sizearray && !t->lsizenode)
+    if (!t->sizearray && t->node == dummynode)
         return;
 
-    // Scan array: find boundary, max used index, and count sparse elements
+    // Determine array / node occupancy and sparsity
     int boundary = 0;
     int max_used_idx = 0;
     int sparse_count = 0;
@@ -1089,52 +1086,53 @@ void luaH_shrink(lua_State* L, LuaTable* t, bool shrink_sparse)
         }
     }
 
-    // Count hash elements
-    int hash_count = 0;
-    int orig_sizenode = sizenode(t);
-    for (int i = 0; i < orig_sizenode; ++i)
+    int orig_hcount = 0;
+    int orig_hcap = (t->node == dummynode) ? 0 : sizenode(t);
+    for (int i = 0; i < orig_hcap; ++i)
     {
         if (!ttisnil(gval(gnode(t, i))))
-            hash_count++;
+            orig_hcount++;
     }
 
-    // If shrink_sparse, try shrinking array to boundary and moving sparse elements to hash
+    // Determine ideal array / node size given our preferences
+    int target_asize = max_used_idx;
+    int target_hcount = orig_hcount;
+
+    // With shrink_sparse, check if moving sparse array elements to hash saves memory.
     if (shrink_sparse && sparse_count > 0)
     {
-        // We're allowed to move things to the hash part of the table, check if it would be cheaper
-        // memory-wise to do that than it would be for us to just shrink array and node to their minimum
-        // required capacities.
-        // Cost in `TValue`-equivalents: array slots cost 1, hash slots cost 2 (LuaNode is 2x TValue)
-        int new_hash_count = hash_count + sparse_count;
-        // hash portion resizes in pow2 increments, sometimes putting things in the hash is basically
-        // free if we're already using it.
-        int sparse_hash_capacity = 1 << ceillog2(new_hash_count);
-        int keep_hash_capacity = hash_count == 0 ? 0 : (1 << ceillog2(hash_count));
-        int sparse_cost = boundary + (2 * sparse_hash_capacity);
-        int keep_cost = max_used_idx + (2 * keep_hash_capacity);
+        // Cost in TValue-equivalents: array slots cost 1, hash nodes cost 2 (LuaNode is 2x TValue).
+        // Hash resizes in pow2 increments, so absorbing sparse elements is sometimes free.
+        int new_hash_count = orig_hcount + sparse_count;
+        int sparse_hash_cap = 1 << ceillog2(new_hash_count);
+        int keep_hash_cap = orig_hcount == 0 ? 0 : (1 << ceillog2(orig_hcount));
+        int sparse_cost = boundary + (2 * sparse_hash_cap);
+        int keep_cost = max_used_idx + (2 * keep_hash_cap);
 
-        // Would this be smaller memory-wise if we moved some things to the hash portion?
+        // Would moving these cost less than keeping them where they are?
         if (sparse_cost < keep_cost)
         {
-            resize(L, t, boundary, new_hash_count);
-            return;
+            target_asize = boundary;
+            target_hcount = new_hash_count;
         }
     }
 
-    // Compute actual new hash capacity to avoid rebuilds that can't shrink
-    bool array_shrinks = max_used_idx < t->sizearray;
-    int new_node_capacity = hash_count == 0 ? 0 : twoto(ceillog2(hash_count));
-    bool hash_shrinks = new_node_capacity < orig_sizenode;
+    int target_hcap = target_hcount == 0 ? 0 : twoto(ceillog2(target_hcount));
 
+    bool array_shrinks = target_asize < t->sizearray;
+    bool hash_shrinks = target_hcap != orig_hcap || target_hcount > orig_hcount;
     if (hash_shrinks)
     {
-        // Hash genuinely shrinks (possibly array too), full resize needed
-        resize(L, t, max_used_idx, hash_count);
+        resize(L, t, target_asize, target_hcount);
     }
     else if (array_shrinks)
     {
-        // Only array needs shrinking. All elements past max_used_idx are nil
-        // so no elements move to hash, plain array realloc suffices.
-        setarrayvector(L, t, max_used_idx);
+        setarrayvector(L, t, target_asize);
+    }
+
+    // We have to invalidate the boundary if we've resized the array, it's end-relative
+    if (array_shrinks)
+    {
+        t->aboundary = 0;
     }
 }
