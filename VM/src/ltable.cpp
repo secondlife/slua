@@ -406,6 +406,34 @@ static void setarrayvector(lua_State* L, LuaTable* t, int size)
     t->sizearray = size;
 }
 
+// ServerLua: Time for dirty tricks to make it so we can treat this as if it's
+//  realloc-like from a user's perspective. If we create a new array while `t->node`
+//  is still reachable from the root, the user temporarily needs enough memory for
+//  both the original node vector and its new version.
+struct NodeUnrooter
+{
+    LuaTable *mT;
+    LuaNode *mOrigNode;
+    int mOrigSize;
+
+    NodeUnrooter(LuaTable *t): mT(t), mOrigNode(t->node), mOrigSize(t->lsizenode)
+    {
+        t->node = cast_to(LuaNode*, dummynode);
+        t->lsizenode = 0;
+    }
+    ~NodeUnrooter()
+    {
+        // If it's still dummynode, then we probably threw when allocating.
+        // We would certainly never get `dummynode` back from `luaM_newarray()`.
+        // Put the original size and nodes back so we're exception-safe.
+        if (mT->node == dummynode)
+        {
+            mT->lsizenode = mOrigSize;
+            mT->node = mOrigNode;
+        }
+    }
+};
+
 static void setnodevector(lua_State* L, LuaTable* t, int size)
 {
     int lsize;
@@ -421,7 +449,14 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
         if (lsize > MAXBITS)
             luaG_runerror(L, "table overflow");
         size = twoto(lsize);
-        t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+
+        // ServerLua: Temporarily stub out `t->node` while we create the new one,
+        // putting things back if we throw in the alloc.
+        {
+            [[maybe_unused]] NodeUnrooter _unrooter(t);
+            t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+        }
+
         for (i = 0; i < size; i++)
         {
             LuaNode* n = gnode(t, i);
