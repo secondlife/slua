@@ -419,7 +419,9 @@ static int ll_dumplist2string(lua_State *L)
         luaYB_addvalue(L, strbuf);
     }
 
-    luaYB_pushresult(L, strbuf);
+    // Atomically replace the string buffer on the stack with its new TString equivalent
+    lua_settop(L, 3);
+    luaYB_tostring(L, 3, true);
     return 1;
 }
 
