@@ -690,9 +690,15 @@ bool LuauVisitor::visit(LSLDoStatement * do_stmt)
         [[maybe_unused]] RegScope expr_scope(this);
         expr_reg = evalExprToSourceReg(do_stmt->getCheckExpr());
     }
-    // run the check expression, exiting the loop if it fails
+    // If the check expression is false, then jump over the back edge jumpback
+    // We don't need to patch this since the jump target is constant relative to this op.
+    // This is necessary so that we still get the checks we'd expect from a
+    // LOP_JUMPBACK.
+    mBuilder->emitAD(LOP_JUMPIFNOT, expr_reg, 1);
+
+    // Do the jump back to start
     auto jump_to_start = mBuilder->emitLabel();
-    mBuilder->emitAD(LOP_JUMPIF, expr_reg, 0);
+    mBuilder->emitAD(LOP_JUMPBACK, 0, 0);
     patchJumpOrThrow(jump_to_start, jump_to_start_label);
 
     return false;
