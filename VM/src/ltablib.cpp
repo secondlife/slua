@@ -422,7 +422,10 @@ static constexpr int SORT_YIELD_BUDGET = 512;
     else                                                                                         \
     {                                                                                            \
         int _sa = t->sizearray;                                                                  \
+        /* ServerLua: guard nCcalls so __lt metamethods can't yield from this context */          \
+        ++L->nCcalls;                                                                            \
         cmp_var = luaV_lessthan(L, &t->array[i_idx], &t->array[j_idx]);                         \
+        --L->nCcalls;                                                                            \
         if (t->sizearray != _sa)                                                                 \
             luaL_error(L, "table modified during sorting");                                      \
     }
@@ -819,7 +822,11 @@ DEFINE_YIELDABLE(tfind, 0)
 
         StkId v = L->base + 2;
 
-        if (equalobj(L, v, e))
+        // ServerLua: guard nCcalls so __eq metamethods can't yield from this context
+        ++L->nCcalls;
+        bool eq = equalobj(L, v, e);
+        --L->nCcalls;
+        if (eq)
         {
             lua_pushinteger(L, i);
             return 1;

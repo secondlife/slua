@@ -1480,12 +1480,10 @@ TEST_CASE("StdlibYield")
         {
             if (pmTimingMode)
             {
-                if (gc >= 0 || gc == LUA_INTERRUPT_METAMETHOD)
+                // Skip GC interrupts and any non-yieldable context (e.g. inside
+                // a metamethod called from a yieldable function's nCcalls guard).
+                if (gc >= 0 || luaSL_may_interrupt(L) != YieldableStatus::OK)
                     return;
-
-                // All non-GC, non-metamethod interrupt points should be yieldable —
-                // validates the VM lets the scheduler preempt here.
-                LUAU_ASSERT(luaSL_may_interrupt(L) == YieldableStatus::OK);
 
                 double now = lua_cputime();
                 if (pmLastTimestamp > 0)

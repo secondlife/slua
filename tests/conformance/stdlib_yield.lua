@@ -189,6 +189,27 @@ assert(not pcall(string.find, "a", string.rep("()", 33)))
 -- pattern too complex: 201 quantifiers exceed LUAI_MAXCCALLS (200) backtrack frames
 assert(not pcall(string.find, string.rep("a", 300), string.rep("a?", 201)))
 
+-- Yielding from __lt during default-comparator table.sort should error cleanly,
+-- not corrupt the CI stack. The nCcalls guard in SORT_CMP blocks the yield.
+assert(not pcall(function()
+  local mt = { __lt = function(a, b)
+    coroutine.yield()
+    return a[1] < b[1]
+  end }
+  local t = { setmetatable({2}, mt), setmetatable({1}, mt) }
+  table.sort(t)
+end))
+
+-- Same for __eq during table.find.
+assert(not pcall(function()
+  local mt = { __eq = function(a, b)
+    coroutine.yield()
+    return a[1] == b[1]
+  end }
+  local t = { setmetatable({1}, mt), setmetatable({2}, mt) }
+  table.find(t, setmetatable({2}, mt))
+end))
+
 -- Enable interrupt-driven yields from YIELD_CHECK for remaining tests.
 -- The interrupt handler (installed by C++ test fixture) calls lua_yield
 -- on every YIELD_CHECK hit, and we Ares round-trip on each yield.
