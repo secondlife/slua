@@ -1788,11 +1788,15 @@ reentry:
                     setnvalue(ra, res);
                     VM_NEXT();
                 }
-                else if (ttisvector(rb) && ttisnumber(rc) && !LUAU_IS_LSL_VM(L))
+                else if (ttisvector(rb) && ttisnumber(rc))
                 {
-                    // ServerLua: we use different logic in the LSL case.
                     const float* vb = vvalue(rb);
                     float vc = cast_to(float, nvalue(rc));
+                    // ServerLua: In LSL (Mono), vector division by zero is a runtime error.
+                    if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L) && vc == 0.0))
+                    {
+                        VM_PROTECT(luaG_runerrorL(L, MATH_ERROR_STR));
+                    }
                     setvvalue(ra, vb[0] / vc, vb[1] / vc, vb[2] / vc, vb[3] / vc);
                     VM_NEXT();
                 }

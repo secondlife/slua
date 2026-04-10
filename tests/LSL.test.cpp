@@ -1085,8 +1085,11 @@ TEST_CASE("Integer MulAssign Float Valid Contexts")
 TEST_CASE("Division By Zero Error")
 {
     runConformance("div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
-    runConformance("float_div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
-    runConformance("vector_div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("float_div_by_zero_var.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("float_div_by_zero_k.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("float_div_by_zero_k_rev.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("vector_div_by_zero_k.lsl", nullptr, nullptr, nullptr, "Math error");
+    runConformance("vector_div_by_zero_var.lsl", nullptr, nullptr, nullptr, "Math error");
     runConformance("zero_vector_div_by_zero.lsl", nullptr, nullptr, nullptr, "Math error");
     runConformance("inf_div_inf.lsl", nullptr, nullptr, nullptr, "Math error");
 }
