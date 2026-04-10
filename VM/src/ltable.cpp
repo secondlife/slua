@@ -576,6 +576,7 @@ static void rehash(lua_State* L, LuaTable* t, const TValue* ek)
     int max_idx = -1;                                   // ServerLua: track max array-eligible index
     int nasize = numusearray(t, nums, &max_idx);        // count keys in array part
     int totaluse = nasize;                              // all those keys are integer keys
+    int array_count = nasize;                           // ServerLua: save pre-numusehash count for hash-trigger path
     totaluse += numusehash(t, nums, &nasize, &max_idx); // count keys in hash part
 
     // count extra key
@@ -596,8 +597,20 @@ static void rehash(lua_State* L, LuaTable* t, const TValue* ek)
         max_idx = -1;
     }
 
-    // compute new size for array part
-    int na = computesizes(nums, &nasize, max_idx);
+    // ServerLua: Hmm, we're rehashing because we're inserting a non-numeric key?
+    //  Well there's no reason that this should have anything to do with the array
+    //  portion, so leave the array alone. Otherwise, calculate the new array size.
+    int na;
+    if (!ttisnumber(ek))
+    {
+        nasize = t->sizearray;
+        na = array_count;
+    }
+    else
+    {
+        // compute new size for array part
+        na = computesizes(nums, &nasize, max_idx);
+    }
     int nh = totaluse - na;
 
     // enforce the boundary invariant; for performance, only do hash lookups if we must

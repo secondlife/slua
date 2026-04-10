@@ -95,12 +95,16 @@ print(string.format("Sorting %d equal elements in %.2f sec.", limit, os.clock()-
 check(a, function(x,y) return nil end)
 for i,v in pairs(a) do assert(not v or i=='n' and v==limit) end
 
-a = {"álo", "\0first :-)", "alo", "then this one", "45", "and a new"}
+a = {"\xE1lo", "\0first :-)", "alo", "then this one", "45", "and a new"}
 table.sort(a)
 check(a)
 
+-- ServerLua: If I'm being totally honest, I don't understand _what_ this was originally
+-- meant to test since it used some `loadstring()` shenanigans with no explanation.
+-- It's from the original Lua test suite, and we changed `rehash()` to not mess with
+-- `table->sizearray` as the test was implicitly doing before. Just explicitly do it.
 local ok = pcall(table.sort, a, function (x, y)
-          loadstring(string.format("a[%q] = ''", x))()
+          table.insert(a, x)
           collectgarbage()
           return x<y
         end)

@@ -295,4 +295,16 @@ check_sizes(t, 0, 0, "empty table before shrink")
 table.shrink(t)
 check_sizes(t, 0, 0, "empty table no-op")
 
+-- hash resizing doesn't resize array
+t = table.create(9, true)
+check_sizes(t, 9, 0, "no hash part for pre-allocated array")
+t.n = 9
+check_sizes(t, 9, 1, "reallocating hash doesn't reallocate array")
+
+-- also applies for larger arrays
+t = table.create(130, true)
+check_sizes(t, 130, 0, "no hash part for pre-allocated array")
+t.n = 130
+check_sizes(t, 130, 1, "reallocating hash doesn't reallocate array")
+
 return "OK"
