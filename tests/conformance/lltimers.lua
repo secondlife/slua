@@ -168,10 +168,10 @@ end
 LLTimers:_tick()
 assert(zero_continuous_count == 5, "Zero-interval timer should fire 5 times")
 
--- Now advance past what would be the 2-second clamping threshold for interval>0 timers
--- For interval=0: uses nextafter(next_run), no catchup needed
+-- Now jump far ahead to exercise the large-delay path
+-- For interval=0: uses nextafter(start_time), no catchup path
 -- This used to trigger division by zero: ceil(time_behind / 0)
-setclock(53.0)  -- More than 2 seconds later
+setclock(53.0)  -- Far ahead
 LLTimers:_tick()
 assert(zero_continuous_count == 6, "Zero-interval timer should continue after large time jump")
 
@@ -192,7 +192,7 @@ for i, expected_time in expected_times do
     )
 end
 
--- Test very small non-zero intervals use nextafter (no clamping)
+-- Test very small non-zero intervals that underflow against the clock magnitude
 setclock(60.0)
 local tiny_count = 0
 local tiny_scheduled_times = {}
@@ -203,30 +203,28 @@ end)
 
 -- Fire several times with small time advances
 -- Interval 1e-308 is so small that next_run + interval underflows to next_run
--- So nextafter(next_run) is used instead, ensuring forward progress
+-- So the reset branch runs every tick, with next_run driven by the clock
 for i = 1, 5 do
     incrementclock(0.01)
     LLTimers:_tick()
 end
 assert(tiny_count == 5, "Tiny interval timer should fire multiple times")
 
--- Now test catchup overflow scenario
--- Advance >2 seconds, which would cause ceil(time_behind / 1e-308) to overflow
--- The implementation should detect overflow and use nextafter(start_time) instead
-setclock(63.0)  -- More than 2 seconds later
+-- Large time jump: same reset path as a normal late tick.
+setclock(63.0)
 LLTimers:_tick()
-assert(tiny_count == 6, "Tiny interval timer should handle catchup overflow")
+assert(tiny_count == 6, "Tiny interval timer should fire after large time jump")
 
--- Verify it continues working after overflow
+-- Verify it continues working after the jump
 incrementclock(0.01)
 LLTimers:_tick()
-assert(tiny_count == 7, "Tiny interval timer should continue after overflow")
+assert(tiny_count == 7, "Tiny interval timer should continue after jump")
 
 LLTimers:off(tiny_handler)
 
 -- Verify scheduled times match expected values
--- Tiny intervals stay at 60.0 due to underflow (60.0 + 1e-308 = 60.0), then catch-up syncs to 63.0
-local tiny_expected_times = {60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 63.0}
+-- Tiny interval underflows per-tick, scheduled_time steps with the clock via the reset branch
+local tiny_expected_times = {60.0, 60.011, 60.022, 60.033, 60.044, 60.055, 63.0}
 for i, expected_time in tiny_expected_times do
     local actual_time = tiny_scheduled_times[i]
     assert(
@@ -648,7 +646,7 @@ assert(math.abs(repeat_scheduled_times[1] - 35.5) < 0.001)
 assert(math.abs(repeat_scheduled_times[2] - 36.0) < 0.001)
 assert(math.abs(repeat_scheduled_times[3] - 36.5) < 0.001)
 
--- Test clamped catch-up: timers >2s late skip ahead instead of rapid-firing
+-- Test no-catchup behavior: a very-late timer fires once, then resets cadence
 setclock(40.0)
 local catchup_fires = 0
 local catchup_scheduled_times = {}
@@ -657,7 +655,7 @@ local catchup_handler = LLTimers:every(0.1, function(scheduled_time)
     table.insert(catchup_scheduled_times, scheduled_time)
 end)
 
--- Make timer VERY late (4.9 seconds, exceeds 2-second threshold)
+-- Make timer VERY late (4.9 seconds)
 setclock(45.0)
 LLEvents:_handleEvent('timer')
 
@@ -667,22 +665,19 @@ assert(catchup_fires == 1, "Timer should fire once per handleEvent call")
 -- scheduled_time parameter shows when it WAS scheduled (40.1), not when it got rescheduled to
 assert(math.abs(catchup_scheduled_times[1] - 40.1) < 0.001, "First fire shows original schedule time")
 
--- Fire again to verify logical schedule syncs when clamping
+-- Fire again to verify the cadence was reset (not resumed from the old schedule)
 setclock(45.1)
 LLEvents:_handleEvent('timer')
 assert(catchup_fires == 2, "Should fire again on next handleEvent")
--- When we clamp, we sync the logical schedule to the new reality
--- This means handlers see the initial delay (first fire), then return to normal
-assert(catchup_scheduled_times[2] > 44.9, "Second fire shows synced schedule (~45.0)")
-assert(catchup_scheduled_times[2] < 45.2, "Second fire shows synced schedule (~45.0)")
--- Handler sees normal delay now: getclock() - scheduled_time = 45.1 - 45.0 = ~0.1s
+-- Handler now sees the reset schedule (~45.1), not the ~40.2 it would see under old catchup
+assert(catchup_scheduled_times[2] > 44.9, "Second fire shows reset schedule (~45.1)")
+assert(catchup_scheduled_times[2] < 45.2, "Second fire shows reset schedule (~45.1)")
+-- Handler sees normal delay now: getclock() - scheduled_time = 45.1 - 45.1 = ~0s
 
 -- Clean up
 LLTimers:off(catchup_handler)
 
--- Test minimum interval guarantee after catchup
--- After waking from a long sleep near a catchup boundary, the SECOND tick should
--- never fire faster than the specified interval. Regression test for "overcorrection" bug.
+-- Test the "never sooner than interval" guarantee after a long delay.
 setclock(0.0)
 local min_interval_fires = 0
 local min_interval_times = {}
@@ -692,7 +687,7 @@ local min_interval_handler = LLTimers:every(1.0, function(scheduled_time)
 end)
 
 -- Timer created at T=0, first scheduled for T=1.0
--- Simulate script disable/re-enable: jump forward 5.5s (past 2s catchup threshold)
+-- Simulate script disable/re-enable: jump forward 5.5s (well past next_run)
 setclock(5.5)
 LLEvents:_handleEvent('timer')
 assert(min_interval_fires == 1, "First tick should fire immediately after wake")

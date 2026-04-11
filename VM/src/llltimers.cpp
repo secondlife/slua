@@ -19,8 +19,8 @@
 enum TimerDataIndex {
     TIMER_HANDLER = 1,
     TIMER_INTERVAL = 2,
-    TIMER_NEXT_RUN = 3,              // Actual time to fire (may be clamped for catch-up)
-    TIMER_LOGICAL_SCHEDULE = 4,      // Logical schedule time (never clamped, always += interval)
+    TIMER_NEXT_RUN = 3,              // Time at which this timer is next eligible to fire
+    TIMER_LOGICAL_SCHEDULE = 4,      // Historical slot: kept for serialization stability, mirrors TIMER_NEXT_RUN
     TIMER_LEN = TIMER_LOGICAL_SCHEDULE,
 };
 
@@ -554,19 +554,14 @@ DEFINE_YIELDABLE(lltimers_tick, 0)
                 continue;
             }
 
-            // Get the nextRun time from the timer
+            // Get the nextRun time from the timer. We read this BEFORE updating
+            // it so we can pass the pre-update value to the handler as its
+            // "scheduled time" (the earliest instant this tick was allowed to
+            // fire), letting handlers compute `now - scheduled_time` to see
+            // how much extra delay there was beyond the minimum interval.
             lua_rawgeti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
             double next_run = lua_tonumber(L, -1);
             lua_pop(L, 1);
-
-            // Get the logical schedule time (what we'll pass to the handler)
-            // We read this BEFORE updating it so the handler gets the current value
-            lua_rawgeti(L, CURRENT_TIMER, TIMER_LOGICAL_SCHEDULE);
-            double logical_schedule = lua_tonumber(L, -1);
-            lua_pop(L, 1);
-
-            // Save the original value - this is what the handler should receive
-            double handler_scheduled_time = logical_schedule;
 
             // Verify nextRun is a reasonable number
             LUAU_ASSERT(next_run >= 0.0);
@@ -611,75 +606,43 @@ DEFINE_YIELDABLE(lltimers_tick, 0)
             }
             else
             {
-                // Schedule its next run using absolute scheduling with clamped catch-up
-                // (next = previous_scheduled_time + interval)
-                // This prevents drift and ensures the timer maintains its rhythm.
-                // However, if the timer is very late (> 2 seconds), skip ahead to prevent
-                // excessive catch-up iterations that could bog down the system.
+                // Schedule the next run. The default is cadence-preserving
+                // absolute scheduling (previous_next_run + interval), so a
+                // healthy 6s timer stays near 6s/12s/18s/... without drift.
+                // But if that target is already in the past, meaning we
+                // would need to fire again immediately to "catch up" on ticks
+                // missed while the script was descheduled.
                 //
-                // We maintain two schedules:
-                // - TIMER_NEXT_RUN: May be clamped to prevent catch-up storms
-                // - TIMER_LOGICAL_SCHEDULE: Never clamped, always += interval
-                //   This lets handlers know their true delay from the logical schedule.
-                //
-                // Note that we do this BEFORE the timer is ever run.
-                // This ensures that handler runtime has no effect on
-                // when the handler will be invoked next.
-                bool did_clamp = false;
-
-                // Correctly handles scheduling an event for _at least immediately after_
-                // the current time, even if addition of a tiny interval underflows.
-                // For interval=0: use start_time to prevent re-trigger without clock advance
-                // For other intervals: use next_run to maintain rhythm
-                double next_scheduled = std::max(
-                    std::nextafter(interval == 0.0 ? start_time : next_run, INFINITY),
-                    (interval != 0.0) ? next_run + interval : 0.0
-                );
-                double new_next_run = next_scheduled;
-
-                // Catchup logic with overflow protection
-                constexpr double MAX_CATCHUP_TIME = 2.0;
-                if (interval > 0 && start_time - next_scheduled > MAX_CATCHUP_TIME)
+                // Note: we compute this BEFORE invoking the handler so that
+                // handler runtime has no effect on when it is next invoked.
+                double new_next_run;
+                if (interval == 0.0)
                 {
-                    // Skip ahead to next interval after current time
-                    // This prevents spiral of death from excessive catch-up
-                    double time_behind = start_time - next_run;
-                    double intervals_to_skip = std::ceil(time_behind / interval);
-
-                    if (!std::isfinite(intervals_to_skip))
-                    {
-                        // Division overflowed to infinity - interval is extremely small, treat as ASAP
-                        new_next_run = std::nextafter(start_time, INFINITY);
-                    }
-                    else
-                    {
-                        new_next_run = next_run + (intervals_to_skip * interval);
-                    }
-                    // Ensure next tick is at least one full interval from now
-                    // This prevents "fast ticks" when waking up close to a catchup boundary
-                    new_next_run = std::max(new_next_run, start_time + interval);
-                    did_clamp = true;
-                }
-
-                // Update actual next run time (may be clamped)
-                lua_pushnumber(L, new_next_run);
-                lua_rawseti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
-
-                // Update logical schedule
-                // When clamping, sync to new_next_run (reset to new reality)
-                // When not clamping, increment normally (logical_schedule + interval)
-                if (did_clamp)
-                {
-                    // Sync logical schedule when clamping - we're giving up on catch-up
-                    // so reset the logical schedule to match the new reality.
-                    // This ensures handlers see the initial delay (current fire), then return to normal.
-                    lua_pushnumber(L, new_next_run);
+                    // It should run again ASAP (but not immediately)!
+                    new_next_run = std::nextafter(start_time, INFINITY);
                 }
                 else
                 {
-                    // For interval=0, use next_scheduled since logical_schedule + 0 never changes
-                    lua_pushnumber(L, interval == 0.0 ? next_scheduled : logical_schedule + interval);
+                    new_next_run = next_run + interval;
+                    if (new_next_run <= start_time)
+                    {
+                        // Would need to catch up, don't. Reset cadence instead.
+                        new_next_run = start_time + interval;
+                        if (new_next_run <= start_time)
+                        {
+                            // Can happen with very small magnitude intervals, just
+                            // schedule for the next representable time after start_time.
+                            new_next_run = std::nextafter(start_time, INFINITY);
+                        }
+                    }
                 }
+
+                lua_pushnumber(L, new_next_run);
+                lua_rawseti(L, CURRENT_TIMER, TIMER_NEXT_RUN);
+
+                // TIMER_LOGICAL_SCHEDULE is a historical slot, we keep it here
+                // so we don't muck up existing states.
+                lua_pushnumber(L, new_next_run);
                 lua_rawseti(L, CURRENT_TIMER, TIMER_LOGICAL_SCHEDULE);
             }
 
@@ -694,11 +657,11 @@ DEFINE_YIELDABLE(lltimers_tick, 0)
             // No pcall(), errors bubble up to the global error handler!
             lua_pushvalue(L, HANDLER_FUNC);
             // Include when it was scheduled to run as first arg, allowing callees to do a diff between
-            // scheduled and actual time.
-            // We pass the saved handler_scheduled_time (the original logical schedule) so handlers
-            // can detect delays. When clamping occurs, the handler still receives the ORIGINAL
-            // scheduled time (when it was supposed to run), not the synced time.
-            lua_pushnumber(L, handler_scheduled_time);
+            // scheduled and actual time. We pass the pre-update next_run value, i.e. the earliest
+            // instant this tick was allowed to fire (previous_fire + interval for repeating timers,
+            // or create_time + interval for the first tick / a one-shot). `now - scheduled_time`
+            // gives the extra delay beyond the minimum interval.
+            lua_pushnumber(L, next_run);
             // Include the interval as second arg, enabling handlers to calculate missed intervals.
             // For once() timers, this will be nil. For on() timers, it's the interval.
             if (is_one_shot) {
