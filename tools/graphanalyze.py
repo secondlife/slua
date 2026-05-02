@@ -10,6 +10,7 @@ import collections
 import json
 import zlib
 
+from enum import StrEnum
 from typing import *
 
 import graphviz
@@ -17,6 +18,11 @@ import graphviz
 FIRST_USER_MEMCAT = 10
 
 _FREE_COLOR = "#AAAAAA"
+
+
+class ColorBy(StrEnum):
+    TYPE = "type"
+    FIXED = "fixed"
 
 
 def _type_color(type_name: str) -> Tuple[str, str]:
@@ -115,7 +121,7 @@ class Graph:
             self._forward_edges[edge.src].add(edge)
             self._reverse_edges[edge.dst].add(edge)
 
-    def generate_graphviz(self) -> graphviz.Digraph:
+    def generate_graphviz(self, color_by: ColorBy = ColorBy.TYPE) -> graphviz.Digraph:
         graph = graphviz.Digraph(
             "object-references",
             "Object References",
@@ -132,12 +138,17 @@ class Graph:
             else:
                 border_color, fill_color = _type_color(node.type_name or node.type)
 
+            if color_by == ColorBy.FIXED and not node.free:
+                # Drown out type info in the fill - the question is "is it
+                # fixed or not." Border keeps type for reference.
+                fill_color = "#e0e0e0" if node.fixed else "#ffaa55"
+
             graph.node(
                 node.id,
                 label=label,
                 color=border_color,
                 fillcolor=fill_color,
-                penwidth="2" if node.fixed else "1",
+                penwidth="1" if color_by == ColorBy.FIXED else ("2" if node.fixed else "1"),
             )
         for edge in self.edges:
             constraint = "true"
@@ -199,11 +210,11 @@ class Graph:
         assert not node_forward
 
 
-def mode_graph(graph_mode: str, nodes: Dict[str, Node], edges: List[Edge]):
+def mode_graph(graph_mode: str, nodes: Dict[str, Node], edges: List[Edge], color_by: ColorBy):
     graph = Graph(nodes, edges)
     if graph_mode == "global":
         graph.remove_fixed_leaves()
-    graph.generate_graphviz().view()
+    graph.generate_graphviz(color_by=color_by).view()
 
 
 def mode_summary(graph_mode: str, nodes: Dict[str, Node], edges: List[Edge]):
@@ -257,12 +268,19 @@ def main():
         default="graph",
         help="Output mode (default: graph)",
     )
+    parser.add_argument(
+        "--color", "-c",
+        type=ColorBy,
+        choices=list(ColorBy),
+        default=ColorBy.TYPE,
+        help="Node fill: 'type' (default) hashes the type name; 'fixed' colors fixed objects gray and non-fixed bright orange.",
+    )
     args = parser.parse_args()
 
     graph_mode, nodes, edges = load_graph(args.input)
 
     if args.mode == "graph":
-        mode_graph(graph_mode, nodes, edges)
+        mode_graph(graph_mode, nodes, edges, args.color)
     elif args.mode == "summary":
         mode_summary(graph_mode, nodes, edges)
 

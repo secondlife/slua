@@ -368,6 +368,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/lfunc.cpp
     VM/src/lgc.cpp
     VM/src/lgcdebug.cpp
+    VM/src/lgcfix.cpp
     VM/src/lgcgraph.cpp
     VM/src/lgctraverse.cpp
     VM/src/linit.cpp

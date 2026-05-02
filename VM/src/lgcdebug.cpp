@@ -743,12 +743,29 @@ static void enumtable(EnumContext* ctx, LuaTable* h)
     else
     {
         auto *g = ctx->L->global;
-        for (int i = 0; i<LUA_UTAG_LIMIT; ++i)
+        for (int i = 0; i < LUA_UTAG_LIMIT; ++i)
         {
             if (h == g->udatamt[i])
             {
-                snprintf(&name_buf[0], 255, "udatamt[%d]", i);
+                snprintf(&name_buf[0], sizeof(name_buf), "udatamt[%d]", i);
+                name = name_buf;
                 break;
+            }
+        }
+        if (!name)
+        {
+            for (int i = 0; i < LUA_T_COUNT; ++i)
+            {
+                if (h == g->mt[i])
+                {
+                    const char *type_name = (i < LUA_TDEADKEY && g->ttname[i]) ? getstr(g->ttname[i]) : nullptr;
+                    if (type_name)
+                        snprintf(&name_buf[0], sizeof(name_buf), "mt[%s]", type_name);
+                    else
+                        snprintf(&name_buf[0], sizeof(name_buf), "mt[%d]", i);
+                    name = name_buf;
+                    break;
+                }
             }
         }
     }
