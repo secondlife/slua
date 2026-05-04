@@ -152,21 +152,10 @@ FixState FixingPass::classify(GCObject *obj)
 
         if (cl->isC)
         {
-            // This is essentially a carve-out for ipairs / pairs that keep their
-            // iterator functions as closures in the upvalues. We've already taken
-            // care to fix the upvalues themselves, so this should pass.
-            if (!self_unfixable)
-            {
-                for (int i = 0; i < cl->nupvalues; ++i)
-                {
-                    const TValue *uv = &cl->c.upvals[i];
-                    if (iscollectable(uv) && !isfixed(gcvalue(uv)))
-                    {
-                        self_unfixable = true;
-                        break;
-                    }
-                }
-            }
+            // We make the assumption (and hope it doesn't bite us) that
+            // upvalues on C closures at the time of `fixall()` will not be
+            // swapped out. If this is not the case, you've probably done something
+            // very, very bad.
             for (int i = 0; i < cl->nupvalues; ++i)
                 track_dep(&cl->c.upvals[i], &has_unfixable, &deps);
         }
@@ -226,6 +215,8 @@ FixState FixingPass::classify(GCObject *obj)
             self_unfixable = true;
             break;
         }
+        // TODO: Hmmm, we should probably restrict this to specific
+        //  userdata tags like quats and UUIDs...
         track_dep(obj2gco(udmt), &has_unfixable, &deps);
         break;
     }
@@ -323,23 +314,6 @@ void FixingPass::commit()
 CLANG_NOOPT void GCC_NOOPT FixingPass::run()
 {
     LuaTable *base_globals = hvalue(luaA_toobject(L, LUA_BASEGLOBALSINDEX));
-
-    // pairs/ipairs each close over a stable C iterator (luaB_next /
-    // luaB_inext) as upvalue 1. Pre-fix the iterator so the existing
-    // already-fixed-upvalue carve-out in the C closure case treats
-    // pairs/ipairs themselves as fixable, with no allowlist needed.
-    for (const char *name : {"pairs", "ipairs"})
-    {
-        const TValue *v = luaH_getstr(base_globals, luaS_new(L, name));
-        if (!ttisfunction(v))
-            continue;
-        Closure *cl = clvalue(v);
-        if (!cl->isC || cl->nupvalues < 1)
-            continue;
-        const TValue *uv = &cl->c.upvals[0];
-        if (iscollectable(uv))
-            luaC_fix(gcvalue(uv));
-    }
 
     // Visit all potential roots (base globals, udata mts, registry, etc)
     classify(obj2gco(base_globals));
