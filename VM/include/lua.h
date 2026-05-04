@@ -581,6 +581,11 @@ static void populateperms(lua_State *L, bool forUnpersist)
     eris_persist_static_cont(llltimers, lltimers_tick_v0, lltimers_tick_v0_k)
     eris_persist_cont(llltimers, timer_event_wrapper, timer_event_wrapper_cont)
 #endif
+#if defined(eris_c) || defined(llprim_c)
+    // All the convenience methods are this function, they just
+    // have different upvalues.
+    eris_persist_static(llprim, prim_params_rule_wrapper)
+#endif
 #if defined(eris_c)
 }
 #endif

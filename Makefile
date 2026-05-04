@@ -52,11 +52,11 @@ ISOCLINE_SOURCES=extern/isocline/src/isocline.c
 ISOCLINE_OBJECTS=$(ISOCLINE_SOURCES:%=$(BUILD)/%.o)
 ISOCLINE_TARGET=$(BUILD)/libisocline.a
 
-TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
+TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp LSLBuiltins/src/LSLBuiltins.cpp
 TESTS_OBJECTS=$(TESTS_SOURCES:%=$(BUILD)/%.o)
 TESTS_TARGET=$(BUILD)/slua-tests
 
-REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp CLI/src/LSLBuiltins.cpp
+REPL_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplEntry.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp LSLBuiltins/src/LSLBuiltins.cpp
 REPL_CLI_OBJECTS=$(REPL_CLI_SOURCES:%=$(BUILD)/%.o)
 REPL_CLI_TARGET=$(BUILD)/slua
 
@@ -64,7 +64,7 @@ ANALYZE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Analyze.cpp 
 ANALYZE_CLI_OBJECTS=$(ANALYZE_CLI_SOURCES:%=$(BUILD)/%.o)
 ANALYZE_CLI_TARGET=$(BUILD)/slua-analyze
 
-COMPILE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Compile.cpp CLI/src/LSLBuiltins.cpp
+COMPILE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Compile.cpp LSLBuiltins/src/LSLBuiltins.cpp
 COMPILE_CLI_OBJECTS=$(COMPILE_CLI_SOURCES:%=$(BUILD)/%.o)
 COMPILE_CLI_TARGET=$(BUILD)/slua-compile
 
@@ -164,10 +164,10 @@ $(APR_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -
 $(CJSON_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -I$(BUILD)
-$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -I$(BUILD)
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -ILSLBuiltins/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -I$(BUILD)
+$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -I$(BUILD)
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include
-$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -Istage/packages/include -I$(BUILD)
+$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include -I$(BUILD)
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
 $(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IAnalysis/include -IVM/include -ICodeGen/include -IConfig/include -Istage/packages/include
 
@@ -284,7 +284,7 @@ $(BUILD)/builtins_embedded.h: builtins.txt
 	@echo ')builtins";' >> $@
 
 # LSLBuiltins depends on generated header
-$(BUILD)/CLI/src/LSLBuiltins.cpp.o: $(BUILD)/builtins_embedded.h
+$(BUILD)/LSLBuiltins/src/LSLBuiltins.cpp.o: $(BUILD)/builtins_embedded.h
 
 # object file targets
 $(BUILD)/%.cpp.o: %.cpp

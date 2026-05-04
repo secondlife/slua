@@ -16,6 +16,7 @@
 #include "Luau/Bytecode.h"
 #include "lllevents.h"
 #include "llltimers.h"
+#include "llprim.h"
 
 // This module is ONLY to be loaded into LSL scripts running under Luau,
 // it is NOT for general use by Luau scripts. If you use it otherwise
@@ -1880,6 +1881,16 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
 
     luaSL_setup_llltimers_metatable(L, expose_internal_funcs);
     LUAU_ASSERT(lua_gettop(L) == top);
+
+    //////
+    /// llprim
+    //////
+
+    if (!LUAU_IS_LSL_VM(L))
+    {
+        luaSL_setup_llprim_module(L);
+        LUAU_ASSERT(lua_gettop(L) == top);
+    }
 
     // return "integer" when we call type() on an int
     lua_setlightuserdataname(L, LU_TAG_LSL_INTEGER, "integer");

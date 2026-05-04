@@ -44,7 +44,7 @@ project(Luau LANGUAGES CXX C)
 file(READ "${CMAKE_SOURCE_DIR}/builtins.txt" BUILTINS_HEX HEX)
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1, " BUILTINS_HEX_ARRAY "${BUILTINS_HEX}")
 configure_file(
-        "${CMAKE_SOURCE_DIR}/CLI/src/builtins_embedded.h.in"
+        "${CMAKE_SOURCE_DIR}/LSLBuiltins/src/builtins_embedded.h.in"
         "${CMAKE_BINARY_DIR}/builtins_embedded.h"
         @ONLY
 )
@@ -52,6 +52,7 @@ configure_file(
 if (LUAU_BUILD_SHARED)
     add_library(Luau.Common SHARED)
     add_library(Luau.CLI.lib SHARED)
+    add_library(Luau.LSLBuiltins SHARED)
     add_library(Luau.Ast SHARED)
     add_library(Luau.Compiler SHARED)
     add_library(Luau.Config SHARED)
@@ -63,6 +64,7 @@ if (LUAU_BUILD_SHARED)
 else()
     add_library(Luau.Common STATIC)
     add_library(Luau.CLI.lib STATIC)
+    add_library(Luau.LSLBuiltins STATIC)
     add_library(Luau.Ast STATIC)
     add_library(Luau.Compiler STATIC)
     add_library(Luau.Config STATIC)
@@ -110,8 +112,13 @@ target_include_directories(Luau.Common PUBLIC Common/include)
 
 target_compile_features(Luau.CLI.lib PUBLIC cxx_std_17)
 target_include_directories(Luau.CLI.lib PUBLIC CLI/include)
-target_include_directories(Luau.CLI.lib PRIVATE ${CMAKE_BINARY_DIR})  # For builtins_embedded.h
 target_link_libraries(Luau.CLI.lib PRIVATE Luau.Common Luau.Config)
+target_link_libraries(Luau.CLI.lib PUBLIC Luau.LSLBuiltins)
+
+target_compile_features(Luau.LSLBuiltins PUBLIC cxx_std_17)
+target_include_directories(Luau.LSLBuiltins PUBLIC LSLBuiltins/include)
+target_include_directories(Luau.LSLBuiltins PRIVATE ${CMAKE_BINARY_DIR})  # For builtins_embedded.h
+target_link_libraries(Luau.LSLBuiltins PRIVATE Luau.Common Luau.VM Luau.Compiler)
 
 target_compile_features(Luau.Ast PUBLIC cxx_std_17)
 target_include_directories(Luau.Ast PUBLIC Ast/include)
@@ -195,6 +202,7 @@ endif()
 target_compile_options(Luau.Ast PRIVATE ${LUAU_OPTIONS})
 target_compile_options(Luau.Analysis PRIVATE ${LUAU_OPTIONS})
 target_compile_options(Luau.CLI.lib PRIVATE ${LUAU_OPTIONS})
+target_compile_options(Luau.LSLBuiltins PRIVATE ${LUAU_OPTIONS})
 target_compile_options(Luau.CodeGen PRIVATE ${LUAU_OPTIONS})
 target_compile_options(Luau.VM PRIVATE ${LUAU_OPTIONS})
 target_compile_options(isocline PRIVATE ${LUAU_OPTIONS} ${ISOCLINE_OPTIONS})
@@ -287,7 +295,6 @@ if(LUAU_BUILD_CLI)
     target_include_directories(Luau.Repl.CLI PRIVATE extern extern/isocline/include)
     target_link_directories(Luau.Repl.CLI PRIVATE "${PACKAGE_LIB_DIR}")
 
-    target_link_libraries(Luau.CLI.lib PRIVATE Luau.VM Luau.Compiler)
     target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline "${TAILSLIDE_LIBRARY}")
 
     target_link_libraries(Luau.Repl.CLI PRIVATE osthreads)
@@ -322,7 +329,7 @@ if(LUAU_BUILD_TESTS)
     target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY)
     target_include_directories(Luau.Conformance PRIVATE extern "${PACKAGE_INCLUDE_DIR}")
     target_link_directories(Luau.Conformance PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Compiler Luau.CodeGen Luau.VM "${TAILSLIDE_LIBRARY}")
+    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Compiler Luau.CodeGen Luau.VM Luau.LSLBuiltins "${TAILSLIDE_LIBRARY}")
 
     if(CMAKE_SYSTEM_NAME MATCHES "Android|iOS")
         set(LUAU_CONFORMANCE_SOURCE_DIR "Client/Luau/tests/conformance")

@@ -426,6 +426,9 @@ target_sources(Luau.VM PRIVATE
     VM/src/lllevents.h
     VM/src/llltimers.cpp
     VM/src/llltimers.h
+    VM/src/llprim.cpp
+    VM/src/llprim.h
+    VM/src/llprim_set_primitive_params.inl
     VM/src/lyieldable.cpp
     VM/src/lstrbuf.cpp
     VM/src/lyieldstrlib.h
@@ -453,12 +456,15 @@ target_sources(Luau.CLI.lib PRIVATE
     CLI/include/Luau/FileUtils.h
     CLI/include/Luau/Flags.h
     CLI/include/Luau/VfsNavigator.h
-    CLI/include/Luau/LSLBuiltins.h
 
     CLI/src/FileUtils.cpp
     CLI/src/Flags.cpp
     CLI/src/VfsNavigator.cpp
-    CLI/src/LSLBuiltins.cpp
+)
+
+target_sources(Luau.LSLBuiltins PRIVATE
+    LSLBuiltins/include/Luau/LSLBuiltins.h
+    LSLBuiltins/src/LSLBuiltins.cpp
 )
 
 if(TARGET Luau.Repl.CLI)

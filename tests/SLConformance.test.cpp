@@ -15,6 +15,7 @@
 #include "Luau/BytecodeSummary.h"
 
 #include "doctest.h"
+#include "Luau/LSLBuiltins.h"
 #include "ScopedFlags.h"
 #include "llsl.h"
 #include "lyieldablemacros.h"
@@ -201,8 +202,10 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
 }
 
 static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr,
-    lua_State* initialLuaState = nullptr, lua_CompileOptions* options = nullptr)
+    lua_State* initialLuaState = nullptr, lua_CompileOptions* options = nullptr, bool setupConstants = true)
 {
+    luauSL_init_global_builtins(nullptr);
+
     std::string path = getSourceFilePath(name);
     std::fstream stream(path, std::ios::in | std::ios::binary);
     INFO(path);
@@ -231,6 +234,9 @@ static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = n
     lua_pop(GL, 1);
     luaopen_llbase64(GL);
     lua_pop(GL, 1);
+
+    if (setupConstants)
+        luaSL_set_constant_globals(GL);
 
     // Register a few global functions for conformance tests
     std::vector<luaL_Reg> funcs = {
@@ -408,8 +414,9 @@ static int create_weak_table(lua_State *L, const char* mode)
 
 TEST_CASE("UUID interning")
 {
-    // Do nothing, just set up the state so we can poke it directly
-    auto state = runConformance("nothing.lua");
+    // Do nothing, just set up the state so we can poke it directly.
+    // Skip LSL constant globals so the UUID weak tables start empty.
+    auto state = runConformance("nothing.lua", nullptr, nullptr, nullptr, nullptr, false);
     lua_State *L = lua_tothread(state.get(), 1);
     REQUIRE(L);
     lua_gc(L, LUA_GCCOLLECT, 0);
@@ -581,11 +588,12 @@ TEST_CASE("UUID interning")
 
 TEST_CASE("UUID interning (GC Fixed)")
 {
-    // Do nothing, just set up the state so we can poke it directly
+    // Do nothing, just set up the state so we can poke it directly.
+    // Skip LSL constant globals so the UUID weak tables start empty.
     auto state = runConformance("nothing.lua", nullptr, [](lua_State *L) {
         luaSL_pushuuidstring(L, "12345678-9abc-def0-1234-56789abcdef0");
         lua_setglobal(L, "test_uuid");
-    });
+    }, nullptr, nullptr, false);
     lua_State *L = lua_tothread(state.get(), 1);
     REQUIRE(L);
 
@@ -918,6 +926,28 @@ TEST_CASE("LLTimers")
             // For tests, we manually call _tick() and capture the interval
             last_timer_interval = interval;
         };
+    });
+}
+
+static const luaL_Reg test_ll_prim_lib[] = {
+    // llprim.ParamsSetter:apply() routes through this on the base globals.
+    // We capture its args into Lua globals so the test can verify them.
+    {"SetLinkPrimitiveParamsFast", [](lua_State *L) {
+        luaL_checkinteger(L, 1);
+        luaL_checktype(L, 2, LUA_TTABLE);
+        lua_pushvalue(L, 1);
+        lua_setglobal(L, "captured_apply_link");
+        lua_pushvalue(L, 2);
+        lua_setglobal(L, "captured_apply_rules");
+        return 0;
+    }},
+    {nullptr, nullptr}
+};
+
+TEST_CASE("llprim")
+{
+    runConformance("llprim.lua", nullptr, [](lua_State *L) {
+        luaL_register_noclobber(L, LUA_LLLIBNAME, test_ll_prim_lib);
     });
 }
 
