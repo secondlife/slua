@@ -3164,10 +3164,7 @@ static void scavenge_general_perms_internal(lua_State *L, bool forUnpersist, con
                 lua_pop(L, 1);                      /* ... perms glob_tab k v */
             }
 
-            // Recurse into table to find nested objects (only at top level to avoid deep nesting)
-            if (prefix == "g") {
-                scavenge_general_perms_internal(L, forUnpersist, perm_name, perms_idx);
-            }
+            scavenge_general_perms_internal(L, forUnpersist, perm_name, perms_idx);
         }
         // Pop the value
         lua_pop(L, 1);                                /* ... perms glob_tab k */
