@@ -40,6 +40,13 @@ struct PrimitiveSlot
     uint16_t offset;
     SlotManager* mgr;
 
+    PrimitiveSlot(T* data, uint16_t offset, SlotManager* mgr)
+        : data(data)
+        , offset(offset)
+        , mgr(mgr)
+    {
+    }
+
     ~PrimitiveSlot();
 
     PrimitiveSlot(const PrimitiveSlot&) = delete;
