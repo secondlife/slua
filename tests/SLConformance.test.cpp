@@ -1481,4 +1481,9 @@ TEST_CASE("LyieldableCheck")
     );
 }
 
+TEST_CASE("Post-call register scrub")
+{
+    runConformance("postcall_scrub.lua");
+}
+
 TEST_SUITE_END();

@@ -1093,6 +1093,10 @@ reentry:
                     L->base = cip->base;
                     L->top = (nresults == LUA_MULTRET) ? res : cip->top;
 
+                    // ServerLua: Post-call hygiene above, so GC'd vals in consumed arg registers aren't reachable
+                    for (StkId scrub = res; scrub < cip->top; ++scrub)
+                        setnilvalue(scrub);
+
                     base = L->base; // stack may have been reallocated, so we need to refresh base ptr
 
                     // ServerLua: Now that the stack is all in order with the retvals, check if we need to
@@ -1143,6 +1147,10 @@ reentry:
                 L->ci = cip;
                 L->base = cip->base;
                 L->top = (nresults == LUA_MULTRET) ? res : cip->top;
+
+                // ServerLua: Post-call hygiene above, so GC'd vals in consumed arg registers aren't reachable
+                for (StkId scrub = res; scrub < cip->top; ++scrub)
+                    setnilvalue(scrub);
 
                 // we're done!
                 if (LUAU_UNLIKELY(ci->flags & LUA_CALLINFO_RETURN))

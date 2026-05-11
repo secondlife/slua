@@ -196,7 +196,7 @@ static int lua_graphuserheap_wrapper(lua_State* L)
 
 static int lua_getusedmemory_wrapper(lua_State* L)
 {
-    lua_pushnumber(L, (double)(lua_userthreadsize(replState, &replFreeObjects) + replBytecodeSize));
+    luaSL_pushnativeinteger(L, (int)(lua_userthreadsize(replState, &replFreeObjects) + replBytecodeSize));
     return 1;
 }
 

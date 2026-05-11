@@ -995,9 +995,11 @@ static int ll_sleep(lua_State *)
     return 0;
 }
 
+// Test stub: does not include bytecode size the way the real server-side
+// implementation does, so only meaningful for diffing values within a test.
 static int ll_getusedmemory(lua_State* L)
 {
-    luaSL_pushnativeinteger(L, 1);
+    luaSL_pushnativeinteger(L, (int)lua_userthreadsize(L, nullptr));
     return 1;
 }
 
