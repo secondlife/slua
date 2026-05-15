@@ -7,14 +7,14 @@
 #include "luaconf.h"
 #include "ldebug.h"
 
-// returns target stack for 'n' extra elements to reallocate
-// if possible, stack size growth factor is 2x
-#define getgrownstacksize(L, n) ((n) <= L->stacksize ? 2 * L->stacksize : L->stacksize + (n))
+// ServerLua: Don't always double stack size, cap increments to this.
+#define LUAU_STACK_GROWTH_SLACK 128
+
 #define stacklimitreached(L, n) ((char*)L->stack_last - (char*)L->top <= (n) * (int)sizeof(TValue))
 
 #define luaD_checkstackfornewci(L, n) \
     if (stacklimitreached(L, (n))) \
-        luaD_reallocstack(L, getgrownstacksize(L, (n)), 1); \
+        luaD_reallocstack(L, luaD_grownstacksize(L, (n)), 1); \
     else \
         condhardstacktests(luaD_reallocstack(L, L->stacksize - EXTRA_STACK, 1), 1);
 
@@ -72,6 +72,7 @@ LUAI_FUNC int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t oldtop, pt
 LUAI_FUNC void luaD_reallocCI(lua_State* L, int newsize);
 LUAI_FUNC void luaD_reallocstack(lua_State* L, int newsize, int fornewci);
 LUAI_FUNC void luaD_growstack(lua_State* L, int n);
+LUAI_FUNC int luaD_grownstacksize(lua_State* L, int n);
 LUAI_FUNC void luaD_checkCstack(lua_State* L);
 LUAI_FUNC void luaD_seterrorobj(lua_State* L, int errcode, StkId oldtop);
 

@@ -188,8 +188,9 @@ static void correctstack(lua_State* L, TValue* oldstack)
 
 void luaD_reallocstack(lua_State* L, int newsize, int fornewci)
 {
-    // throw 'out of memory' error because space for a custom error message cannot be guaranteed here
-    if (newsize > MAX_STACK_SIZE)
+    // throw 'out of memory' error because space for a custom error message cannot be guaranteed here.
+    // ServerLua: unsigned compare also catches negative newsize from caller-side signed overflow.
+    if ((unsigned)newsize > MAX_STACK_SIZE)
     {
         // reallocation was performed to setup a new CallInfo frame, which we have to remove
         if (fornewci)
@@ -225,9 +226,19 @@ void luaD_reallocCI(lua_State* L, int newsize)
     L->end_ci = L->base_ci + L->size_ci - 1;
 }
 
+// ServerLua: cap exponential growth so a single deep recursion or unpack()
+// cannot pre-allocate well past actual demand.
+int luaD_grownstacksize(lua_State* L, int n)
+{
+    int doubled = (n <= L->stacksize) ? 2 * L->stacksize : L->stacksize + n;
+    int used = int(L->top - L->stack);
+    int required = used + n + EXTRA_STACK;
+    return luaO_growthcap(doubled, required, LUAU_STACK_GROWTH_SLACK);
+}
+
 void luaD_growstack(lua_State* L, int n)
 {
-    luaD_reallocstack(L, getgrownstacksize(L, n), 0);
+    luaD_reallocstack(L, luaD_grownstacksize(L, n), 0);
 }
 
 CallInfo* luaD_growCI(lua_State* L)

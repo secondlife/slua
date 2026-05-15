@@ -528,6 +528,16 @@ LUAI_DATA const TValue luaO_nilobject_;
 #define ceillog2(x) (luaO_log2((x)-1) + 1)
 
 LUAI_FUNC int luaO_log2(unsigned int x);
+
+// ServerLua: caps `grown` against roundUp(required, slack), preserves doubling for small sizes
+LUAU_FORCEINLINE int luaO_growthcap(int grown, int required, int slack)
+{
+    if (grown <= slack || required <= slack)
+        return grown;
+    int capped = ((required + slack - 1) / slack) * slack;
+    return capped < grown ? capped : grown;
+}
+
 LUAI_FUNC int luaO_rawequalObj(const TValue* t1, const TValue* t2);
 LUAI_FUNC int luaO_rawequalKey(const TKey* t1, const TValue* t2);
 LUAI_FUNC int luaO_str2d(const char* s, double* result);

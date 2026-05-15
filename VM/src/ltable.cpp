@@ -309,13 +309,12 @@ static int computesizes(int nums[], int* narray, int max_idx)
             break; // all elements already counted
     }
 
-    // ServerLua: For large arrays, cap to 256-aligned size if all elements fit.
-    //  This is necessary because otherwise we'll use use the next power of 2
-    //  that fits 50%. For large array-like tables, that's not necessarily what
-    //  you want in a memory-constrained environment.
-    if (max_idx > 0 && n > kLargeArrayAlign && na > kLargeArrayAlign)
+    // ServerLua: For large arrays, cap to slack-aligned size if all elements fit.
+    //  Otherwise doubling picks the next power of 2 that fits 50%, which is the
+    //  wrong tradeoff for large array-like tables in a memory-constrained env.
+    if (max_idx > 0)
     {
-        int capped = ((na + kLargeArrayAlign - 1) / kLargeArrayAlign) * kLargeArrayAlign;
+        int capped = luaO_growthcap(n, na, kLargeArrayAlign);
         if (capped < n && max_idx <= capped)
             n = capped;
     }

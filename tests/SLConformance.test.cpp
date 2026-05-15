@@ -1481,9 +1481,9 @@ TEST_CASE("LyieldableCheck")
     );
 }
 
-TEST_CASE("Post-call register scrub")
+TEST_CASE("Memory hygiene")
 {
-    runConformance("postcall_scrub.lua");
+    runConformance("memory_hygiene.lua");
 }
 
 TEST_SUITE_END();
