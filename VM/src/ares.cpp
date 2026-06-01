@@ -2449,7 +2449,10 @@ u_thread(Info *info) {                                                 /* ... */
   if (stack_size < total + EXTRA_STACK) {
     eris_error(info, "malformed data: stack size too small for used portion");
   }
-  VALIDATE_SIZE(stack_size);
+
+  // we should at _least_ have as many bytes as we have total stack entries.
+  VALIDATE_SIZE(total);
+
   eris_reallocstack(thread, (int)stack_size - EXTRA_STACK, true);
   stack = thread->stack; /* After the realloc in case the address changes. */
   thread->top = thread->stack + (size_t)total;

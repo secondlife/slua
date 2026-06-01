@@ -1,5 +1,5 @@
-local perms = {[coroutine.yield]="yield", [coroutine.wrap]="wrap", [coroutine.resume]="resume", [assert]="assert"}
-local uperms = {yield=coroutine.yield, wrap=coroutine.wrap, resume=coroutine.resume, assert=assert}
+local perms = {[coroutine.yield]="yield", [coroutine.wrap]="wrap", [coroutine.resume]="resume", [assert]="assert", [table.create]="table.create", [unpack]="unpack"}
+local uperms = {yield=coroutine.yield, wrap=coroutine.wrap, resume=coroutine.resume, assert=assert, ["table.create"]=table.create, unpack=unpack}
 
 
 -- so we can run these tests with eris too
@@ -191,6 +191,32 @@ do
     local ok, result = coroutine.resume(co)
     assert(ok)
     assert(result == 2, "expected 2, got " .. tostring(result))
+end
+
+-- a coroutine whose stack capacity grew large but is now nearly empty must round-trip.
+do
+    -- a GC pass would shrink the big-empty stack and mask the bug.
+    collectgarbage("stop")
+    local co = coroutine.create(function()
+        -- Make a table and chew up tons of slot spaces, then leave them bare
+        local tab = table.create(5000, true)
+        tab = { unpack(tab, 2, 5000) }
+        local n = #tab
+        -- So that tab can't be optimized away if `#tab` can be constant-folded
+        print(tab)
+        -- Nil it out so that it won't be serialized and make the blob larger
+        tab = nil
+        coroutine.yield()
+        return n
+    end)
+    coroutine.resume(co)
+
+    co = ares.unpersist(uperms, ares.persist(perms, co))
+    local ok, result = coroutine.resume(co)
+    assert(ok)
+    assert(result == 4999, `expected 4999, got {result}`)
+    -- We can have GC now :)
+    collectgarbage("restart")
 end
 
 print('OK')
