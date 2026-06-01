@@ -21,5 +21,8 @@ default {
     a = 5;
     for (a *= b; i < 6; ++i) {
     }
+
+    // Should be the same even if it's in parens
+    (a *= b);
   }
 }

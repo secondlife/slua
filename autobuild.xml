@@ -16,11 +16,11 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>e08633020943497f1245fcff2068dd7339a4b937</string>
+              <string>f151e620a942d5a9ee099dbee5fbef25ca318674</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.8/tailslide-1.5.8-darwin64-20186111034.tar.zst</string>
+              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.9/tailslide-1.5.9-darwin64-26728677837.tar.zst</string>
             </map>
             <key>name</key>
             <string>darwin64</string>
@@ -30,11 +30,11 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>3a1b998bc65c65d96fee900f8698881d499f64eb</string>
+              <string>8a03e8bf946eb26caad3c71feec792387534b3a7</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.8/tailslide-1.5.8-linux-20186111034.tar.zst</string>
+              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.9/tailslide-1.5.9-linux-26728677837.tar.zst</string>
             </map>
             <key>name</key>
             <string>linux</string>
@@ -44,11 +44,11 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>002c70a435e934b7404da74bf4e529828c3f976f</string>
+              <string>c02200985b0d2dbae06a5568347fb3080a6d725b</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.8/tailslide-1.5.8-linux64-20186111034.tar.zst</string>
+              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.9/tailslide-1.5.9-linux64-26728677837.tar.zst</string>
             </map>
             <key>name</key>
             <string>linux64</string>
@@ -58,11 +58,11 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>afb69ef491aaf2ad29b8def26b518021cffabb80</string>
+              <string>2196f824ed137f15525af5b1d5b78dc928367c9f</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.8/tailslide-1.5.8-windows64-20186111034.tar.zst</string>
+              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.9/tailslide-1.5.9-windows64-26728677837.tar.zst</string>
             </map>
             <key>name</key>
             <string>windows64</string>
@@ -75,7 +75,7 @@
         <key>copyright</key>
         <string>You may copy it</string>
         <key>version</key>
-        <string>1.5.8</string>
+        <string>1.5.9</string>
         <key>use_scm_version</key>
         <boolean>true</boolean>
         <key>name</key>
