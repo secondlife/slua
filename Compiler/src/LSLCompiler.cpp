@@ -1239,7 +1239,7 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
         if (lval_sym->getSubType() == SYM_GLOBAL)
         {
             source_reg = allocReg(bin_expr);
-            pushGlobal(source_reg, lval_sym->getName());
+            pushGlobal(source_reg, lval);
         }
         else
         {
