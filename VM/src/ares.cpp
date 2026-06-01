@@ -2559,7 +2559,7 @@ u_thread(Info *info) {                                                 /* ... */
           if (yield_point >= 0 && yield_point < lcl->l.p->sizeyieldpoints)
             pc_offset = lcl->l.p->yieldpoints[yield_point];
           else
-            pc_offset = std::min(0, std::max(real_pc, lcl->l.p->sizecode - 1));
+            pc_offset = std::max(0, std::min(real_pc, lcl->l.p->sizecode - 1));
           break;
       }
       thread->ci->savedpc = lcl->l.p->code + pc_offset;
