@@ -628,6 +628,7 @@ bool LuauVisitor::visit(LSLForStatement *for_stmt)
     // execute instructions to initialize vars, there can be multiple
     for(auto *init_expr : *for_stmt->getInitExprs())
     {
+        [[maybe_unused]] RegScope expr_scope(this);
         init_expr->visit(this);
     }
     auto jump_to_start_label = mBuilder->emitLabel();
