@@ -7,7 +7,6 @@ from .errors import BundleError
 from .fs import FSBackend, normalize
 from .luaurc import load_config
 
-
 RESERVED_ALIASES = frozenset({"root", "self"})
 
 
