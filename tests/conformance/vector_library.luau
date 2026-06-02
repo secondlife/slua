@@ -275,7 +275,7 @@ end
 
 assert(is_native_if_supported())
 
--- Test that vector module supports generalized iteration (has __iter)
+-- Test that vector module supports generalized iteration (iterates as a plain table)
 local items = {}
 for k, v in vector do
     table.insert(items, {key = k, value = v})

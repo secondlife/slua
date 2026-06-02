@@ -1663,15 +1663,6 @@ int luaopen_sl_quaternion(lua_State* L, const char* name)
     lua_pushcfunction(L, quaternion_call, name);
     lua_setfield(L, -2, "__call");
 
-    // We need to override __iter so generalized iteration doesn't try to use __call.
-    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
-    // This is confusing at first, but we want a unique function identity
-    // when this shows up anywhere other than globals, otherwise we can
-    // muck up Ares serialization.
-    luau_dupcclosure(L, -1, "__iter");
-    lua_replace(L, -2);
-    lua_rawsetfield(L, -2, "__iter");
-
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
 
@@ -1706,15 +1697,6 @@ int luaopen_sl_uuid(lua_State* L)
     lua_newtable(L);
     lua_pushcfunction(L, uuid_call, "uuid");
     lua_setfield(L, -2, "__call");
-
-    // We need to override __iter so generalized iteration doesn't try to use __call.
-    lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "pairs");
-    // This is confusing at first, but we want a unique function identity
-    // when this shows up anywhere other than globals, otherwise we can
-    // muck up Ares serialization.
-    luau_dupcclosure(L, -1, "__iter");
-    lua_replace(L, -2);
-    lua_rawsetfield(L, -2, "__iter");
 
     lua_setreadonly(L, -1, true);
     lua_setmetatable(L, -2);
