@@ -63,8 +63,8 @@ in emitted bytecode so runtime lookup matches that key directly.
 flowchart TD
     Start[require S from module R]
     Start --> Kind{S starts with}
-    Kind -->|@alias/...| Direct[Canonical key = S]
-    Kind -->|./, ../, @self/| Resolve[Resolve against R's location -> physical path L]
+    Kind -->|"@alias/..."| Direct[Canonical key = S]
+    Kind -->|"./, ../, @self/"| Resolve[Resolve against R's location -> physical path L]
     Resolve --> FindAlias{Most-specific covering alias for L}
     FindAlias -->|Found| Build["Canonical key = @alias/{L relative to target}"]
     FindAlias -->|None| NoAliasErr["Error: no alias spans L (shouldn't happen: @root always covers project_root)"]
