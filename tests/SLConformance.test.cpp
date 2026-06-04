@@ -3,6 +3,7 @@
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
+#include "llfluent_builder.h"
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/DenseHash.h"
@@ -1484,6 +1485,59 @@ TEST_CASE("LyieldableCheck")
 TEST_CASE("Memory hygiene")
 {
     runConformance("memory_hygiene.lua");
+}
+
+TEST_CASE("llfluentbuilder")
+{
+    // Minimal descriptors that exercise every semantic type and flag bits,
+    // with no dependency on particle or any other SL-specific API.
+    static const FluentParamDescriptor kTestDescs[] = {
+        {"flags",  'i', 0},   // integer — also backing field for flags
+        {"amount", 'f', 1},   // float
+        {"color",  'v', 2},   // vector
+        {"name",   'k', 3},   // key (string | uuid)
+        {"count",  'i', 4},   // integer (second int property)
+    };
+    static const FluentFlagDescriptor kTestFlagDescs[] = {
+        {"active",  0x1, 0},  // bit 0 of flags
+        {"looping", 0x2, 0},  // bit 1 of flags
+    };
+
+    // Build the def once; it has process lifetime so static is fine here.
+    static FluentBuilderDef* s_def = []() {
+        auto* d = fluent_builder_def_build(
+            "TestApply", "LinkTestApply",
+            kTestDescs, std::size(kTestDescs)
+        );
+        fluent_builder_def_add_flags(d, kTestFlagDescs, std::size(kTestFlagDescs));
+        return d;
+    }();
+
+    runConformance("llfluentbuilder.lua", nullptr, [](lua_State* L) {
+        // Mock ll.TestApply / ll.LinkTestApply so apply() can be verified.
+        static const luaL_Reg test_ll_lib[] = {
+            {"TestApply", [](lua_State* L) -> int {
+                luaL_checktype(L, 1, LUA_TTABLE);
+                lua_pushvalue(L, 1);
+                lua_setglobal(L, "captured_apply_rules");
+                lua_pushnil(L);
+                lua_setglobal(L, "captured_apply_link");
+                return 0;
+            }},
+            {"LinkTestApply", [](lua_State* L) -> int {
+                luaL_checkinteger(L, 1);
+                luaL_checktype(L, 2, LUA_TTABLE);
+                lua_pushvalue(L, 1);
+                lua_setglobal(L, "captured_apply_link");
+                lua_pushvalue(L, 2);
+                lua_setglobal(L, "captured_apply_rules");
+                return 0;
+            }},
+            {nullptr, nullptr}
+        };
+        luaL_register_noclobber(L, LUA_LLLIBNAME, test_ll_lib);
+        slua_open_fluent_builder(L, "testmodule", "TestObj", s_def);
+    });
 }
 
 TEST_SUITE_END();

@@ -429,6 +429,8 @@ target_sources(Luau.VM PRIVATE
     VM/src/llprim.cpp
     VM/src/llprim.h
     VM/src/llprim_set_primitive_params.inl
+    VM/src/llfluent_builder.cpp
+    VM/include/llfluent_builder.h
     VM/src/lyieldable.cpp
     VM/src/lstrbuf.cpp
     VM/src/lyieldstrlib.h
