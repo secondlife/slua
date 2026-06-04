@@ -3,6 +3,7 @@
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
+#include "llfluent_builder.h"
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/DenseHash.h"
@@ -1484,6 +1485,85 @@ TEST_CASE("LyieldableCheck")
 TEST_CASE("Memory hygiene")
 {
     runConformance("memory_hygiene.lua");
+}
+
+TEST_CASE("llparticle")
+{
+    static const FluentParamDescriptor kDescs[] = {
+        {"flags",         'i',  0},
+        {"color_begin",   'v',  1},
+        {"alpha_begin",   'f',  2},
+        {"burst_rate",    'f', 13},
+    };
+    static const FluentFlagDescriptor kFlagDescs[] = {
+        {"color_interp",  0x1, 0},
+        {"scale_interp",  0x2, 0},
+        {"bounce",        0x4, 0},
+        {"emissive",    0x100, 0},
+    };
+    static FluentBuilderDef* s_def = []() {
+        auto* d = fluent_builder_def_build(kDescs, std::size(kDescs));
+        fluent_builder_def_add_flags(d, kFlagDescs, std::size(kFlagDescs));
+        return d;
+    }();
+
+    runConformance("llprim_particle.lua", nullptr, [](lua_State* L) {
+        // Mock ll.LinkParticleSystem so the dispatch wrapper can be exercised.
+        static const luaL_Reg test_ll_lib[] = {
+            {"LinkParticleSystem", [](lua_State* L) -> int {
+                luaL_checkinteger(L, 1);
+                luaL_checktype(L, 2, LUA_TTABLE);
+                lua_pushvalue(L, 1);
+                lua_setglobal(L, "_captured_link");
+                lua_pushvalue(L, 2);
+                lua_setglobal(L, "_captured_rules");
+                return 0;
+            }},
+            {nullptr, nullptr}
+        };
+        luaL_register_noclobber(L, LUA_LLLIBNAME, test_ll_lib);
+
+        auto particle_system = [](lua_State* L) -> int {
+            const auto* def = (const FluentBuilderDef*)lua_tolightuserdata(L, lua_upvalueindex(1));
+            int link = lua_isnoneornil(L, 2) ? SLUA_LINK_THIS : luaL_checkinteger(L, 2);
+            slua_fluent_serialize(L, 1, def);
+            int rules_idx = lua_gettop(L);
+            lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "ll");
+            lua_rawgetfield(L, -1, "LinkParticleSystem");
+            lua_pushinteger(L, link);
+            lua_pushvalue(L, rules_idx);
+            lua_call(L, 2, 0);
+            return 0;
+        };
+        slua_register_fluent_fn(L, "llprim", "ParticleSystem", particle_system, s_def);
+    });
+}
+
+TEST_CASE("fluent_builder_collection")
+{
+    // Synthetic descriptor table exercising the two collection semantics.
+    // tag 5: 'C' string-csv   (like PRIM_MEDIA_WHITELIST)
+    // tag 7: 'M' string-map   (like HTTP_CUSTOM_HEADER)
+    // tag 9: 's' plain string (control: must be unaffected)
+    static const FluentParamDescriptor kDescs[] = {
+        {"whitelist",      'C',  5},
+        {"custom_headers", 'M',  7},
+        {"label",          's',  9},
+    };
+    static FluentBuilderDef* s_def = []() {
+        return fluent_builder_def_build(kDescs, std::size(kDescs));
+    }();
+
+    runConformance("fluent_builder_collection.lua", nullptr, [](lua_State* L) {
+        // Mock apply function: serialize params and store result as _captured_rules.
+        auto apply_fn = [](lua_State* L) -> int {
+            const auto* def = (const FluentBuilderDef*)lua_tolightuserdata(L, lua_upvalueindex(1));
+            slua_fluent_serialize(L, 1, def);
+            lua_setglobal(L, "_captured_rules");
+            return 0;
+        };
+        slua_register_fluent_fn(L, "testbuilder", "apply", apply_fn, s_def);
+    });
 }
 
 TEST_SUITE_END();

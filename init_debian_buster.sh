@@ -29,10 +29,15 @@ apt-get install -y gcc-multilib g++-multilib cmake
 # Finally, autobuild
 pip3 --no-cache-dir install pydot==1.4.2 pyzstd==0.15.10 autobuild
 
+update-alternatives --install /usr/bin/clang clang /usr/bin/clang-11 100
+update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-11 100
 update-alternatives --install /usr/bin/cc cc /usr/bin/clang-11 100
 update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++-11 100
+update-alternatives --install /usr/bin/python python /usr/bin/python3 100
 
 cd /root
 git clone https://github.com/secondlife/build-variables.git
 cd build-variables
 echo 'export AUTOBUILD_VARIABLES_FILE=/root/build-variables/variables' >> ~/.bashrc
+
+git config --global --add safe.directory $(pwd)

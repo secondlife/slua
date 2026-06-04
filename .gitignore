@@ -30,3 +30,4 @@ __pycache__
 /fuzz/corpus/json/*
 !/fuzz/corpus/json/*.json
 *.code-workspace
+*.tar.bz2
