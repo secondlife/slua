@@ -2,7 +2,9 @@
 
 from pathlib import PurePosixPath
 
-from slua_bundle import MemoryFS, bundle, parse_bundle, simulate
+import pytest
+
+from slua_bundle import AliasCollisionWarning, MemoryFS, bundle, parse_bundle, simulate
 from slua_bundle.extractor import extract_to_dir
 
 from ._helpers import luaurc
@@ -101,3 +103,60 @@ def test_rebundle_via_extractor_uses_last_resort_resolver():
         existing_bundle=initial,
     )
     assert rebuilt == initial
+
+
+# Runtime lookup is string-based and has no .luaurc, so every require string
+# in an emitted bundle must hit a key in that bundle. The tests below pin
+# that for the cases where canonicalization re-keys a module away from the
+# spelling the require uses.
+
+
+def test_losing_alias_spelling_still_resolves_at_runtime():
+    """require via the tiebreak-losing alias of two same-target aliases."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"Zeta": "/elsewhere", "Alpha": "/elsewhere"}),
+        "/project/Main.luau": 'require("@Zeta/util")',
+        "/elsewhere/util.luau": "return {}",
+    })
+    with pytest.warns(AliasCollisionWarning):
+        text = bundle(vfs, PurePosixPath("/project"), PurePosixPath("/project/Main.luau"))
+    body_runs = simulate(text)
+    assert all(count == 1 for count in body_runs.values())
+
+
+def test_alias_shadowed_by_root_still_resolves_at_runtime():
+    """require via a user alias targeting project_root (re-keyed to @root)."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"myproj": "."}),
+        "/project/Main.luau": 'require("@myproj/util")',
+        "/project/util.luau": "return {}",
+    })
+    text = bundle(vfs, PurePosixPath("/project"), PurePosixPath("/project/Main.luau"))
+    body_runs = simulate(text)
+    assert all(count == 1 for count in body_runs.values())
+
+
+def test_relative_require_crossing_into_deeper_alias_still_resolves():
+    """relative require whose target a more specific alias re-keys."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"alpha": "/elsewhere", "util": "/elsewhere/sub"}),
+        "/project/Main.luau": 'require("@alpha/x")',
+        "/elsewhere/x.luau": 'require("./sub/helpers")',
+        "/elsewhere/sub/helpers.luau": "return {}",
+    })
+    text = bundle(vfs, PurePosixPath("/project"), PurePosixPath("/project/Main.luau"))
+    body_runs = simulate(text)
+    assert all(count == 1 for count in body_runs.values())
+
+
+def test_alias_matching_is_case_insensitive_like_upstream():
+    """alias matching folds case, per upstream Config.cpp/RequireNavigator.cpp."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"SomeLib": "Packages/SomeLib"}),
+        "/project/Main.luau": 'require("@somelib/util")',
+        "/project/Packages/SomeLib/util.luau": "return {}",
+    })
+    text = bundle(vfs, PurePosixPath("/project"), PurePosixPath("/project/Main.luau"))
+    body_runs = simulate(text)
+    assert all(count == 1 for count in body_runs.values())
+    assert len(body_runs) == 2

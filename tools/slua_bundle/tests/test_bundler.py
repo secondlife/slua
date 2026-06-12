@@ -432,6 +432,20 @@ def test_depth_exceeded_raises():
         )
 
 
+def test_parenless_require_sugar_is_traced():
+    """require "./lib/foo" (valid Luau call sugar) pulls the module in."""
+    vfs = MemoryFS.from_dict({
+        "/project/Main.luau": 'require "./lib/foo"',
+        "/project/lib/foo.luau": "return {}",
+    })
+    text = bundle(
+        vfs,
+        PurePosixPath("/project"),
+        PurePosixPath("/project/Main.luau"),
+    )
+    assert "@root/lib/foo" in parse_bundle(text).modules
+
+
 def test_module_count_exceeded_raises():
     """MAIN with > MAX_MODULES distinct dependencies trips the count limit."""
     requires = "\n".join(f'require("./m{i}")' for i in range(MAX_MODULES + 1))

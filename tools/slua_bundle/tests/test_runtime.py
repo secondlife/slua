@@ -209,6 +209,18 @@ def test_simulate_main_with_anchor_accepts_relative_and_absolute():
     assert body_runs["@p/lib/foo"] == 1
 
 
+def test_simulate_traverses_single_quoted_requires():
+    """simulate() walks single-quoted requires, same as the bundler."""
+    text = _make(
+        *_v1_header(project="p", main="@p/Main"),
+        "require('./lib/foo')",
+        "-- !!LUABUNDLE:MODULE @p/lib/foo",
+        'return "foo"',
+    )
+    body_runs = simulate(text)
+    assert body_runs.get("@p/lib/foo") == 1
+
+
 def test_simulate_bare_identifier_rejected():
     text = _make(
         *_v1_header(project="p", main="@p/Main"),
