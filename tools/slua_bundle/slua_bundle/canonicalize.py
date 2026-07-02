@@ -3,18 +3,14 @@ from __future__ import annotations
 import warnings
 from pathlib import PurePath
 
-from .errors import BundleError
+from .errors import BundleError, ReservedAliasError
 from .fs import FSBackend, normalize
 from .luaurc import load_config
 
-RESERVED_ALIASES = frozenset({"root", "self"})
+RESERVED_ALIASES = frozenset({"root", "self", "sl"})
 
 
 class NoCoveringAliasError(BundleError):
-    pass
-
-
-class ReservedAliasError(BundleError):
     pass
 
 
@@ -36,7 +32,7 @@ def build_alias_map(
 
     Nested .luaurc files are ignored: alias set must be a function of the
     project tree alone for bundle reproducibility. Reserved alias names
-    (currently just 'root') cannot be declared in .luaurc.
+    cannot be declared in .luaurc.
     """
     project_root = normalize(project_root)
     aliases = load_config(vfs, project_root)
@@ -49,15 +45,30 @@ def build_alias_map(
     return aliases
 
 
+def key_from_relpath(alias_name: str, rel: PurePath) -> str:
+    """Build a canonical key from an alias name and a path relative to its dir.
+
+    Strips the .luau suffix and an `init` leaf (a directory's init.luau is
+    the module named by the directory itself).
+    """
+    rel_parts = list(rel.with_suffix("").parts)
+    if rel_parts and rel_parts[-1] == "init":
+        rel_parts.pop()
+    if not rel_parts:
+        return f"@{alias_name}"
+    return f"@{alias_name}/" + "/".join(rel_parts)
+
+
 def canonicalize(
     vfs: FSBackend,
     file_path: PurePath,
     project_root: PurePath,
+    alias_map: dict[str, PurePath] | None = None,
 ) -> str:
     file_path = normalize(file_path)
     project_root = normalize(project_root)
 
-    aliases = build_alias_map(vfs, project_root)
+    aliases = build_alias_map(vfs, project_root) if alias_map is None else alias_map
     covering = [(target, name) for name, target in aliases.items() if _is_prefix(target, file_path)]
     if not covering:
         raise NoCoveringAliasError(
@@ -86,11 +97,4 @@ def canonicalize(
     else:
         alias_name = most_specific[0][1]
 
-    rel = file_path.relative_to(target_dir)
-    rel_parts = list(rel.with_suffix("").parts)
-    if rel_parts and rel_parts[-1] == "init":
-        rel_parts.pop()
-
-    if not rel_parts:
-        return f"@{alias_name}"
-    return f"@{alias_name}/" + "/".join(rel_parts)
+    return key_from_relpath(alias_name, file_path.relative_to(target_dir))

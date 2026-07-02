@@ -10,3 +10,11 @@ from __future__ import annotations
 
 class BundleError(Exception):
     pass
+
+
+class ReservedAliasError(BundleError):
+    """A reserved alias name (root, self, sl) was declared or required.
+
+    Lives here rather than next to one raise site: both .luaurc loading
+    (declaration) and require resolution (@sl use) raise it.
+    """

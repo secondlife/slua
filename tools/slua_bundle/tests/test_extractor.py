@@ -11,6 +11,8 @@ from slua_bundle import (
     parse_bundle,
 )
 from slua_bundle.extractor import (
+    ExtractAliasError,
+    ExtractAmbiguityError,
     ExtractClobberError,
     ExtractCollisionError,
     ExtractMissingMainError,
@@ -117,11 +119,153 @@ def test_extract_round_trips_with_external_alias_in_memory():
 
     out = MemoryFS()
     extract_to_dir(parse_bundle(original), out, PurePosixPath("/extracted"))
-    assert out.is_file(PurePosixPath("/extracted/SomeLib/util.luau"))
+    assert out.is_file(PurePosixPath("/extracted/somelib/util.luau"))
     assert out.is_file(PurePosixPath("/extracted/.luaurc"))
 
     rebuilt = bundle(out, PurePosixPath("/extracted"), PurePosixPath("/extracted/Main.luau"), "myhud")
     assert rebuilt == original
+
+
+def test_extract_root_shadow_alias_round_trips():
+    """A bare `ALIAS @myproj @root` extracts as the .luaurc entry
+    {"myproj": "."} and re-bundles byte-for-byte."""
+    src = MemoryFS.from_dict({
+        "/proj/.luaurc": json.dumps({"aliases": {"myproj": "."}}),
+        "/proj/Main.luau": 'require("@myproj/util")\n',
+        "/proj/util.luau": "return {}\n",
+    })
+    original = bundle(src, PurePosixPath("/proj"), PurePosixPath("/proj/Main.luau"))
+    assert "-- !!LUABUNDLE:ALIAS @myproj @root" in original
+
+    out = MemoryFS()
+    extract_to_dir(parse_bundle(original), out, PurePosixPath("/x"))
+    luaurc = json.loads(out.read(PurePosixPath("/x/.luaurc")))
+    assert luaurc == {"aliases": {"myproj": "."}}
+
+    rebuilt = bundle(out, PurePosixPath("/x"), PurePosixPath("/x/Main.luau"))
+    assert rebuilt == original
+
+
+def test_extract_losing_alias_round_trips():
+    """`ALIAS @zeta @alpha` becomes a second .luaurc name for alpha's dir;
+    re-bundling re-derives the same mapping (with the same collision
+    warning the original bundle produced)."""
+    src = MemoryFS.from_dict({
+        "/proj/.luaurc": json.dumps({"aliases": {"zeta": "/elsewhere", "alpha": "/elsewhere"}}),
+        "/proj/Main.luau": 'require("@zeta/util")\n',
+        "/elsewhere/util.luau": "return {}\n",
+    })
+    with pytest.warns(UserWarning):
+        original = bundle(src, PurePosixPath("/proj"), PurePosixPath("/proj/Main.luau"))
+    assert "-- !!LUABUNDLE:ALIAS @zeta @alpha" in original
+
+    out = MemoryFS()
+    extract_to_dir(parse_bundle(original), out, PurePosixPath("/x"))
+    luaurc = json.loads(out.read(PurePosixPath("/x/.luaurc")))
+    assert luaurc == {"aliases": {"alpha": "alpha", "zeta": "alpha"}}
+    assert out.is_file(PurePosixPath("/x/alpha/util.luau"))
+
+    with pytest.warns(UserWarning):
+        rebuilt = bundle(out, PurePosixPath("/x"), PurePosixPath("/x/Main.luau"))
+    assert rebuilt == original
+
+
+def test_extract_nested_alias_pin_round_trips():
+    """A tailed `ALIAS @alpha/sub @util` pins util's extract dir inside
+    alpha's so most-specific-alias canonicalization re-derives it."""
+    src = MemoryFS.from_dict({
+        "/proj/.luaurc": json.dumps({"aliases": {"alpha": "/e", "util": "/e/sub"}}),
+        "/proj/Main.luau": 'require("@alpha/x")\n',
+        "/e/x.luau": 'require("./sub/helpers")\n',
+        "/e/sub/helpers.luau": "return {}\n",
+    })
+    original = bundle(src, PurePosixPath("/proj"), PurePosixPath("/proj/Main.luau"))
+    assert "-- !!LUABUNDLE:ALIAS @alpha/sub @util" in original
+
+    out = MemoryFS()
+    extract_to_dir(parse_bundle(original), out, PurePosixPath("/x"))
+    luaurc = json.loads(out.read(PurePosixPath("/x/.luaurc")))
+    assert luaurc == {"aliases": {"alpha": "alpha", "util": "alpha/sub"}}
+    assert out.is_file(PurePosixPath("/x/alpha/x.luau"))
+    assert out.is_file(PurePosixPath("/x/alpha/sub/helpers.luau"))
+
+    rebuilt = bundle(out, PurePosixPath("/x"), PurePosixPath("/x/Main.luau"))
+    assert rebuilt == original
+
+
+def test_extract_main_under_deeper_alias_round_trips():
+    """MAIN stays root-relative even when an alias covers its directory;
+    extraction places it at its root-relative path and the ALIAS line
+    re-derives on re-bundle."""
+    src = MemoryFS.from_dict({
+        "/proj/.luaurc": json.dumps({"aliases": {"src": "src"}}),
+        "/proj/src/Main.luau": 'require("./lib/foo")\n',
+        "/proj/src/lib/foo.luau": "return {}\n",
+    })
+    original = bundle(src, PurePosixPath("/proj"), PurePosixPath("/proj/src/Main.luau"))
+    assert "-- !!LUABUNDLE:MAIN @root/src/Main" in original
+    assert "-- !!LUABUNDLE:ALIAS @root/src @src" in original
+
+    out = MemoryFS()
+    extract_to_dir(parse_bundle(original), out, PurePosixPath("/x"))
+    assert out.is_file(PurePosixPath("/x/src/Main.luau"))
+    assert out.is_file(PurePosixPath("/x/src/lib/foo.luau"))
+
+    rebuilt = bundle(out, PurePosixPath("/x"), PurePosixPath("/x/src/Main.luau"))
+    assert rebuilt == original
+
+
+def test_extract_rejects_root_key_inside_alias_dir(fs: MemoryFS):
+    """A @root key whose path passes through an alias's extract dir would
+    re-key under that alias on re-bundle; relocation made the layout
+    inexpressible."""
+    parsed = ParsedBundle(
+        fields={"version": "1", "main": "@root/Main"},
+        main_source="\n",
+        modules={
+            "@root/pkg/a": "A\n",
+            "@pkg/b": "B\n",
+        },
+    )
+    with pytest.raises(ExtractAliasError):
+        extract_to_dir(parsed, fs, OUT)
+    assert list(fs.iter_files()) == []
+
+
+def test_extract_rejects_root_key_inside_declared_nonmodule_alias_dir(fs: MemoryFS):
+    """A tailed remap source alias gets a .luaurc directory without owning
+    any module keys; @root files landing inside it would still re-key on
+    re-bundle, so the shadow check must cover declared dirs, not just
+    module-key aliases."""
+    parsed = ParsedBundle(
+        fields={"version": "1", "main": "@root/Main"},
+        main_source="\n",
+        modules={
+            "@util/helpers": "H\n",
+            "@root/zeta/x": "X\n",
+        },
+        remap={"@zeta/sub": "@util"},
+    )
+    with pytest.raises(ExtractAliasError):
+        extract_to_dir(parsed, fs, OUT)
+    assert list(fs.iter_files()) == []
+
+
+def test_extract_rejects_leaf_and_init_ambiguity(fs: MemoryFS):
+    """@root/pkg (-> pkg.luau) plus bare @pkg (-> pkg/init.luau): a re-bundle
+    require of @root/pkg would hit AmbiguousResolutionError, so the layout
+    is not hermetic."""
+    parsed = ParsedBundle(
+        fields={"version": "1", "main": "@root/Main"},
+        main_source="\n",
+        modules={
+            "@root/pkg": "leaf\n",
+            "@pkg": "init\n",
+        },
+    )
+    with pytest.raises(ExtractAmbiguityError):
+        extract_to_dir(parsed, fs, OUT)
+    assert list(fs.iter_files()) == []
 
 
 def test_extract_refuses_collision(fs: MemoryFS):

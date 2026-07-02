@@ -19,8 +19,8 @@ import sys
 from .bundler import bundle
 from .errors import BundleError
 from .extractor import extract_to_dir
-from .fs import DiskFS
-from .runtime import parse_bundle
+from .fs import DiskFS, SourceDecodeError
+from .runtime import parse_bundle, simulate
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -44,9 +44,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _read_text_utf8(p: pathlib.Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise SourceDecodeError(f"{p}: not valid UTF-8 ({e})") from e
+
+
 def _cmd_bundle(args: argparse.Namespace) -> int:
     disk = DiskFS(args.root)
-    existing = args.input_bundle.read_text() if args.input_bundle else None
+    existing = _read_text_utf8(args.input_bundle) if args.input_bundle else None
     text = bundle(
         disk,
         project_root=args.root.resolve(),
@@ -54,8 +61,12 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
         project_name=args.project,
         existing_bundle=existing,
     )
+    # Self-check before the artifact ships: every require in the emitted
+    # bundle must resolve through the bundle alone (the server has nothing
+    # else), and the walk also surfaces cycles the BFS absorbs silently.
+    simulate(text)
     if args.output:
-        args.output.write_text(text)
+        args.output.write_text(text, encoding="utf-8")
     else:
         sys.stdout.write(text)
     return 0
@@ -64,7 +75,7 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
 def _read_bundle_text(arg: pathlib.Path | None) -> str:
     if arg is None:
         return sys.stdin.read()
-    return arg.read_text()
+    return _read_text_utf8(arg)
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
@@ -79,6 +90,8 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         print(f"MAIN {main_key} ({main_size} bytes)")
     else:
         print(f"MAIN <none> ({main_size} bytes)")
+    for frm, to in sorted(parsed.remap.items()):
+        print(f"ALIAS {frm} -> {to}")
     modules = sorted(parsed.modules.items())
     total = sum(len(s.encode("utf-8")) for _, s in modules)
     print(f"MODULES ({len(modules)}, total {total} bytes):")
@@ -88,7 +101,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def _cmd_extract(args: argparse.Namespace) -> int:
-    text = args.bundle_file.read_text()
+    text = _read_text_utf8(args.bundle_file)
     parsed = parse_bundle(text)
     extract_to_dir(parsed, DiskFS(args.output), args.output.resolve())
     n = 1 + len(parsed.modules)

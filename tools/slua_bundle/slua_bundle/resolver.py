@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from .errors import BundleError
+import re
+from typing import Iterator
+
+from .errors import BundleError, ReservedAliasError
 
 
 class BareIdentifierError(BundleError):
@@ -23,13 +26,67 @@ class InvalidPathComponentError(BundleError):
     pass
 
 
+class MalformedKeyError(BundleError):
+    """A canonical key does not have the @alias[/...] shape."""
+
+
+# Matches require with a string-literal argument, parenthesized or via Luau's
+# call sugar (`require "./x"`). Each alternative captures the string body in
+# its own group; iter_requires() picks whichever matched. Known limitations
+# (documented in the RFC's reference-implementation caveats): matches inside
+# comments and long strings, and cannot see dynamic requires at all.
+REQUIRE_RE = re.compile(
+    r"\brequire\s*"
+    r"(?:\(\s*(?:\"([^\"]*)\"|'([^']*)')\s*\)"
+    r"|\"([^\"]*)\""
+    r"|'([^']*)')"
+)
+
+
+def iter_requires(source: str) -> Iterator[str]:
+    """Yield the string argument of every require() found in source."""
+    for m in REQUIRE_RE.finditer(source):
+        for group in m.groups():
+            if group is not None:
+                yield group
+                break
+
+
+def ascii_lower(s: str) -> str:
+    """ASCII-only lowercasing, matching upstream Luau's alias folding
+    (Config.cpp lowercases A-Z only; non-ASCII alias names are unspecified).
+
+    bytes.lower() only touches A-Z, and UTF-8 multibyte sequences are all
+    >= 0x80, so non-ASCII round-trips untouched.
+    """
+    return s.encode("utf-8").lower().decode("utf-8")
+
+
 def _split_canonical(key: str) -> tuple[str, list[str]]:
-    assert key.startswith("@"), f"canonical key must start with @: {key}"
+    if not key.startswith("@"):
+        raise MalformedKeyError(f"canonical key must start with @: {key!r}")
     rest = key[1:]
     if "/" in rest:
         alias, tail = rest.split("/", 1)
         return alias, tail.split("/")
     return rest, []
+
+
+def apply_remap(key: str, remap: dict[str, str]) -> str:
+    """Rewrite key through a bundle's ALIAS table ({from: to}).
+
+    Longest component-prefix match wins. A single application suffices:
+    every mapping's target is a tiebreak-winner alias, already canonical.
+    """
+    if not remap:
+        return key
+    alias, parts = _split_canonical(key)
+    for i in range(len(parts), -1, -1):
+        target = remap.get(_join_canonical(alias, parts[:i]))
+        if target is not None:
+            to_alias, to_parts = _split_canonical(target)
+            return _join_canonical(to_alias, to_parts + parts[i:])
+    return key
 
 
 def _join_canonical(alias: str, parts: list[str]) -> str:
@@ -71,11 +128,21 @@ def resolve(require_str: str, anchor_key: str | None, known_aliases: set[str]) -
         else:
             alias, tail = rest, ""
 
+        # Alias names are case-insensitive, matching upstream Luau
+        # (RequireNavigator lowercases before matching). Canonical keys use
+        # the lowercased spelling.
+        alias = ascii_lower(alias)
+
+        if alias == "sl":
+            raise ReservedAliasError(
+                f"require '{require_str}': the '@sl' namespace is reserved for future use"
+            )
+
         if alias == "self":
             if anchor_key is None:
                 raise RelativeRequireWithoutAnchorError(
                     f"require '{require_str}' uses '@self' but the requiring module has no "
-                    "anchor key (set 'main=' in the BUNDLE header for MAIN)"
+                    "anchor key (MAIN's anchor comes from the MAIN directive)"
                 )
             # Match Luau's RequireNavigator: @self resets to the requirer's
             # *module path* and navigates from there. The module path is the
@@ -108,7 +175,7 @@ def resolve(require_str: str, anchor_key: str | None, known_aliases: set[str]) -
         if anchor_key is None:
             raise RelativeRequireWithoutAnchorError(
                 f"relative require '{require_str}' has no anchor "
-                "(set 'main=' in the BUNDLE header for MAIN)"
+                "(MAIN's anchor comes from the MAIN directive)"
             )
         anchor_alias, anchor_parts = _split_canonical(anchor_key)
         anchor_dir_parts = anchor_parts[:-1] if anchor_parts else []

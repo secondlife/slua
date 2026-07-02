@@ -21,6 +21,12 @@ from dataclasses import dataclass, field
 from pathlib import PurePath, PurePosixPath
 from typing import ClassVar, Iterator
 
+from .errors import BundleError
+
+
+class SourceDecodeError(BundleError):
+    """A file on disk is not valid UTF-8."""
+
 
 def _is_anchor(s: str) -> bool:
     return s in ("/", "\\") or s.endswith((":\\", ":/"))
@@ -146,10 +152,46 @@ class DiskFS(FSBackend):
         return pathlib.Path(*path.parts)
 
     def is_file(self, path: PurePath | str) -> bool:
-        return self._coerce(path).is_file()
+        target = self._coerce(path)
+        return target.is_file() and self._matches_disk_case(target)
+
+    def _matches_disk_case(self, path: pathlib.Path) -> bool:
+        """Scripts always run under Linux, where paths are case-sensitive.
+
+        A require that only resolves because the host filesystem is
+        case-insensitive (macOS, Windows) must behave as not-found here
+        too, or the bundle's keys depend on which host built it. Verified
+        by exact-name membership in each parent's directory listing,
+        walking the components below the FS root; the root itself is
+        taken as the user spelled it. Paths outside the root (absolute
+        .luaurc alias targets) are checked from their anchor.
+        """
+        try:
+            base, parts = self._root, path.relative_to(self._root).parts
+        except ValueError:
+            if path.is_absolute():
+                base, parts = pathlib.Path(path.anchor), path.parts[1:]
+            else:
+                base, parts = pathlib.Path("."), path.parts
+        for part in parts:
+            try:
+                entries = os.listdir(base)
+            except OSError:
+                # Unreadable parent: leave the verdict to is_file().
+                return True
+            if part not in entries:
+                return False
+            base = base / part
+        return True
 
     def read(self, path: PurePath | str) -> str:
-        return self._coerce(path).read_text()
+        # Explicit utf-8: locale default (cp1252 on Windows) silently
+        # corrupts or rejects UTF-8 sources.
+        target = self._coerce(path)
+        try:
+            return target.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            raise SourceDecodeError(f"{target}: not valid UTF-8 ({e})") from e
 
     def is_dir(self, path: PurePath | str) -> bool:
         return self._coerce(path).is_dir()
@@ -170,4 +212,4 @@ class DiskFS(FSBackend):
     def write(self, path: PurePath | str, content: str) -> None:
         target = self._coerce(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8")

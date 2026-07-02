@@ -24,7 +24,7 @@ Either form puts a `slua-bundle` command on `$PATH`.
 
 ### `slua-bundle bundle`
 
-Bundle a project tree into a single text artifact. Project-internal modules canonicalize under the built-in `@root` alias. `--project` is an optional advisory project name emitted as the bundle's `PROJECT` directive (for viewer-side linkage to a disk project); it does not affect canonicalization.
+Bundle a project tree into a single text artifact. Project-internal modules canonicalize under the built-in `@root` alias. `--project` is an optional advisory project name emitted as the bundle's `PROJECT` directive (for viewer-side linkage to a disk project); it does not affect canonicalization. Before writing, the produced bundle is self-checked with the simulate walker: every require must resolve through the bundle alone, and cycles are surfaced.
 
 ```
 slua-bundle bundle --root ./src ./src/Main.luau -o bundle.lua
@@ -37,7 +37,7 @@ Pass `--input-bundle PATH` to use an existing bundle as a last-resort resolver: 
 
 ### `slua-bundle inspect`
 
-Show a bundle's structure: format version, advisory project name (if any), MAIN entry point, and a per-module byte breakdown sorted by canonical key.
+Show a bundle's structure: format version, advisory project name (if any), MAIN entry point, ALIAS prefix remappings (if any), and a per-module byte breakdown sorted by canonical key.
 
 ```
 slua-bundle inspect bundle.lua
@@ -45,7 +45,7 @@ slua-bundle inspect bundle.lua
 
 ### `slua-bundle extract`
 
-Reverse a bundle into a project tree. `@root` modules land flat under `<output>/`, non-root aliases under `<output>/<alias>/`. A `.luaurc` is generated when non-root aliases are present. Re-bundling the extracted tree reproduces the original bundle byte-for-byte.
+Reverse a bundle into a project tree. `@root` modules land flat under `<output>/`, non-root aliases under `<output>/<alias>/` (nested-alias `ALIAS` lines pin an alias's directory inside another's). A `.luaurc` declaring every alias -- including extra names from `ALIAS` lines -- is generated when needed. Re-bundling the extracted tree reproduces the original bundle byte-for-byte.
 
 ```
 slua-bundle extract -o ./extracted bundle.lua

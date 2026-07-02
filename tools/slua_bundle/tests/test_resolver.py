@@ -7,15 +7,37 @@ from slua_bundle import (
     InvalidPathComponentError,
     RelativeRequireWithoutAnchorError,
     RequireEscapesAliasError,
+    ReservedAliasError,
     UnknownAliasError,
     resolve,
 )
 
-KNOWN = {"myhud", "SomeLib"}
+KNOWN = {"myhud", "somelib"}
 
 
 def test_absolute_alias_passthrough():
     assert resolve("@myhud/lib/foo", "@myhud/Main", KNOWN) == "@myhud/lib/foo"
+
+
+def test_alias_matching_folds_case():
+    """Alias names are case-insensitive (upstream Config.cpp /
+    RequireNavigator.cpp fold to lowercase); the resolved key is folded."""
+    assert resolve("@SomeLib/util", None, KNOWN) == "@somelib/util"
+    assert resolve("@MyHud/lib/foo", "@root/Main", KNOWN) == "@myhud/lib/foo"
+
+
+def test_self_matching_folds_case():
+    """@SELF folds to the reserved @self before comparison."""
+    assert resolve("@SELF/lib/foo", "@myhud", KNOWN) == "@myhud/lib/foo"
+
+
+def test_sl_namespace_reserved():
+    """@sl/ is reserved for future use -- rejected in any casing, even when
+    a 'sl' alias somehow reaches the known set."""
+    with pytest.raises(ReservedAliasError):
+        resolve("@sl/x", "@root/Main", KNOWN | {"sl"})
+    with pytest.raises(ReservedAliasError):
+        resolve("@SL/x", None, KNOWN)
 
 
 def test_self_from_init_module_resolves_to_alias_root():
@@ -27,7 +49,7 @@ def test_self_from_init_module_resolves_to_alias_root():
 
 def test_self_from_alias_root_with_no_leaf():
     """Same as above with a different alias -- explicit pin on Luau's behavior."""
-    assert resolve("@self/util", "@SomeLib", KNOWN) == "@SomeLib/util"
+    assert resolve("@self/util", "@somelib", KNOWN) == "@somelib/util"
 
 
 def test_self_from_leaf_includes_filename_in_path():
@@ -78,7 +100,9 @@ def test_escape_via_self_dotdot():
 
 
 def test_relative_without_anchor_rejected():
-    """MAIN without main= cannot use relative requires."""
+    """resolve() with no anchor key rejects relative requires. Library-level
+    invariant only: the bundle parser mandates MAIN, so every require in a
+    parsed bundle has an anchor."""
     with pytest.raises(RelativeRequireWithoutAnchorError):
         resolve("./x", None, KNOWN)
 

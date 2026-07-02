@@ -69,8 +69,8 @@ def test_wally_style_dedup():
         "myhud",
     )
     body_runs = simulate(text)
-    assert body_runs["@SomeLib/util"] == 1
-    assert body_runs["@SomeLib"] == 1
+    assert body_runs["@somelib/util"] == 1
+    assert body_runs["@somelib"] == 1
     assert body_runs["@root/src/Main"] == 1
 
 

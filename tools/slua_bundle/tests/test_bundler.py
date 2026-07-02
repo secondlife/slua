@@ -9,6 +9,8 @@ from slua_bundle import (
     AliasCollisionWarning,
     AmbiguousResolutionError,
     DepthExceededError,
+    MainFileError,
+    MainOutsideRootError,
     MarkerInjectionError,
     MemoryFS,
     ModuleCountExceededError,
@@ -76,6 +78,7 @@ return {}
 def test_bundle_includes_wally_package():
     # Bundler reads only the project-root .luaurc. Wally writes its alias
     # declarations there, which is sufficient for MAIN to resolve @SomeLib.
+    # Alias names are case-insensitive; canonical keys use the folded form.
     vfs = MemoryFS.from_dict({
         "/project/.luaurc": luaurc({"SomeLib": "Packages/SomeLib"}),
         "/project/src/Main.luau": 'require("@SomeLib/util")',
@@ -93,7 +96,7 @@ def test_bundle_includes_wally_package():
 -- !!LUABUNDLE:MAIN @root/src/Main
 -- !!LUABUNDLE:BODY
 require("@SomeLib/util")
--- !!LUABUNDLE:MODULE @SomeLib/util
+-- !!LUABUNDLE:MODULE @somelib/util
 return {}
 """
 
@@ -303,15 +306,103 @@ def test_bundle_two_user_aliases_at_identical_target_warns():
         "/project/src/Main.luau": 'require("@Alpha/util")',
         "/elsewhere/util.luau": "return {}",
     })
-    with pytest.warns(AliasCollisionWarning, match="Alpha"):
+    with pytest.warns(AliasCollisionWarning, match="alpha"):
         text = bundle(
             vfs,
             PurePosixPath("/project"),
             PurePosixPath("/project/src/Main.luau"),
             "myhud",
         )
-    assert "-- !!LUABUNDLE:MODULE @Alpha/util" in text
-    assert "-- !!LUABUNDLE:MODULE @Zeta/util" not in text
+    assert "-- !!LUABUNDLE:MODULE @alpha/util" in text
+    assert "@zeta" not in text
+    # The require already spells the winning alias; no remap needed.
+    assert "ALIAS" not in text
+
+
+# ---- ALIAS emission and the MAIN @root invariant -----------------------------
+
+
+def test_bundle_emits_alias_line_for_root_shadowed_spelling():
+    """The require's syntactic key diverges from the canonical key; the
+    divergence is emitted as one header ALIAS prefix mapping."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"myproj": "."}),
+        "/project/Main.luau": 'require("@myproj/util")',
+        "/project/util.luau": "return {}",
+    })
+    text = bundle(
+        vfs,
+        PurePosixPath("/project"),
+        PurePosixPath("/project/Main.luau"),
+    )
+    assert text == """\
+-- !!LUABUNDLE:VERSION 1
+-- !!LUABUNDLE:MAIN @root/Main
+-- !!LUABUNDLE:ALIAS @myproj @root
+-- !!LUABUNDLE:BODY
+require("@myproj/util")
+-- !!LUABUNDLE:MODULE @root/util
+return {}
+"""
+
+
+def test_bundle_main_outside_project_root_rejected():
+    """MAIN keys are @root-relative by invariant; an entry script outside
+    project_root (even one covered by an alias) is a misconfigured root."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"shared": "/elsewhere"}),
+        "/elsewhere/Main.luau": "return 1",
+    })
+    with pytest.raises(MainOutsideRootError):
+        bundle(
+            vfs,
+            PurePosixPath("/project"),
+            PurePosixPath("/elsewhere/Main.luau"),
+        )
+
+
+def test_bundle_missing_main_rejected():
+    """A nonexistent entry script is a clean BundleError, not a traceback."""
+    vfs = MemoryFS.from_dict({})
+    with pytest.raises(MainFileError, match="does not exist"):
+        bundle(
+            vfs,
+            PurePosixPath("/project"),
+            PurePosixPath("/project/Main.luau"),
+        )
+
+
+def test_bundle_non_luau_main_rejected():
+    """The format resolves .luau only; a .lua MAIN would silently mutate to
+    .luau on an extract round-trip."""
+    vfs = MemoryFS.from_dict({
+        "/project/Main.lua": "return 1",
+    })
+    with pytest.raises(MainFileError, match="must be a .luau file"):
+        bundle(
+            vfs,
+            PurePosixPath("/project"),
+            PurePosixPath("/project/Main.lua"),
+        )
+
+
+def test_bundle_main_under_deeper_alias_stays_root_relative():
+    """A deeper alias over MAIN's directory does not re-key MAIN; the body's
+    relative requires diverge syntactic-vs-canonical instead, handled by the
+    uniform ALIAS rule."""
+    vfs = MemoryFS.from_dict({
+        "/project/.luaurc": luaurc({"src": "src"}),
+        "/project/src/Main.luau": 'require("./lib/foo")',
+        "/project/src/lib/foo.luau": "return {}",
+    })
+    text = bundle(
+        vfs,
+        PurePosixPath("/project"),
+        PurePosixPath("/project/src/Main.luau"),
+    )
+    assert "-- !!LUABUNDLE:MAIN @root/src/Main" in text
+    assert "-- !!LUABUNDLE:ALIAS @root/src @src" in text
+    assert "-- !!LUABUNDLE:MODULE @src/lib/foo" in text
 
 
 # ---- Last-resort resolver (existing_bundle fallback) ------------------------
@@ -349,7 +440,7 @@ def test_existing_bundle_used_when_alias_missing_from_luaurc():
 -- !!LUABUNDLE:MAIN @root/Main
 -- !!LUABUNDLE:BODY
 require("@SomeLib/util")
--- !!LUABUNDLE:MODULE @SomeLib/util
+-- !!LUABUNDLE:MODULE @somelib/util
 return "vendored"
 """
     vfs = MemoryFS.from_dict({
@@ -361,7 +452,7 @@ return "vendored"
         PurePosixPath("/project/Main.luau"),
         existing_bundle=prior,
     )
-    assert "-- !!LUABUNDLE:MODULE @SomeLib/util" in text
+    assert "-- !!LUABUNDLE:MODULE @somelib/util" in text
     assert 'return "vendored"' in text
 
 
@@ -379,6 +470,35 @@ def test_disk_preferred_over_existing_bundle_when_both_present():
     )
     assert 'return "from disk"' in text
     assert 'return "from prior bundle"' not in text
+
+
+def test_existing_bundle_alias_table_covers_new_spellings():
+    """Fallback lookup goes through the prior bundle's ALIAS table as a
+    prefix mapping, so spellings never observed at original bundle time
+    still resolve."""
+    prior = """\
+-- !!LUABUNDLE:VERSION 1
+-- !!LUABUNDLE:MAIN @root/Main
+-- !!LUABUNDLE:ALIAS @zeta @alpha
+-- !!LUABUNDLE:BODY
+require("@zeta/util")
+-- !!LUABUNDLE:MODULE @alpha/util
+return "util"
+-- !!LUABUNDLE:MODULE @alpha/other
+return "other"
+"""
+    vfs = MemoryFS.from_dict({
+        "/project/Main.luau": 'require("@zeta/other")',
+    })
+    text = bundle(
+        vfs,
+        PurePosixPath("/project"),
+        PurePosixPath("/project/Main.luau"),
+        existing_bundle=prior,
+    )
+    assert "-- !!LUABUNDLE:MODULE @alpha/other" in text
+    assert "-- !!LUABUNDLE:ALIAS @zeta @alpha" in text
+    assert 'return "other"' in text
 
 
 def test_no_resolver_succeeded_raises():

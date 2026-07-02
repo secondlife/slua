@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator
 
 from .errors import BundleError
-from .resolver import resolve
+from .resolver import apply_remap, ascii_lower, iter_requires, resolve
 
 SUPPORTED_VERSIONS = frozenset({1})
 
 MARKER_RE = re.compile(r"^--\s*!!LUABUNDLE:(\S+)(?:\s+(.+?))?\s*$")
-REQUIRE_RE = re.compile(r'\brequire\s*\(\s*"([^"]*)"\s*\)')
 
 
 class BundleParseError(BundleError):
@@ -26,6 +25,9 @@ class ParsedBundle:
     fields: dict[str, str]
     main_source: str
     modules: dict[str, str]
+    # ALIAS directives: syntactic prefix -> canonical prefix. Applied to
+    # require keys after absolutization, longest component-prefix first.
+    remap: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,7 @@ class BundleParser:
         self.fields: dict[str, str] = {}
         self.main_source: str = ""
         self.modules: dict[str, str] = {}
+        self.remap: dict[str, str] = {}
 
     def parse(self) -> ParsedBundle:
         self._consume_version()
@@ -63,10 +66,12 @@ class BundleParser:
             raise BundleParseError("missing MAIN directive")
         self.main_source, trailing = self._consume_body()
         self._consume_modules(trailing)
+        self._check_remap_shadowing()
         return ParsedBundle(
             fields=self.fields,
             main_source=self.main_source,
             modules=self.modules,
+            remap=self.remap,
         )
 
     def _consume_version(self) -> None:
@@ -103,6 +108,9 @@ class BundleParser:
                 self._set_unique(line, "project")
             elif kind == "MAIN":
                 self._set_unique(line, "main")
+                self._validate_main_key(line)
+            elif kind == "ALIAS":
+                self._add_alias(line)
             elif kind == "BODY":
                 if line.marker_arg:
                     raise BundleParseError(f"line {line.lineno}: BODY takes no argument")
@@ -110,9 +118,88 @@ class BundleParser:
             else:
                 raise BundleParseError(
                     f"line {line.lineno}: unknown header directive {kind} "
-                    "(at this VERSION, only PROJECT, MAIN, BODY are valid)"
+                    "(at this VERSION, only PROJECT, MAIN, ALIAS, BODY are valid)"
                 )
         raise BundleParseError("missing BODY marker")
+
+    def _validate_key(self, line: _Line, key: str) -> None:
+        if not key.startswith("@"):
+            raise BundleParseError(
+                f"line {line.lineno}: key must start with @: {key!r}"
+            )
+        alias = key[1:].split("/", 1)[0]
+        if not alias:
+            raise BundleParseError(
+                f"line {line.lineno}: key has an empty alias: {key!r}"
+            )
+        if alias in ("self", "sl"):
+            raise BundleParseError(
+                f"line {line.lineno}: key may not use the reserved alias @{alias}: {key!r}"
+            )
+        if alias != ascii_lower(alias):
+            raise BundleParseError(
+                f"line {line.lineno}: key alias must be lowercase canonical "
+                f"form: {key!r}"
+            )
+
+    def _validate_main_key(self, line: _Line) -> None:
+        main = self.fields["main"]
+        self._validate_key(line, main)
+        if main != "@root" and not main.startswith("@root/"):
+            raise BundleParseError(
+                f"line {line.lineno}: MAIN key must be under @root, got {main!r}"
+            )
+
+    def _add_alias(self, line: _Line) -> None:
+        args = line.marker_arg.split()
+        if len(args) != 2:
+            raise BundleParseError(
+                f"line {line.lineno}: ALIAS takes exactly two keys (from, to)"
+            )
+        frm, to = args
+        self._validate_key(line, frm)
+        self._validate_key(line, to)
+        if frm == "@root":
+            raise BundleParseError(
+                f"line {line.lineno}: ALIAS may not remap @root itself"
+            )
+        if "/" in to[1:]:
+            raise BundleParseError(
+                f"line {line.lineno}: ALIAS target must be a bare @alias, got {to!r}"
+            )
+        if frm == to:
+            raise BundleParseError(
+                f"line {line.lineno}: ALIAS maps {frm} to itself"
+            )
+        if frm[1:].split("/", 1)[0] == to[1:]:
+            # Same alias on both sides with a tail on the source: claims
+            # the alias's directory contains itself.
+            raise BundleParseError(
+                f"line {line.lineno}: ALIAS {frm} -> {to} nests an alias inside itself"
+            )
+        if frm in self.remap:
+            raise BundleParseError(
+                f"line {line.lineno}: duplicate ALIAS for {frm}"
+            )
+        self.remap[frm] = to
+
+    def _check_remap_shadowing(self) -> None:
+        """No module key may live under a remapped prefix.
+
+        Module keys are canonical; a remapped prefix only redirects spellings
+        that would otherwise dangle. MAIN is exempt: it is root-relative by
+        fiat (and never a lookup target -- requiring it is always a cycle),
+        so a deeper alias over MAIN's directory legitimately remaps a prefix
+        of MAIN's own key.
+        """
+        for frm in self.remap:
+            prefix = frm + "/"
+            for key in self.modules:
+                if key == frm or key.startswith(prefix):
+                    raise BundleParseError(
+                        f"ALIAS {frm} shadows module key {key}; a remapped "
+                        "prefix cannot contain real modules"
+                    )
 
     def _set_unique(self, line: _Line, field_name: str) -> None:
         if not line.marker_arg:
@@ -152,6 +239,7 @@ class BundleParser:
                 raise BundleParseError(
                     f"line {current.lineno}: MODULE requires a canonical key"
                 )
+            self._validate_key(current, key)
             if key in self.modules:
                 raise BundleParseError(
                     f"line {current.lineno}: duplicate MODULE marker for {key}"
@@ -187,16 +275,18 @@ def simulate(text: str) -> dict[str, int]:
     all_modules = dict(parsed.modules)
     if main_anchor in all_modules:
         raise BundleParseError(
-            f"BUNDLE main={main_anchor} collides with a module key in the same bundle"
+            f"MAIN {main_anchor} collides with a module key in the same bundle"
         )
     all_modules[main_anchor] = parsed.main_source
 
+    # The parser guarantees every key is @-prefixed. Remap sources count as
+    # known aliases too: a require spelled through one must still resolve
+    # before the rewrite redirects it.
     known_aliases: set[str] = {"root"}
     for key in all_modules:
-        if not key.startswith("@"):
-            raise BundleParseError(f"module key does not start with @: {key}")
-        alias = key[1:].split("/", 1)[0]
-        known_aliases.add(alias)
+        known_aliases.add(key[1:].split("/", 1)[0])
+    for frm in parsed.remap:
+        known_aliases.add(frm[1:].split("/", 1)[0])
 
     body_runs: dict[str, int] = {}
     cached: set[str] = set()
@@ -211,8 +301,8 @@ def simulate(text: str) -> dict[str, int]:
         if key not in all_modules:
             raise BundleParseError(f"required module {key} not in bundle")
         in_progress.append(key)
-        for req in REQUIRE_RE.findall(all_modules[key]):
-            target = resolve(req, key, known_aliases)
+        for req in iter_requires(all_modules[key]):
+            target = apply_remap(resolve(req, key, known_aliases), parsed.remap)
             run(target)
         in_progress.pop()
         body_runs[key] = body_runs.get(key, 0) + 1

@@ -2,7 +2,9 @@
 
 import pathlib
 
-from slua_bundle import DiskFS, bundle
+import pytest
+
+from slua_bundle import DiskFS, NoResolverError, SourceDecodeError, bundle
 
 
 def _write(root: pathlib.Path, rel: str, content: str) -> pathlib.Path:
@@ -35,6 +37,46 @@ require("./bar")
 -- !!LUABUNDLE:MODULE @root/lib/bar
 return 1
 """
+
+
+def test_read_write_utf8_round_trip(tmp_path: pathlib.Path):
+    """DiskFS pins utf-8 explicitly; the locale default (cp1252 on Windows)
+    must not influence what lands on disk."""
+    fs = DiskFS(tmp_path)
+    content = 'return "café ☃"\n'
+    fs.write(tmp_path / "x.luau", content)
+    assert (tmp_path / "x.luau").read_bytes() == content.encode("utf-8")
+    assert fs.read(tmp_path / "x.luau") == content
+
+
+def test_read_invalid_utf8_raises_bundle_error(tmp_path: pathlib.Path):
+    """A non-utf-8 source surfaces as a BundleError, not a raw traceback."""
+    bad = tmp_path / "bad.luau"
+    bad.write_bytes(b'return "\xff\xfe"')
+    fs = DiskFS(tmp_path)
+    with pytest.raises(SourceDecodeError, match="not valid UTF-8"):
+        fs.read(bad)
+
+
+def test_is_file_requires_exact_case(tmp_path: pathlib.Path):
+    """Scripts run under Linux; a wrong-case path must behave as not-found
+    even when the host filesystem (macOS, Windows) would open it."""
+    _write(tmp_path, "lib/foo.luau", "return 1")
+    fs = DiskFS(tmp_path)
+    assert fs.is_file(tmp_path / "lib" / "foo.luau")
+    assert not fs.is_file(tmp_path / "lib" / "Foo.luau")
+    assert not fs.is_file(tmp_path / "Lib" / "foo.luau")
+
+
+def test_bundle_wrong_case_require_is_not_found(tmp_path: pathlib.Path):
+    """require("./lib/Foo") with foo.luau on disk fails resolution on every
+    host, matching the Linux runtime."""
+    _write(tmp_path, "src/Main.luau", 'require("./lib/Foo")')
+    _write(tmp_path, "src/lib/foo.luau", "return 1")
+    fs = DiskFS(tmp_path)
+    project_root = (tmp_path / "src").resolve()
+    with pytest.raises(NoResolverError):
+        bundle(fs, project_root, project_root / "Main.luau")
 
 
 def test_iter_files_skips_dotfiles_except_luaurc(tmp_path: pathlib.Path):
