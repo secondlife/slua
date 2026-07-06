@@ -1,4 +1,4 @@
-#define llfluent_builder_c
+#define llruleset_builder_c
 
 #include <string>
 #include <vector>
@@ -9,12 +9,12 @@
 #include "lcommon.h"
 #include "lualib.h"
 #include "llsl.h"
-#include "llfluent_builder.h"
+#include "llruleset_builder.h"
 
-struct FluentBuilderDef
+struct RulesetBuilderDef
 {
-    std::vector<FluentParamDescriptor> descs;     // sorted by tag; .name points into string literals
-    std::vector<FluentFlagDescriptor>  flag_descs;
+    std::vector<RulesetParamDescriptor> descs;     // sorted by tag; .name points into string literals
+    std::vector<RulesetFlagDescriptor>  flag_descs;
 };
 
 namespace
@@ -25,11 +25,11 @@ namespace
     // __tostring metamethod; everything else is skipped.
     // On success: replaces TOS with a Lua string and returns true.
     // On failure: pops TOS and returns false.
-    bool slua_fluent_to_string(lua_State* L)
+    bool slua_ruleset_to_string(lua_State* L)
     {
         int vtype = lua_type(L, -1);
 
-        // Native conversions — always well-defined.
+        // Native conversions -- always well-defined.
         if (vtype == LUA_TSTRING || vtype == LUA_TNUMBER || vtype == LUA_TBOOLEAN)
         {
             luaL_tolstring(L, -1, nullptr);
@@ -53,8 +53,8 @@ namespace
 
     // Encodes a lua array as a CSV string; emit one tag/value pair.
     // returns the new index into the list table.
-    int slua_fluent_serialize_string_csv(lua_State* L, int list, int idx,
-        const FluentParamDescriptor& desc)
+    int slua_ruleset_serialize_string_csv(lua_State* L, int list, int idx,
+        const RulesetParamDescriptor& desc)
     {
         int n = (int)lua_objlen(L, -1);
         if (n > 0)
@@ -63,7 +63,7 @@ namespace
             for (int j = 1; j <= n; ++j)
             {
                 lua_rawgeti(L, -1, j);
-                if (slua_fluent_to_string(L))
+                if (slua_ruleset_to_string(L))
                 {
                     size_t len = 0;
                     const char* s = lua_tolstring(L, -1, &len);
@@ -100,8 +100,8 @@ namespace
     // Convert a lua table into a series of tag/key/value triples, one per entry,
     // sorted by key.
     // returns the new index into the list table.
-    int slua_fluent_serialize_string_map(lua_State* L, int list, int idx,
-        const FluentParamDescriptor& desc)
+    int slua_ruleset_serialize_string_map(lua_State* L, int list, int idx,
+        const RulesetParamDescriptor& desc)
     {
         // Collect keys for deterministic ordering.
         std::vector<std::string> keys;
@@ -118,7 +118,7 @@ namespace
         {
             lua_pushlstring(L, key.c_str(), key.size());
             lua_rawget(L, -2); // push value
-            if (!slua_fluent_to_string(L))
+            if (!slua_ruleset_to_string(L))
                 continue;
             lua_pushinteger(L, desc.tag);
             lua_rawseti(L, list, ++idx);
@@ -133,14 +133,14 @@ namespace
     // Convert a lua array into a series of tag/value pairs, one per element,
     // preserving order.
     // returns the new index into the list table.
-    int slua_fluent_serialize_string_multi(lua_State* L, int list, int idx,
-        const FluentParamDescriptor& desc)
+    int slua_ruleset_serialize_string_multi(lua_State* L, int list, int idx,
+        const RulesetParamDescriptor& desc)
     {
         int n = (int)lua_objlen(L, -1);
         for (int j = 1; j <= n; ++j)
         {
             lua_rawgeti(L, -1, j);
-            if (slua_fluent_to_string(L))
+            if (slua_ruleset_to_string(L))
             {
                 lua_pushinteger(L, desc.tag);
                 lua_rawseti(L, list, ++idx);
@@ -152,37 +152,37 @@ namespace
     }
 }
 
-FluentBuilderDef* fluent_builder_def_build(
-    const FluentParamDescriptor* descs,
-    size_t                       count
+RulesetBuilderDef* ruleset_builder_def_build(
+    const RulesetParamDescriptor* descs,
+    size_t                        count
 )
 {
-    auto* def = new FluentBuilderDef;
+    auto* def = new RulesetBuilderDef;
 
     // Copy descriptors. .name pointers reference string literals with static
-    // storage duration — no deep copy needed.
+    // storage duration -- no deep copy needed.
     def->descs.assign(descs, descs + count);
 
     // Sort by tag for deterministic serialization order.
     std::sort(def->descs.begin(), def->descs.end(),
-        [](const FluentParamDescriptor& a, const FluentParamDescriptor& b) {
+        [](const RulesetParamDescriptor& a, const RulesetParamDescriptor& b) {
             return a.tag < b.tag;
         });
 
     return def;
 }
 
-void fluent_builder_def_add_flags(
-    FluentBuilderDef*           def,
-    const FluentFlagDescriptor* descs,
-    size_t                      count
+void ruleset_builder_def_add_flags(
+    RulesetBuilderDef*           def,
+    const RulesetFlagDescriptor* descs,
+    size_t                       count
 )
 {
-    // .name pointers reference string literals — no deep copy needed.
+    // .name pointers reference string literals -- no deep copy needed.
     def->flag_descs.assign(descs, descs + count);
 }
 
-void slua_fluent_serialize(lua_State* L, int params_idx, const FluentBuilderDef* def)
+void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDef* def)
 {
     lua_newtable(L);
     int list = lua_gettop(L);
@@ -239,7 +239,7 @@ void slua_fluent_serialize(lua_State* L, int params_idx, const FluentBuilderDef*
             continue;
         }
 
-        // 'C': string-csv — value is a Lua array of strings.
+        // 'C': string-csv -- value is a Lua array of strings.
         // Encode as comma-joined string; emit one tag/value pair.
         if (desc.semantic == 'C')
         {
@@ -249,11 +249,11 @@ void slua_fluent_serialize(lua_State* L, int params_idx, const FluentBuilderDef*
                 continue;
             }
 
-            idx = slua_fluent_serialize_string_csv(L, list, idx, desc);
+            idx = slua_ruleset_serialize_string_csv(L, list, idx, desc);
             continue;
         }
 
-        // 'M': string-map — value is a Lua string-keyed table.
+        // 'M': string-map -- value is a Lua string-keyed table.
         // Emit one tag/key/value triple per entry, in sorted key order.
         if (desc.semantic == 'M')
         {
@@ -262,11 +262,11 @@ void slua_fluent_serialize(lua_State* L, int params_idx, const FluentBuilderDef*
                 if (has_raw) lua_pop(L, 1);
                 continue;
             }
-            idx = slua_fluent_serialize_string_map(L, list, idx, desc);
+            idx = slua_ruleset_serialize_string_map(L, list, idx, desc);
             continue;
         }
 
-        // 'N': string-multi — value is a Lua array of strings.
+        // 'N': string-multi -- value is a Lua array of strings.
         // Emit one tag/value pair per element, preserving order.
         if (desc.semantic == 'N')
         {
@@ -275,7 +275,7 @@ void slua_fluent_serialize(lua_State* L, int params_idx, const FluentBuilderDef*
                 if (has_raw) lua_pop(L, 1);
                 continue;
             }
-            idx = slua_fluent_serialize_string_multi(L, list, idx, desc);
+            idx = slua_ruleset_serialize_string_multi(L, list, idx, desc);
             continue;
         }
 
@@ -296,12 +296,12 @@ void slua_fluent_serialize(lua_State* L, int params_idx, const FluentBuilderDef*
     }
 }
 
-void slua_register_fluent_fn(
-    lua_State*              L,
-    const char*             module_name,
-    const char*             fn_name,
-    lua_CFunction           fn,
-    const FluentBuilderDef* def
+void slua_register_ruleset_fn(
+    lua_State*               L,
+    const char*              module_name,
+    const char*              fn_name,
+    lua_CFunction            fn,
+    const RulesetBuilderDef* def
 )
 {
     int top = lua_gettop(L);

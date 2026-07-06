@@ -352,7 +352,7 @@ target_sources(Luau.VM PRIVATE
     VM/include/luaconf.h
     VM/include/lualib.h
     VM/include/llsl.h
-    VM/include/llfluent_builder.h
+    VM/include/llruleset_builder.h
 
     VM/src/ares.cpp
     VM/src/lapi.cpp
@@ -430,7 +430,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/llprim.cpp
     VM/src/llprim.h
     VM/src/llprim_set_primitive_params.inl
-    VM/src/llfluent_builder.cpp
+    VM/src/llruleset_builder.cpp
     VM/src/lyieldable.cpp
     VM/src/lstrbuf.cpp
     VM/src/lyieldstrlib.h

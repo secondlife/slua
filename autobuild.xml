@@ -102,11 +102,11 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>5d173e32624eebc6adb4241874309e8e3dd49d72</string>
+              <string>f8949fca1ee107be2b878f38b916d7fe254be03f</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://github.com/secondlife/lsl-definitions/releases/download/v0.6.10/lsl_definitions-0.6.10-common-28481241270.tar.zst</string>
+              <string>https://github.com/secondlife/lsl-definitions/releases/download/v0.6.11/lsl_definitions-0.6.11-common-28811066278.tar.zst</string>
             </map>
             <key>name</key>
             <string>common</string>
@@ -117,9 +117,9 @@
         <key>license_file</key>
         <string>LICENSES/lsl_definitions.txt</string>
         <key>copyright</key>
-        <string>Copyright (c) 2026, Linden Lab</string>
+        <string>Copyright (c) 2026, Linden Research, Inc.</string>
         <key>version</key>
-        <string>0.6.10</string>
+        <string>0.6.11</string>
         <key>use_scm_version</key>
         <boolean>true</boolean>
         <key>name</key>

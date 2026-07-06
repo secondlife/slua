@@ -1,4 +1,4 @@
--- Conformance tests for 'C' (string-csv) and 'M' (string-map) fluent builder semantics.
+-- Conformance tests for 'C' (string-csv) and 'M' (string-map) ruleset builder semantics.
 --
 -- The C++ harness registers testbuilder.apply(params) which serializes params
 -- using a synthetic descriptor table:
