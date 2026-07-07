@@ -102,11 +102,11 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>ffc81687f9c141d5bcfb79b8a201080c64b86a2c</string>
+              <string>f8949fca1ee107be2b878f38b916d7fe254be03f</string>
               <key>hash_algorithm</key>
               <string>sha1</string>
               <key>url</key>
-              <string>https://github.com/secondlife/lsl-definitions/releases/download/v0.6.2/lsl_definitions-0.6.2-common-25239282650.tar.zst</string>
+              <string>https://github.com/secondlife/lsl-definitions/releases/download/v0.6.11/lsl_definitions-0.6.11-common-28811066278.tar.zst</string>
             </map>
             <key>name</key>
             <string>common</string>
@@ -117,19 +117,13 @@
         <key>license_file</key>
         <string>LICENSES/lsl_definitions.txt</string>
         <key>copyright</key>
-        <string>Copyright (c) 2026, Linden Lab</string>
+        <string>Copyright (c) 2026, Linden Research, Inc.</string>
         <key>version</key>
-        <string>0.6.2</string>
+        <string>0.6.11</string>
         <key>use_scm_version</key>
         <boolean>true</boolean>
         <key>name</key>
         <string>lsl_definitions</string>
-        <key>vcs_branch</key>
-        <string>refs/tags/v0.6.1</string>
-        <key>vcs_revision</key>
-        <string>e16250ee55fab9ed399d50cf232630e9c5bb22ef</string>
-        <key>vcs_url</key>
-        <string>git://github.com/secondlife/lsl-definitions.git</string>
         <key>source_type</key>
         <string>git</string>
         <key>canonical_repo</key>
@@ -259,7 +253,7 @@
       <key>license_file</key>
       <string>LICENSES/luau.txt</string>
       <key>copyright</key>
-      <string>Copyright (c) 2024 Linden Lab Inc., Copyright (c) 2022-2024 Harold Cindy, Copyright (c) 2019-2024 Roblox Corporation, Copyright (c) 1994–2019 Lua.org, PUC-Rio.</string>
+      <string>Copyright (c) 2024 Linden Research, Inc., Copyright (c) 2022-2024 Harold Cindy, Copyright (c) 2019-2024 Roblox Corporation, Copyright (c) 1994–2019 Lua.org, PUC-Rio.</string>
       <key>use_scm_version</key>
       <boolean>true</boolean>
       <key>name</key>

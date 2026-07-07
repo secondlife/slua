@@ -37,7 +37,7 @@ mkdir -p "$stage/lib/release"
 
 pushd "$top"
     pushd "VM/include"
-    cp -v lua.h luaconf.h lualib.h llsl.h "$stage/include/luau/"
+    cp -v lua.h luaconf.h lualib.h llsl.h llruleset_builder.h "$stage/include/luau/"
     popd
     pushd "Compiler/include"
     cp -v luacode.h "$stage/include/luau/"
