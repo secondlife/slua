@@ -296,6 +296,40 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
     }
 }
 
+bool slua_ruleset_coerce(lua_State* L, int params_idx, const RulesetBuilderDef* def)
+{
+    // Convert relative index to absolute
+    if (params_idx < 0 && params_idx > LUA_REGISTRYINDEX)
+        params_idx = lua_gettop(L) + params_idx + 1;
+
+    // Not a table? Leave unchanged.
+    if (!lua_istable(L, params_idx))
+        return false;
+
+    // Check if this is a dict (no integer key 1) vs sequential list (has key 1).
+    lua_rawgeti(L, params_idx, 1);
+    bool has_first = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+
+    if (has_first)
+        return false;  // Sequential list, leave unchanged
+
+    // Check if table has any keys at all.
+    lua_pushnil(L);
+    bool has_keys = (lua_next(L, params_idx) != 0);
+    if (!has_keys)
+        return false;  // Empty table, already a valid empty list
+    lua_pop(L, 2);  // Pop key and value
+
+    // Serialize dict to flat list (pushes new table on stack)
+    slua_ruleset_serialize(L, params_idx, def);
+
+    // Replace original table with serialized list
+    lua_replace(L, params_idx);
+
+    return true;
+}
+
 void slua_register_ruleset_fn(
     lua_State*               L,
     const char*              module_name,
