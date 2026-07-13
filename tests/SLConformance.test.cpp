@@ -1555,42 +1555,15 @@ TEST_CASE("ruleset_builder_collection")
     }();
 
     runConformance("ruleset_builder_collection.lua", nullptr, [](lua_State* L) {
-        // Mock apply function: serialize params and store result as _captured_rules.
+        // Mock apply function: coerce params (dict->list if needed) and store as _captured_rules.
         auto apply_fn = [](lua_State* L) -> int {
             const auto* def = (const RulesetBuilderDef*)lua_tolightuserdata(L, lua_upvalueindex(1));
-            slua_ruleset_serialize(L, 1, def);
+            slua_ruleset_coerce(L, 1, def);
+            lua_pushvalue(L, 1);
             lua_setglobal(L, "_captured_rules");
             return 0;
         };
         slua_register_ruleset_fn(L, "testbuilder", "apply", apply_fn, s_def);
-    });
-}
-
-TEST_CASE("slua_ruleset_coerce")
-{
-    // Simple descriptor table for testing coercion.
-    static const RulesetParamDescriptor kDescs[] = {
-        {"alpha", 'f', 1},
-        {"name",  's', 2},
-        {"count", 'i', 3},
-    };
-    static RulesetBuilderDef* s_def = []() {
-        return ruleset_builder_def_build(kDescs, std::size(kDescs));
-    }();
-
-    runConformance("ruleset_coerce.lua", nullptr, [](lua_State* L) {
-        // Test function: coerces input, returns (did_coerce, result).
-        auto coerce_test = [](lua_State* L) -> int {
-            const auto* def = (const RulesetBuilderDef*)lua_tolightuserdata(L, lua_upvalueindex(1));
-            lua_settop(L, 1);  // Ensure exactly one argument
-            bool did_coerce = slua_ruleset_coerce(L, 1, def);
-            lua_pushboolean(L, did_coerce);
-            lua_insert(L, 1);  // [did_coerce, coerced_or_original]
-            return 2;
-        };
-        lua_pushlightuserdata(L, (void*)s_def);
-        lua_pushcclosure(L, coerce_test, nullptr, 1);
-        lua_setglobal(L, "test_coerce");
     });
 }
 
