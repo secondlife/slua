@@ -12,10 +12,10 @@
 #include "llsl.h"
 #include "llruleset_builder.h"
 
-#include "lapi.h"     // luaA_toobject, luaA_pushobject
-#include "lobject.h"  // TValue, hvalue, ttisnil, ttistable, ttisboolean, ttisnumber, bvalue, nvalue
-#include "ltable.h"   // LuaTable, luaH_getnum, luaH_getstr, luaH_getn
-#include "lstring.h"  // luaS_new
+#include "lapi.h"
+#include "lobject.h"
+#include "ltable.h"
+#include "lstring.h"
 
 struct RulesetBuilderDef
 {
