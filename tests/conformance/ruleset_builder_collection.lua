@@ -61,4 +61,16 @@ check(
     {5, "https://x.com", 7, "K", "V", 9, "hello"}
 )
 
+-- ─── Coercion: dict vs sequential list ───────────────────────────────────────
+
+-- Dict input is coerced to a flat tag/value list.
+check({label = "solo"}, {9, "solo"})
+check({whitelist = {"a", "b"}, label = "hi"}, {5, "a,b", 9, "hi"})
+
+-- Sequential list (has integer key 1) passes through unchanged.
+check({5, "prebuilt", 9, "label"}, {5, "prebuilt", 9, "label"})
+
+-- Empty table passes through unchanged.
+check({}, {})
+
 return "OK"

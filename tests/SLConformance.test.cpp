@@ -1555,10 +1555,11 @@ TEST_CASE("ruleset_builder_collection")
     }();
 
     runConformance("ruleset_builder_collection.lua", nullptr, [](lua_State* L) {
-        // Mock apply function: serialize params and store result as _captured_rules.
+        // Mock apply function: coerce params (dict->list if needed) and store as _captured_rules.
         auto apply_fn = [](lua_State* L) -> int {
             const auto* def = (const RulesetBuilderDef*)lua_tolightuserdata(L, lua_upvalueindex(1));
-            slua_ruleset_serialize(L, 1, def);
+            slua_ruleset_coerce(L, 1, def);
+            lua_pushvalue(L, 1);
             lua_setglobal(L, "_captured_rules");
             return 0;
         };

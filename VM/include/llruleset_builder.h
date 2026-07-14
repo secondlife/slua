@@ -65,6 +65,13 @@ void ruleset_builder_def_add_flags(
 // Flag boolean properties are merged into their backing integer field before emission.
 void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDef* def);
 
+// Coerce a dict-style params table to a flat rules list in-place.
+// If the value at params_idx is a dict (table with no integer key 1), serializes it
+// using slua_ruleset_serialize and replaces the stack slot with the result.
+// If the value is already a sequential list, nil, or non-table, leaves it unchanged.
+// Returns true if coercion was performed, false otherwise.
+bool slua_ruleset_coerce(lua_State* L, int params_idx, const RulesetBuilderDef* def);
+
 // Register fn as module_name.fn_name in L's globals, with def stored as upvalue 1.
 // Creates the module table if it does not yet exist; adds to it if it does.
 // Sets the module table readonly after each call.
