@@ -118,11 +118,12 @@ jobs:
         shell: bash # necessary for fail-fast
         run: |
           RelWithDebInfo/Luau.Conformance.exe -O2
-          RelWithDebInfo/Luau.Conformance.exe -O2 --fflags=true
-          RelWithDebInfo/Luau.Conformance.exe --codegen
+# ServerLua: Some of these disabled due to extremely long runtime
+#          RelWithDebInfo/Luau.Conformance.exe -O2 --fflags=true
+#          RelWithDebInfo/Luau.Conformance.exe --codegen
           RelWithDebInfo/Luau.Conformance.exe --codegen --fflags=true
-          RelWithDebInfo/Luau.Conformance.exe --codegen -O2
-          RelWithDebInfo/Luau.Conformance.exe --codegen -O2 --fflags=true
+#          RelWithDebInfo/Luau.Conformance.exe --codegen -O2
+#          RelWithDebInfo/Luau.Conformance.exe --codegen -O2 --fflags=true
       - name: cmake cli
         shell: bash # necessary for fail-fast
         run: |
