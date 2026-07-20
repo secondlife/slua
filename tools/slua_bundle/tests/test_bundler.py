@@ -378,7 +378,7 @@ def test_bundle_non_luau_main_rejected():
     vfs = MemoryFS.from_dict({
         "/project/Main.lua": "return 1",
     })
-    with pytest.raises(MainFileError, match="must be a .luau file"):
+    with pytest.raises(MainFileError, match=r"must be a \.luau file"):
         bundle(
             vfs,
             PurePosixPath("/project"),
