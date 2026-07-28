@@ -41,13 +41,12 @@ void luaC_validate(lua_State* L);
 void luau_callhook(lua_State* L, lua_Hook hook, void* userdata);
 
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
-LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_FASTFLAG(LuauStacklessPcall)
 LUAU_FASTFLAG(LuauCodegenA64ClosureOffset)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauNewMathConstantsRuntime)
-
+LUAU_FASTFLAG(LuauCompileStringInterpWithZero)
 
 static lua_CompileOptions defaultOptions()
 {
@@ -1375,6 +1374,8 @@ TEST_CASE("Strings")
 
 TEST_CASE("StringInterp")
 {
+    ScopedFastFlag luauCompileStringInterpWithZero{FFlag::LuauCompileStringInterpWithZero, true};
+
     runConformance("stringinterp.luau");
 }
 
@@ -1674,7 +1675,6 @@ TEST_CASE("Pack")
 
 TEST_CASE("ExplicitTypeInstantiations")
 {
-    ScopedFastFlag sff{FFlag::LuauExplicitTypeInstantiationSyntax, true};
     runConformance("explicit_type_instantiations.luau");
 }
 

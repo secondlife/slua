@@ -8,7 +8,6 @@
 #include <vector>
 #include <math.h>
 
-LUAU_FASTFLAG(LuauExplicitTypeInstantiationSyntax)
 LUAU_FASTFLAGVARIABLE(LuauCompileFoldStringLimit)
 
 namespace Luau
@@ -647,7 +646,6 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprInstantiate* expr = node->as<AstExprInstantiate>())
         {
-            LUAU_ASSERT(FFlag::LuauExplicitTypeInstantiationSyntax);
             result = analyze(expr->expr);
         }
         else
