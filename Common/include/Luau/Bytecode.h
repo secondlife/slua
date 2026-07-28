@@ -47,6 +47,7 @@
 // Version 4: Adds Proto::flags, typeinfo, and floor division opcodes IDIV/IDIVK. Currently supported.
 // Version 5: Adds SUBRK/DIVRK and vector constants. Currently supported.
 // Version 6: Adds FASTCALL3. Currently supported.
+// Version 7: Adds LBC_CONSTANT_TABLE_WITH_CONSTANTS for DUPTABLE with pre-filled constant values. Currently supported.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -493,7 +494,7 @@ enum LuauBytecodeTag
 {
     // Bytecode version; runtime supports [MIN, MAX], compiler emits TARGET by default but may emit a higher version when flags are enabled
     LBC_VERSION_MIN = 3,
-    LBC_VERSION_MAX = 6,
+    LBC_VERSION_MAX = 7,
     LBC_VERSION_TARGET = 6,
     // Type encoding version
     LBC_TYPE_VERSION_MIN = 1,
@@ -510,6 +511,8 @@ enum LuauBytecodeTag
     LBC_CONSTANT_VECTOR,
     // ServerLua: added by us for integer constant support
     LBC_CONSTANT_INTEGER,
+    // Added by upstream
+    LBC_CONSTANT_TABLE_WITH_CONSTANTS,
 };
 
 // Type table tags
