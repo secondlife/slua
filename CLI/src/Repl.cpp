@@ -818,7 +818,9 @@ static void displayHelp(const char* argv0)
     printf("  --lsl: run REPL with LSL semantics\n");
     printf("  --sl: run REPL with SL semantics\n");
     printf("  --codegen: execute code using native code generation\n");
+    printf("  --codegen-perf: execute code using native code generation and profile using perf (only on Linux)\n");
     printf("  --program-args,-a: declare start of arguments to be passed to the Luau program\n");
+    printf("  --fflags=<flags>: comma-separated list of fast flags to enable/disable (--fflags=true,false,LuauFlag1=true,LuauFlag2=false).\n");
 }
 
 static int assertionHandler(const char* expr, const char* file, int line, const char* function)
@@ -968,7 +970,9 @@ int replMain(int argc, char** argv)
             codegenPerfLog,
             [](void* context, uintptr_t addr, unsigned size, const char* symbol)
             {
-                fprintf(static_cast<FILE*>(context), "%016lx %08x %s\n", long(addr), size, symbol);
+                FILE* outputFile = static_cast<FILE*>(context);
+                fprintf(outputFile, "%016lx %08x %s\n", long(addr), size, symbol);
+                fflush(outputFile);
             }
         );
 #else

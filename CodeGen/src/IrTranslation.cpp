@@ -13,8 +13,9 @@
 #include "ltm.h"
 
 LUAU_FASTFLAG(LuauCodegenBlockSafeEnv)
-LUAU_FASTFLAGVARIABLE(LuauCodegenLinearNonNumComp)
 LUAU_FASTFLAG(LuauCodegenCounterSupport)
+LUAU_FASTFLAG(LuauCodegenDseOnCondJump)
+LUAU_FASTFLAG(LuauCodegenMarkDeadRegisters)
 
 namespace Luau
 {
@@ -177,42 +178,18 @@ void translateInstJumpIfEq(IrBuilder& build, const Instruction* pc, int pcpos, b
     IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
     IrOp next = build.blockAtInst(pcpos + 2);
 
-    if (FFlag::LuauCodegenLinearNonNumComp)
+    BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
+
+    // fast-path: number (when both operands are expected to be a number or are unknown)
+    if (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
     {
-        BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
-
-        // fast-path: number (when both operands are expected to be a number or are unknown)
-        if (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
-        {
-            IrOp fallback = FFlag::LuauCodegenCounterSupport ? build.fallbackBlock(pcpos) : build.block(IrBlockKind::Fallback);
-
-            IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
-            build.inst(IrCmd::CHECK_TAG, ta, build.constTag(LUA_TNUMBER), fallback);
-
-            IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
-            build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TNUMBER), fallback);
-
-            IrOp va = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(ra));
-            IrOp vb = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(rb));
-
-            build.inst(IrCmd::JUMP_CMP_NUM, va, vb, build.cond(IrCondition::NotEqual), not_ ? target : next, not_ ? next : target);
-
-            build.beginBlock(fallback);
-        }
-    }
-    else
-    {
-        IrOp numberCheck = build.block(IrBlockKind::Internal);
         IrOp fallback = FFlag::LuauCodegenCounterSupport ? build.fallbackBlock(pcpos) : build.block(IrBlockKind::Fallback);
 
         IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
-        IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
-        build.inst(IrCmd::JUMP_EQ_TAG, ta, tb, numberCheck, not_ ? target : next);
-
-        build.beginBlock(numberCheck);
-
-        // fast-path: number
         build.inst(IrCmd::CHECK_TAG, ta, build.constTag(LUA_TNUMBER), fallback);
+
+        IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+        build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TNUMBER), fallback);
 
         IrOp va = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(ra));
         IrOp vb = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(rb));
@@ -312,8 +289,7 @@ void translateInstJumpIfCond(IrBuilder& build, const Instruction* pc, int pcpos,
     BytecodeTypes bcTypes = build.function.getBytecodeTypesAt(pcpos);
 
     // fast-path: number (when both operands are expected to be a number or are unknown)
-    if (!FFlag::LuauCodegenLinearNonNumComp ||
-        (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER)))
+    if (isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_NUMBER) && isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_NUMBER))
     {
         IrOp fallback = FFlag::LuauCodegenCounterSupport ? build.fallbackBlock(pcpos) : build.block(IrBlockKind::Fallback);
 
@@ -1038,6 +1014,8 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
 
         if (nresults == LUA_MULTRET)
             build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(ra), build.constInt(br.actualResultCount));
+        else if (FFlag::LuauCodegenMarkDeadRegisters)
+            build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + 1), build.constInt(-1));
 
         if (br.type != BuiltinImplType::UsesFallback)
         {
@@ -1196,6 +1174,12 @@ void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
     else
     {
         double stepN = build.function.doubleOp(stepK);
+
+        if (FFlag::LuauCodegenDseOnCondJump)
+        {
+            // Constant step optimization removes all the uses of the step register, but it has potential uses if a VM exit is taken
+            build.inst(IrCmd::MARK_USED, build.vmReg(ra + 1), build.constInt(1));
+        }
 
         // Condition to continue the loop: step > 0 ? idx <= limit : limit <= idx
         if (stepN > 0)

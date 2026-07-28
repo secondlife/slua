@@ -29,7 +29,9 @@ LUAU_FASTFLAGVARIABLE(LuauCodegenSetBlockEntryState2)
 LUAU_FASTFLAGVARIABLE(LuauCodegenBufferRangeMerge3)
 LUAU_FASTFLAGVARIABLE(LuauCodegenTableLoadProp2)
 LUAU_FASTFLAGVARIABLE(LuauCodegenExtraBlockers)
+LUAU_FASTFLAGVARIABLE(LuauCodegenLengthBaseInst)
 LUAU_FASTFLAG(LuauCodegenOpReadOnly)
+LUAU_FASTFLAG(LuauCodegenTruncatedSubsts)
 
 namespace Luau
 {
@@ -866,8 +868,9 @@ struct ConstPropState
             BufferAccessBase offsetBaseCurr = getOffsetBase(OP_A(currIndex));
             BufferAccessBase offsetBasePrev = getOffsetBase(OP_A(prevIndex));
 
-            // If they both are based on the same register with different constant offsets, merge checks
-            if (offsetBaseCurr.op == offsetBasePrev.op && offsetBaseCurr.scale == offsetBasePrev.scale)
+            // If they both are based on the same register (not a constant) with different constant offsets, merge checks
+            if (offsetBaseCurr.op == offsetBasePrev.op && offsetBaseCurr.scale == offsetBasePrev.scale &&
+                (!FFlag::LuauCodegenLengthBaseInst || offsetBaseCurr.op.kind != IrOpKind::Constant))
             {
                 // Difference between base offsets
                 int extraOffset = offsetBaseCurr.offset - offsetBasePrev.offset;
@@ -885,9 +888,7 @@ struct ConstPropState
 
                 // If the way we got the index is from a regular int(d) conversion, we replace it with a checked conversion
                 if (OP_E(prev).kind == IrOpKind::Undef)
-                    replace(
-                        function, OP_E(prev), OP_A(prevIndex)
-                    ); // TODO: once a guard established a double holds an int, we don't need to repeat this
+                    replace(function, OP_E(prev), OP_A(prevIndex));
 
                 return tryMergeAndKillBufferLengthCheck(build, block, inst, prev, extraOffset);
             }
@@ -1589,7 +1590,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 // Unpack the STORE_TVALUE of a TAG_VECTOR value
                 if (prev.cmd == IrCmd::TAG_VECTOR)
                 {
-                    if (IrInst* untaggedValue = function.asInstOp(OP_A(prev)))
+                    if (function.asInstOp(OP_A(prev)))
                         prevIdx = OP_A(prev).index;
                 }
 
@@ -2749,8 +2750,20 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             state.useradataTagCache.push_back(index);
         break;
     case IrCmd::INT_TO_NUM:
+        state.substituteOrRecord(inst, index);
+        break;
     case IrCmd::UINT_TO_NUM:
     case IrCmd::UINT_TO_FLOAT:
+        if (FFlag::LuauCodegenTruncatedSubsts)
+        {
+            // UINT_TO_***(TRUNCATE_UINT(NUM_TO_UINT(x)) => UINT_TO_***(NUM_TO_UINT(x)) since instruction handles truncation of NUM_TO_UINT result
+            if (IrInst* src = function.asInstOp(OP_A(inst)); src && src->cmd == IrCmd::TRUNCATE_UINT)
+            {
+                if (IrInst* srcOfSrc = function.asInstOp(OP_A(src)); srcOfSrc && srcOfSrc->cmd == IrCmd::NUM_TO_UINT)
+                    replace(function, OP_A(inst), OP_A(src));
+            }
+        }
+
         state.substituteOrRecord(inst, index);
         break;
     case IrCmd::NUM_TO_INT:
@@ -3048,6 +3061,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::CLOSE_UPVALS: // Doesn't change memory that we track
     case IrCmd::CAPTURE:
     case IrCmd::SUBSTITUTE:
+    case IrCmd::MARK_USED:
+    case IrCmd::MARK_DEAD:
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
     case IrCmd::ADJUST_STACK_TO_TOP: // Changes stack top, but not the values
     case IrCmd::CHECK_FASTCALL_RES:  // Changes stack top, but not the values

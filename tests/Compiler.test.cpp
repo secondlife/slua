@@ -10,7 +10,9 @@
 #include "doctest.h"
 
 #include <sstream>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace Luau
 {
@@ -23,11 +25,12 @@ LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
-LUAU_FASTFLAG(LuauCompileCorrectLocalPc)
+LUAU_FASTFLAG(LuauCompileExtraTypes)
+LUAU_FASTFLAG(LuauCompileVectorReveseMul)
 LUAU_FASTFLAG(LuauCompileFastcallsSurvivePolyfills)
 LUAU_FASTFLAG(LuauCompileTableIndexTemp)
-LUAU_FASTFLAG(LuauCompileFoldVectorComp)
-LUAU_FASTFLAG(LuauCompileInlinedBuiltins)
+LUAU_FASTFLAG(LuauCompileFoldStringLimit)
+LUAU_FASTFLAG(LuauCompileNewMathConstantsFolded)
 
 using namespace Luau;
 
@@ -1775,7 +1778,6 @@ RETURN R0 1
 
 TEST_CASE("ConstantFoldVectorComponents")
 {
-    ScopedFastFlag luauCompileFoldVectorComp{FFlag::LuauCompileFoldVectorComp, true};
     ScopedFastFlag luauCompileTableIndexTemp{FFlag::LuauCompileTableIndexTemp, true};
 
     CHECK_EQ(
@@ -3817,6 +3819,8 @@ RETURN R0 0
 
 TEST_CASE("DebugTypes")
 {
+    ScopedFastFlag luauCompileExtraTypes{FFlag::LuauCompileExtraTypes, true};
+
     const char* source = R"(
 local up: number = 2
 
@@ -3856,7 +3860,7 @@ R0: vector [argument]
 R1: mat3 [argument]
 R2: userdata [argument]
 U0: number
-R6: any from 1 to 9
+R6: number from 1 to 9
 R3: vector from 0 to 30
 MUL R3 R0 R0
 LOADN R6 1
@@ -4822,7 +4826,7 @@ RETURN R0 0
 
 TEST_CASE("JumpTrampoline")
 {
-    ScopedFastFlag luauCompileCorrectLocalPc{FFlag::LuauCompileCorrectLocalPc, true};
+    ScopedFastFlag luauCompileExtraTypes{FFlag::LuauCompileExtraTypes, true};
 
     std::string source;
     source += "local sum: number = 0\n";
@@ -4858,7 +4862,7 @@ TEST_CASE("JumpTrampoline")
     CHECK_EQ("\n" + head, R"(
 local 0: reg 3, start pc 8 line 3, end pc 54545 line 20002
 local 1: reg 0, start pc 2 line 2, end pc 54549 line 20004
-R3: any from 2 to 54546
+R3: number from 2 to 54546
 R0: number from 1 to 54550
 LOADN R0 0
 LOADN R3 1
@@ -8188,8 +8192,6 @@ L1: RETURN R0 0
 )"
     );
 
-    ScopedFastFlag luauCompileInlinedBuiltins{FFlag::LuauCompileInlinedBuiltins, true};
-
     // inline builtins
     CHECK_EQ(
         "\n" + compileFunction(
@@ -9720,6 +9722,8 @@ L1: RETURN R3 1
 
 TEST_CASE("EncodedTypeTable")
 {
+    ScopedFastFlag luauCompileExtraTypes{FFlag::LuauCompileExtraTypes, true};
+
     CHECK_EQ(
         "\n" + compileTypeTable(R"(
 function myfunc(test: string, num: number)
@@ -9743,6 +9747,12 @@ end
 function myfunc6(test: (number) -> string)
 end
 
+function myfunc7(test: true)
+end
+
+function myfunc8(test: "str")
+end
+
 myfunc('test')
 )"),
         R"(
@@ -9751,6 +9761,8 @@ myfunc('test')
 2: function(string, number)
 3: function(any, number)
 5: function(function)
+6: function(boolean)
+7: function(string)
 )"
     );
 
@@ -9944,62 +9956,78 @@ end
 TEST_CASE("BuiltinFoldMathK")
 {
     ScopedFastFlag luauCompileTableIndexTemp{FFlag::LuauCompileTableIndexTemp, true};
+    ScopedFastFlag luauCompileNewMathConstantsFolded{FFlag::LuauCompileNewMathConstantsFolded, true};
 
-    // we can fold math.pi at optimization level 2
-    CHECK_EQ(
-        "\n" + compileFunction(
-                   R"(
-function test()
-    return math.pi * 2
-end
-)",
-                   0,
-                   2
-               ),
-        R"(
-LOADK R0 K0 [6.2831853071795862]
-RETURN R0 1
-)"
-    );
+    // Each value is doubled since the test source code multiplies by 2.
+    std::vector<std::pair<std::string, std::string>> testCases = {
+        {"pi", "6.2831853071795862"},
+        {"e", "5.4365636569180902"},
+        {"phi", "3.2360679774997898"},
+        {"sqrt2", "2.8284271247461903"},
+        {"tau", "12.566370614359172"},
+    };
 
-    // we don't do this at optimization level 1 because it may interfere with environment substitution
-    CHECK_EQ(
-        "\n" + compileFunction(
-                   R"(
-function test()
-    return math.pi * 2
-end
-)",
-                   0,
-                   1
-               ),
-        R"(
-GETIMPORT R1 3 [math.pi]
-MULK R0 R1 K0 [2]
-RETURN R0 1
-)"
-    );
+    auto replaceAtSymbolWithText = [](const std::string& source, const std::string& text) -> std::string
+    {
+        std::string result;
+        for (char c : source)
+        {
+            if (c == '@')
+                result += text;
+            else
+                result += c;
+        }
+        return result;
+    };
 
-    // we also don't do it if math global is assigned to
-    CHECK_EQ(
-        "\n" + compileFunction(
-                   R"(
-function test()
-    return math.pi * 2
-end
+    for (const auto& [constant, folded] : testCases)
+    {
+        // we can fold math constants at optimization level 2
+        std::string sourceCode = replaceAtSymbolWithText(
+            R"(
+            function test()
+                return @ * 2
+            end
+        )",
+            "math." + constant
+        );
+        std::string expectedBytecodeO2 = replaceAtSymbolWithText(
+            "LOADK R0 K0 [@]\n"
+            "RETURN R0 1\n",
+            folded
+        );
+        CHECK_EQ(compileFunction(sourceCode.c_str(), 0, 2), expectedBytecodeO2);
 
-math = { pi = 4 }
-)",
-                   0,
-                   2
-               ),
-        R"(
-GETGLOBAL R1 K1 ['math']
-GETTABLEKS R1 R1 K2 ['pi']
-MULK R0 R1 K0 [2]
-RETURN R0 1
-)"
-    );
+        // we don't do this at optimization level 1 because it may interfere with environment substitution
+        std::string expectedBytecodeO1 = replaceAtSymbolWithText(
+            "GETIMPORT R1 3 [math.@]\n"
+            "MULK R0 R1 K0 [2]\n"
+            "RETURN R0 1\n",
+            constant
+        );
+        CHECK_EQ(compileFunction(sourceCode.c_str(), 0, 1), expectedBytecodeO1);
+
+        // we also don't do it if math global is assigned to
+        std::string sourceCodeWithAssignment = replaceAtSymbolWithText(
+            R"(
+            function test()
+                return @ * 2
+            end
+
+            math = { pi = 4 }
+        )",
+            "math." + constant
+        );
+        std::string expectedBytecodeWithAssignment = replaceAtSymbolWithText(
+            "GETGLOBAL R1 K1 ['math']\n"
+            "GETTABLEKS R1 R1 K2 ['@']\n"
+            "MULK R0 R1 K0 [2]\n"
+            "RETURN R0 1\n",
+            constant
+        );
+
+        CHECK_EQ(compileFunction(sourceCodeWithAssignment.c_str(), 0, 2), expectedBytecodeWithAssignment);
+    }
 }
 
 TEST_CASE("NoBuiltinFoldFenv")
@@ -10320,6 +10348,124 @@ RETURN R1 7
     );
 }
 
+TEST_CASE("VectorArithRevK")
+{
+    ScopedFastFlag luauCompileVectorReveseMul{FFlag::LuauCompileVectorReveseMul, true};
+    ScopedFastFlag luauCompileExtraTypes{FFlag::LuauCompileExtraTypes, true};
+
+    // / has special optimized form for reverse constants; in absence of type information, we can't optimize other ops
+    CHECK_EQ(
+        "\n" + compileFunction0(R"(
+local x: vector = ...
+return 2 * x, 2 / x, 2 // x
+)"),
+        R"(
+GETVARARGS R0 1
+LOADN R2 2
+MUL R1 R2 R0
+DIVRK R2 K0 [2] R0
+LOADN R4 2
+IDIV R3 R4 R0
+RETURN R1 3
+)"
+    );
+
+    // the same code with type information can optimize commutative operator * as well
+    // other operators are not important enough to optimize reverse constant forms for
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local x: vector = ...
+return 2 * x, 2 / x, 2 // x
+)",
+                   0,
+                   2,
+                   1
+               ),
+        R"(
+GETVARARGS R0 1
+MULK R1 R0 K0 [2]
+DIVRK R2 K0 [2] R0
+LOADN R4 2
+IDIV R3 R4 R0
+RETURN R1 3
+)"
+    );
+
+    // vector components resolve to numbers which also allows reverse or transposed operations
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local x: vector = ...
+return 2 + x.x, 2 - x.x, 2 * x.x, 2 / x.x, 2 + x.Y, 2 - x.Y, 2 * x.Y, 2 / x.Y
+)",
+                   0,
+                   2,
+                   1
+               ),
+        R"(
+GETVARARGS R0 1
+GETTABLEKS R2 R0 K1 ['x']
+ADDK R1 R2 K0 [2]
+GETTABLEKS R3 R0 K1 ['x']
+SUBRK R2 K0 [2] R3
+GETTABLEKS R4 R0 K1 ['x']
+MULK R3 R4 K0 [2]
+GETTABLEKS R5 R0 K1 ['x']
+DIVRK R4 K0 [2] R5
+GETTABLEKS R6 R0 K2 ['Y']
+ADDK R5 R6 K0 [2]
+GETTABLEKS R7 R0 K2 ['Y']
+SUBRK R6 K0 [2] R7
+GETTABLEKS R8 R0 K2 ['Y']
+MULK R7 R8 K0 [2]
+GETTABLEKS R9 R0 K2 ['Y']
+DIVRK R8 K0 [2] R9
+RETURN R1 8
+)"
+    );
+}
+
+TEST_CASE("NumericLoopTypeRevk")
+{
+    ScopedFastFlag luauCompileExtraTypes{FFlag::LuauCompileExtraTypes, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+for i = 1,10 do
+    local a = i * 2
+    local b = 3 * i
+    local c = i + 2
+    local d = 3 + i
+    print(a, b, c, d)
+end
+)",
+                   0,
+                   2,
+                   1
+               ),
+        R"(
+LOADN R2 1
+LOADN R0 10
+LOADN R1 1
+FORNPREP R0 L1
+L0: MULK R3 R2 K0 [2]
+MULK R4 R2 K1 [3]
+ADDK R5 R2 K0 [2]
+ADDK R6 R2 K1 [3]
+GETIMPORT R7 3 [print]
+MOVE R8 R3
+MOVE R9 R4
+MOVE R10 R5
+MOVE R11 R6
+CALL R7 4 0
+FORNLOOP R0 L0
+L1: RETURN R0 0
+)"
+    );
+}
+
 TEST_CASE("ConstStringFolding")
 {
     CHECK_EQ(
@@ -10351,6 +10497,84 @@ RETURN R0 1
         R"(
 LOADK R0 K0 ['hello world']
 RETURN R0 1
+)"
+    );
+
+    ScopedFastFlag luauCompileFoldStringLimit{FFlag::LuauCompileFoldStringLimit, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local a1 = "0123456789012345678901234567890123456789"
+local a2 = a1 .. a1 .. a1 .. a1 .. a1 .. a1 .. a1 .. a1 .. a1 .. a1
+local a3 = a2 .. a2 .. a2 .. a2 .. a2 .. a2 .. a2 .. a2 .. a2 .. a2
+local a4 = a3 .. a3 .. a3 .. a3 .. a3 .. a3 .. a3 .. a3 .. a3 .. a3
+local a5 = a4 .. a4 .. a4 .. a4 .. a4 .. a4 .. a4 .. a4 .. a4 .. a4
+return a5
+)",
+                   0,
+                   2
+               ),
+        R"(
+LOADK R1 K0 ['01234567890123456789012345678901'...]
+LOADK R2 K0 ['01234567890123456789012345678901'...]
+LOADK R3 K0 ['01234567890123456789012345678901'...]
+LOADK R4 K0 ['01234567890123456789012345678901'...]
+LOADK R5 K0 ['01234567890123456789012345678901'...]
+LOADK R6 K0 ['01234567890123456789012345678901'...]
+LOADK R7 K0 ['01234567890123456789012345678901'...]
+LOADK R8 K0 ['01234567890123456789012345678901'...]
+LOADK R9 K0 ['01234567890123456789012345678901'...]
+LOADK R10 K0 ['01234567890123456789012345678901'...]
+CONCAT R0 R1 R10
+MOVE R2 R0
+MOVE R3 R0
+MOVE R4 R0
+MOVE R5 R0
+MOVE R6 R0
+MOVE R7 R0
+MOVE R8 R0
+MOVE R9 R0
+MOVE R10 R0
+MOVE R11 R0
+CONCAT R1 R2 R11
+RETURN R1 1
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local a1 = "0123456789012345678901234567890123456789"
+local a2 = `{a1}{a1}{a1}{a1}{a1}{a1}{a1}{a1}{a1}{a1}`
+local a3 = `{a2}{a2}{a2}{a2}{a2}{a2}{a2}{a2}{a2}{a2}`
+local a4 = `{a3}{a3}{a3}{a3}{a3}{a3}{a3}{a3}{a3}{a3}`
+local a5 = `{a4}{a4}{a4}{a4}{a4}{a4}{a4}{a4}{a4}{a4}`
+return a5
+)",
+                   0,
+                   2
+               ),
+        R"(
+LOADK R1 K0 ['01234567890123456789012345678901'...]
+NAMECALL R1 R1 K1 ['format']
+CALL R1 1 1
+MOVE R0 R1
+LOADK R2 K2 ['%*%*%*%*%*%*%*%*%*%*']
+MOVE R4 R0
+MOVE R5 R0
+MOVE R6 R0
+MOVE R7 R0
+MOVE R8 R0
+MOVE R9 R0
+MOVE R10 R0
+MOVE R11 R0
+MOVE R12 R0
+MOVE R13 R0
+NAMECALL R2 R2 K1 ['format']
+CALL R2 11 1
+MOVE R1 R2
+RETURN R1 1
 )"
     );
 }
