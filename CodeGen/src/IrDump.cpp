@@ -9,6 +9,7 @@
 
 #include <stdarg.h>
 
+LUAU_FASTFLAG(LuauIntegerType)
 namespace Luau
 {
 namespace CodeGen
@@ -83,6 +84,9 @@ static const char* getTagName(uint8_t tag)
         return "tupval";
     case LUA_TDEADKEY:
         return "tdeadkey";
+    case LUA_TINTEGER:
+        // ServerLua: made unconditional
+        return "tinteger";
     default:
         CODEGEN_ASSERT(!"Unknown type tag");
         LUAU_UNREACHABLE();
@@ -526,6 +530,10 @@ static void appendVmConstant(std::string& result, Proto* proto, int index)
         else
             append(result, "%.17g", constant.value.n);
     }
+    else if (constant.tt == LUA_TINTEGER)
+    {
+        append(result, "%lldi", (long long)constant.value.l);
+    }
     else if (constant.tt == LUA_TSTRING)
     {
         TString* str = gco2ts(constant.value.gc);
@@ -675,6 +683,8 @@ const char* getBytecodeTypeName(uint8_t type, const char* const* userdataTypes)
         return "boolean";
     case LBC_TYPE_NUMBER:
         return "number";
+    case LBC_TYPE_INTEGER:
+        return "integer";
     case LBC_TYPE_STRING:
         return "string";
     case LBC_TYPE_TABLE:

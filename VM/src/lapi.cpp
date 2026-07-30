@@ -407,6 +407,13 @@ double lua_tonumberx(lua_State* L, int idx, int* isnum)
 {
     TValue n;
     const TValue* o = index2addr(L, idx);
+    // ServerLua: integers _also_ supported in native function args when wanting a number.
+    if (l_isinteger(o))
+    {
+        if (isnum)
+            *isnum = 1;
+        return (double)intvalue(o);
+    }
     if (tonumber(o, &n))
     {
         if (isnum)
@@ -481,6 +488,23 @@ int lua_toboolean(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);
     return !l_isfalse(o);
+}
+
+int64_t lua_tointeger64(lua_State* L, int idx, int* isinteger)
+{
+    const TValue* o = index2addr(L, idx);
+    if (ttisinteger(o))
+    {
+        if (isinteger)
+            *isinteger = 1;
+        return lvalue(o);
+    }
+    else
+    {
+        if (isinteger)
+            *isinteger = 0;
+        return 0;
+    }
 }
 
 const char* lua_tolstring(lua_State* L, int idx, size_t* len)
@@ -684,6 +708,12 @@ void lua_pushnumber(lua_State* L, double n)
 void lua_pushinteger(lua_State* L, int n)
 {
     setnvalue(L->top, cast_num(n));
+    api_incr_top(L);
+}
+
+void lua_pushinteger64(lua_State* L, int64_t n)
+{
+    setlvalue(L->top, n);
     api_incr_top(L);
 }
 

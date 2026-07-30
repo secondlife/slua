@@ -204,11 +204,9 @@ uint8_t lua_lsl_type(const TValue *val)
     case LUA_TNUMBER:
         return (uint8_t)LSLIType::LST_FLOATINGPOINT;
     case LUA_TLIGHTUSERDATA:
-    {
-        if (val->extra[0] == LU_TAG_LSL_INTEGER)
-            return (uint8_t)LSLIType::LST_INTEGER;
         return (uint8_t)LSLIType::LST_ERROR;
-    }
+    case LUA_TINTEGER:
+        return (uint8_t)LSLIType::LST_INTEGER;
     case LUA_TSTRING:
         return (uint8_t)LSLIType::LST_STRING;
     case LUA_TVECTOR:
@@ -1873,9 +1871,6 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
         luaSL_setup_llprim_module(L);
         LUAU_ASSERT(lua_gettop(L) == top);
     }
-
-    // return "integer" when we call type() on an int
-    lua_setlightuserdataname(L, LU_TAG_LSL_INTEGER, "integer");
 
     LUAU_ASSERT(lua_gettop(L) == top);
     return 1;

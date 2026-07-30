@@ -704,14 +704,10 @@ void luaG_dumpvalue(lua_State *L, const lua_TValue *tv) {
     case LUA_TLIGHTUSERDATA:
         // This is a little special because we want to see the full
         // value range of booleans.
-        if (lightuserdatatag(tv) == LU_TAG_LSL_INTEGER)
-        {
-            fprintf(stderr, "(integer) %d\n", intvalue(tv));
-        }
-        else
-        {
-            fprintf(stderr, "(%d) %p\n", lightuserdatatag(tv), pvalue(tv));
-        }
+        fprintf(stderr, "(%d) %p\n", lightuserdatatag(tv), pvalue(tv));
+        break;
+    case LUA_TINTEGER:
+        fprintf(stderr, "(integer) %d\n", intvalue(tv));
         break;
     case LUA_TFUNCTION:
     {

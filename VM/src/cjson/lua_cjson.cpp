@@ -989,6 +989,8 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             json_append_string(l, json, -1);
         break;
     case LUA_TNUMBER:
+    // TODO: make integer distinct.
+    case LUA_TINTEGER:
         json_append_number(l, cfg, json, -1);
         break;
     case LUA_TBOOLEAN:
@@ -1101,10 +1103,6 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                     json_append_array(l, slots, cfg, depth, json, 0));
                 break;
             }
-        } else if (lua_tolightuserdatatagged(l, -1, LU_TAG_LSL_INTEGER) != nullptr) {
-            // let lua_tonumber() handle it
-            json_append_number(l, cfg, json, -1);
-            break;
         }
 
         json_encode_exception(l, cfg, json, -1, "type not supported");

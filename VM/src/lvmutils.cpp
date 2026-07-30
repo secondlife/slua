@@ -24,12 +24,6 @@ const TValue* luaV_tonumber(const TValue* obj, TValue* n)
         setnvalue(n, num);
         return n;
     }
-    if (l_isinteger(obj))
-    {
-        // ServerLua: handle integers
-        setnvalue(n, intvalue(obj));
-        return n;
-    }
     else
         return NULL;
 }
@@ -317,9 +311,15 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
         // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
         hardstacktests_tm_realloc(L);
         return 1;
-    case LUA_TNUMBER:
-    {
+    case LUA_TNUMBER:{
         int result = luai_numeq(nvalue(t1), nvalue(t2));
+        // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+        hardstacktests_tm_realloc(L);
+        return result;
+    }
+    case LUA_TINTEGER:
+    {
+        int result = luai_inteq(lvalue(t1), lvalue(t2));
         // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
         hardstacktests_tm_realloc(L);
         return result;
@@ -444,6 +444,18 @@ void luaV_concat(lua_State* L, int total, int last)
     } while (total > 1); // repeat until only 1 result left
 }
 
+// ServerLua: like luaV_tonumber, but in LSL VMs `integer`s also coerce to
+// `number`s in many places. Allow that to happen, conditionally.
+static const TValue* luaV_tonumber_lsl(lua_State* L, const TValue* obj, TValue* n)
+{
+    if (l_isinteger(obj) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
+    {
+        setnvalue(n, (double)intvalue(obj));
+        return n;
+    }
+    return luaV_tonumber(obj, n);
+}
+
 template<TMS op>
 void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc)
 {
@@ -504,7 +516,7 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
     }
     else if (vb)
     {
-        c = ttisnumber(rc) ? rc : luaV_tonumber(rc, &tempc);
+        c = ttisnumber(rc) ? rc : luaV_tonumber_lsl(L, rc, &tempc); // ServerLua
 
         if (c)
         {
@@ -530,7 +542,7 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
     }
     else if (vc)
     {
-        b = ttisnumber(rb) ? rb : luaV_tonumber(rb, &tempb);
+        b = ttisnumber(rb) ? rb : luaV_tonumber_lsl(L, rb, &tempb); // ServerLua
 
         if (b)
         {
@@ -555,7 +567,7 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
         }
     }
 
-    if ((b = luaV_tonumber(rb, &tempb)) != NULL && (c = luaV_tonumber(rc, &tempc)) != NULL)
+    if ((b = luaV_tonumber_lsl(L, rb, &tempb)) != NULL && (c = luaV_tonumber_lsl(L, rc, &tempc)) != NULL) // ServerLua
     {
         double nb = nvalue(b), nc = nvalue(c);
         switch (op)

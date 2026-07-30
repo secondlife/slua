@@ -61,6 +61,7 @@ public:
     int32_t addConstantBoolean(bool value);
     int32_t addConstantInteger(int32_t value);
     int32_t addConstantNumber(double value);
+    int32_t addConstantInteger(int64_t value);
     int32_t addConstantVector(float x, float y, float z, float w);
     int32_t addConstantString(StringRef value);
     int32_t addImport(uint32_t iid);
@@ -163,21 +164,20 @@ private:
             Type_Nil,
             Type_Boolean,
             Type_Number,
+            Type_Integer,
             Type_Vector,
             Type_String,
             Type_Import,
             Type_Table,
             Type_Closure,
-            // ServerLua: added by us for constant integer support.
-            Type_Integer,
         };
 
         Type type;
         union
         {
             bool valueBoolean;
-            int32_t valueInteger;
             double valueNumber;
+            int64_t valueInteger64;
             float valueVector[4];
             unsigned int valueString; // index into string table
             uint32_t valueImport;     // 10-10-10-2 encoded import id

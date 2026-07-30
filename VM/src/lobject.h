@@ -35,6 +35,7 @@ typedef union
     void* p;
     double n;
     int b;
+    int64_t l;
     float v[2]; // v[0], v[1] live here; v[2] lives in TValue::extra
 } Value;
 
@@ -52,6 +53,7 @@ typedef struct lua_TValue
 // Macros to test type
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
 #define ttisnumber(o) (ttype(o) == LUA_TNUMBER)
+#define ttisinteger(o) (ttype(o) == LUA_TINTEGER)
 #define ttisstring(o) (ttype(o) == LUA_TSTRING)
 #define ttistable(o) (ttype(o) == LUA_TTABLE)
 #define ttisfunction(o) (ttype(o) == LUA_TFUNCTION)
@@ -68,6 +70,7 @@ typedef struct lua_TValue
 #define gcvalue(o) check_exp(iscollectable(o), (o)->value.gc)
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
+#define lvalue(o) check_exp(ttisinteger(o), (o)->value.l)
 #define vvalue(o) check_exp(ttisvector(o), (o)->value.v)
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
 #define uvalue(o) check_exp(ttisuserdata(o), &(o)->value.gc->u)
@@ -78,8 +81,11 @@ typedef struct lua_TValue
 #define bufvalue(o) check_exp(ttisbuffer(o), &(o)->value.gc->buf)
 #define upvalue(o) check_exp(ttisupval(o), &(o)->value.gc->uv)
 
-// ServerLua: we extend this to include integers.
-#define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0) || (l_isinteger(o) && intvalue(o) == 0))
+#define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0))
+
+// ServerLua: LSL-aware truthiness, integer 0 is falsy in LSL VMs only. The LSL
+// compiler relies on this for integer conditions (JUMPIF/JUMPIFNOT, NOT).
+#define l_isfalse_lsl(L, o) (l_isfalse(o) || (l_isinteger(o) && lvalue(o) == 0 && LUAU_LIKELY(LUAU_IS_LSL_VM(L))))
 
 #define lightuserdatatag(o) check_exp(ttislightuserdata(o), (o)->extra[0])
 
@@ -88,8 +94,8 @@ typedef struct lua_TValue
 #define LU_TAG_COUNT (LU_TAG_ITERATOR+1)
 
 // ServerLua: Integer support
-#define l_isinteger(o) (ttype(o) == LUA_TLIGHTUSERDATA && (o)->extra[0] == LU_TAG_LSL_INTEGER)
-#define intvalue(o) (static_cast<int32_t>((size_t)pvalue(o)))
+#define l_isinteger(o) (ttype(o) == LUA_TINTEGER)
+#define intvalue(o) lvalue((o))
 // Specifically an LSL vm
 #define LUAU_IS_LSL_VM(L) (lua_getthreaddata(L) != nullptr && (((lua_SLRuntimeState*)lua_getthreaddata(L))->slIdentifier == LUA_LSL_IDENTIFIER))
 // Any VM for SL
@@ -112,6 +118,13 @@ typedef struct lua_TValue
         TValue* i_o = (obj); \
         i_o->value.n = (x); \
         i_o->tt = LUA_TNUMBER; \
+    }
+
+#define setlvalue(obj, x) \
+    { \
+        TValue* i_o = (obj); \
+        i_o->value.l = (x); \
+        i_o->tt = LUA_TINTEGER; \
     }
 
 #if LUA_VECTOR_SIZE == 4
@@ -217,7 +230,7 @@ typedef struct lua_TValue
     }
 
 // ServerLua: Be _very_ careful about truncating to 32-bit space before we shove this into a wider value type!
-#define setintvalue(obj, x) setpvalue(obj, (void *)(((size_t)(x)) & 0xFFffFFff), LU_TAG_LSL_INTEGER)
+#define setintvalue(obj, x) { const int _y = ((int32_t)(x) & 0xFFffFFff); setlvalue(obj, _y); }
 
 #define setobj(L, obj1, obj2) \
     { \
@@ -541,6 +554,7 @@ LUAU_FORCEINLINE int luaO_growthcap(int grown, int required, int slack)
 LUAI_FUNC int luaO_rawequalObj(const TValue* t1, const TValue* t2);
 LUAI_FUNC int luaO_rawequalKey(const TKey* t1, const TValue* t2);
 LUAI_FUNC int luaO_str2d(const char* s, double* result);
+LUAI_FUNC int luaO_str2l(const char* s, int64_t* result, int base = 10);
 LUAI_FUNC const char* luaO_pushvfstring(lua_State* L, const char* fmt, va_list argp);
 LUAI_FUNC const char* luaO_pushfstring(lua_State* L, const char* fmt, ...);
 LUAI_FUNC const char* luaO_chunkid(char* buf, size_t buflen, const char* source, size_t srclen);

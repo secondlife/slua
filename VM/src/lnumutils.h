@@ -4,6 +4,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <cstdint>
 
 #define luai_numadd(a, b) ((a) + (b))
 #define luai_numsub(a, b) ((a) - (b))
@@ -15,6 +16,7 @@
 #define luai_numeq(a, b) ((a) == (b))
 #define luai_numlt(a, b) ((a) < (b))
 #define luai_numle(a, b) ((a) <= (b))
+#define luai_inteq(a, b) ((a) == (b))
 
 inline bool luai_veceq(const float* a, const float* b)
 {
@@ -101,6 +103,8 @@ inline int64_t luai_num2int64_impl(double d)
 #define luai_num2int64(i, d) ((i) = (int64_t)(d))
 #endif
 
+#define luai_num2long(i, d) ((i) = (int64_t)(d))
+
 // On MSVC in 32-bit, double to unsigned cast compiles into a call to __dtoui3, so we invoke x87->int64 conversion path manually
 #if defined(_MSC_VER) && defined(_M_IX86)
 #define luai_num2unsigned(i, n) \
@@ -115,8 +119,10 @@ inline int64_t luai_num2int64_impl(double d)
 #endif
 
 #define LUAI_MAXNUM2STR 48
+#define LUAI_MAXINT2STR 30
 
 LUAI_FUNC char* luai_num2str(char* buf, double n);
+LUAI_FUNC char* luai_int2str(char* buf, int64_t n);
 
 // ServerLua: Formats a single float to a string buffer, normalizing non-finite values (nan/inf/-inf)
 // to avoid platform-specific sprintf behavior (e.g., "1.#INF" on Windows vs "inf" on Linux).
@@ -126,3 +132,4 @@ LUAI_FUNC int luai_formatfloat(char* buf, size_t bufsize, const char* format, fl
 LUAI_FUNC int luai_trimfloat(char* buf, int len);
 
 #define luai_str2num(s, p) strtod((s), (p))
+#define luai_str2long(s, p, base) strtoll((s), (p), base)

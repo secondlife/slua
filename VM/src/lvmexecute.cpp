@@ -21,6 +21,9 @@
 // ServerLua: used to detect __iter = pairs for native iteration fast-path
 LUAI_FUNC int luaB_pairs(lua_State* L);
 
+LUAU_FASTFLAG(LuauIntegerType)
+
+
 // Disable c99-designator to avoid the warning in computed goto dispatch table
 #ifdef __clang__
 #if __has_warning("-Wc99-designator")
@@ -738,14 +741,10 @@ reentry:
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
 
                 // ServerLua: double-check that we don't have lists or nil in list
-                if (LUAU_IS_LSL_VM(L))
+                if (LUAU_UNLIKELY((ttistable(ra) || ttisnil(ra)) && LUAU_IS_LSL_VM(L)))
                 {
-                    auto const type = ttype(ra);
-                    if (type == LUA_TTABLE || type == LUA_TNIL)
-                    {
-                        lua_pushstring(L, "No nil or lists allowed in lists");
-                        lua_error(L);
-                    }
+                    lua_pushstring(L, "No nil or lists allowed in lists");
+                    lua_error(L);
                 }
 
                 // fast-path: array assign
@@ -810,14 +809,10 @@ reentry:
                 int c = LUAU_INSN_C(insn);
 
                 // ServerLua: double-check that we don't have lists or nil in list
-                if (LUAU_IS_LSL_VM(L))
+                if (LUAU_UNLIKELY((ttistable(ra) || ttisnil(ra)) && LUAU_IS_LSL_VM(L)))
                 {
-                    auto const type = ttype(ra);
-                    if (type == LUA_TTABLE || type == LUA_TNIL)
-                    {
-                        lua_pushstring(L, "No nil or lists allowed in lists");
-                        lua_error(L);
-                    }
+                    lua_pushstring(L, "No nil or lists allowed in lists");
+                    lua_error(L);
                 }
 
                 // fast-path: array assign
@@ -1195,7 +1190,7 @@ reentry:
                 Instruction insn = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
 
-                pc += l_isfalse(ra) ? 0 : LUAU_INSN_D(insn);
+                pc += l_isfalse_lsl(L, ra) ? 0 : LUAU_INSN_D(insn); // ServerLua
                 LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                 VM_NEXT();
             }
@@ -1205,7 +1200,7 @@ reentry:
                 Instruction insn = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
 
-                pc += l_isfalse(ra) ? LUAU_INSN_D(insn) : 0;
+                pc += l_isfalse_lsl(L, ra) ? LUAU_INSN_D(insn) : 0; // ServerLua
                 LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                 VM_NEXT();
             }
@@ -1302,6 +1297,12 @@ reentry:
                         }
                         // slow path after switch()
                         break;
+
+                    case LUA_TINTEGER:
+                        // ServerLua: made unconditional
+                        pc += lvalue(ra) == lvalue(rb) ? LUAU_INSN_D(insn) : 1;
+                        LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                        VM_NEXT();
 
                     default:
                         LUAU_ASSERT(!"Unknown value type");
@@ -1418,6 +1419,12 @@ reentry:
                         // slow path after switch()
                         break;
 
+                    case LUA_TINTEGER:
+                        // ServerLua: made unconditional
+                        pc += lvalue(ra) != lvalue(rb) ? LUAU_INSN_D(insn) : 1;
+                        LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                        VM_NEXT();
+
                     default:
                         LUAU_ASSERT(!"Unknown value type");
                         LUAU_UNREACHABLE(); // improves switch() codegen by eliding opcode bounds checks
@@ -1462,7 +1469,7 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
-                else if (l_isinteger(ra) && l_isinteger(rb))
+                else if (l_isinteger(ra) && l_isinteger(rb) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     pc += intvalue(ra) <= intvalue(rb) ? LUAU_INSN_D(insn) : 1;
@@ -1502,7 +1509,7 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
-                else if (l_isinteger(ra) && l_isinteger(rb))
+                else if (l_isinteger(ra) && l_isinteger(rb) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     pc += !(intvalue(ra) <= intvalue(rb)) ? LUAU_INSN_D(insn) : 1;
@@ -1542,7 +1549,7 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
-                else if (l_isinteger(ra) && l_isinteger(rb))
+                else if (l_isinteger(ra) && l_isinteger(rb) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     pc += intvalue(ra) < intvalue(rb) ? LUAU_INSN_D(insn) : 1;
@@ -1582,7 +1589,7 @@ reentry:
                     LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                     VM_NEXT();
                 }
-                else if (l_isinteger(ra) && l_isinteger(rb))
+                else if (l_isinteger(ra) && l_isinteger(rb) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     pc += !(intvalue(ra) < intvalue(rb)) ? LUAU_INSN_D(insn) : 1;
@@ -1613,7 +1620,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) + nvalue(rc));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(rc))
+                else if (l_isinteger(rb) && l_isinteger(rc) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(rb) + intvalue(rc));
@@ -1665,7 +1672,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) - nvalue(rc));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(rc))
+                else if (l_isinteger(rb) && l_isinteger(rc) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(rb) - intvalue(rc));
@@ -1717,7 +1724,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) * nvalue(rc));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(rc))
+                else if (l_isinteger(rb) && l_isinteger(rc) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(rb) * intvalue(rc));
@@ -1862,7 +1869,7 @@ reentry:
                     setnvalue(ra, luai_numidiv(nvalue(rb), nvalue(rc)));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(rc))
+                else if (l_isinteger(rb) && l_isinteger(rc) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     int32_t rh = intvalue(rc);
@@ -1940,7 +1947,7 @@ reentry:
                     setnvalue(ra, luai_nummod(nb, nc));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(rc))
+                else if (l_isinteger(rb) && l_isinteger(rc) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     int32_t rh = intvalue(rc);
@@ -2003,7 +2010,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) + nvalue(kv));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(kv))
+                else if (l_isinteger(rb) && l_isinteger(kv) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(rb) + intvalue(kv));
@@ -2030,7 +2037,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) - nvalue(kv));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(kv))
+                else if (l_isinteger(rb) && l_isinteger(kv) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(rb) - intvalue(kv));
@@ -2057,7 +2064,7 @@ reentry:
                     setnvalue(ra, nvalue(rb) * nvalue(kv));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(kv))
+                else if (l_isinteger(rb) && l_isinteger(kv) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(rb) * intvalue(kv));
@@ -2170,7 +2177,7 @@ reentry:
                     setnvalue(ra, luai_numidiv(nvalue(rb), nvalue(kv)));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(kv))
+                else if (l_isinteger(rb) && l_isinteger(kv) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     int32_t rh = intvalue(kv);
@@ -2247,7 +2254,7 @@ reentry:
                     setnvalue(ra, luai_nummod(nb, nk));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb) && l_isinteger(kv))
+                else if (l_isinteger(rb) && l_isinteger(kv) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     int32_t rh = intvalue(kv);
@@ -2311,7 +2318,7 @@ reentry:
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
 
                 // ServerLua: LSL AND behavior
-                if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L)))
+                if (LUAU_IS_LSL_VM(L))
                 {
                     setintvalue(ra, (intvalue(rb) != 0 && intvalue(rc) != 0));
                 }
@@ -2330,7 +2337,7 @@ reentry:
                 StkId rc = VM_REG(LUAU_INSN_C(insn));
 
                 // ServerLua: LSL OR behavior
-                if (LUAU_UNLIKELY(LUAU_IS_LSL_VM(L)))
+                if (LUAU_IS_LSL_VM(L))
                 {
                     setintvalue(ra, (intvalue(rb) != 0 || intvalue(rc) != 0));
                 }
@@ -2386,9 +2393,9 @@ reentry:
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
 
                 // ServerLua: NOT behaves specially in LSL mode, we want it to return an int
-                // when we're working with integer lightuserdata.
-                int res = l_isfalse(rb);
-                if (LUAU_IS_LSL_VM(L) && l_isinteger(rb))
+                // when we're working with integers.
+                int res = l_isfalse_lsl(L, rb);
+                if (l_isinteger(rb) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     setintvalue(ra, res);
                 }
@@ -2411,7 +2418,7 @@ reentry:
                     setnvalue(ra, -nvalue(rb));
                     VM_NEXT();
                 }
-                else if (l_isinteger(rb))
+                else if (l_isinteger(rb) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, -intvalue(rb));
@@ -3127,7 +3134,7 @@ reentry:
                     setnvalue(ra, nvalue(kv) - nvalue(rc));
                     VM_NEXT();
                 }
-                else if (l_isinteger(kv) && l_isinteger(rc))
+                else if (l_isinteger(kv) && l_isinteger(rc) && LUAU_LIKELY(LUAU_IS_LSL_VM(L)))
                 {
                     // ServerLua: integer math
                     setintvalue(ra, intvalue(kv) - intvalue(rc));

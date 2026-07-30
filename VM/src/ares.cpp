@@ -650,6 +650,11 @@ write_int32_t(Info *info, int32_t value) {
 }
 
 static void
+write_int64_t(Info *info, int64_t value) {
+    write_uint64_t(info, (uint64_t)value);
+}
+
+static void
 write_float32(Info *info, float value) {
   uint32_t rep;
   memcpy(&rep, &value, sizeof(float));
@@ -897,6 +902,21 @@ u_pointer(Info *info) {                                                /* ... */
   lua_pushlightuserdatatagged(info->L, ptr, tag);    /* ... ludata */
 
   eris_checktype(info, -1, LUA_TLIGHTUSERDATA);
+}
+
+/** ======================================================================== */
+// TODO: This could probably benefit from varint encoding.
+
+static void
+p_integer(Info *info) {                                           /* ... int */
+  WRITE_VALUE(lua_tointeger64(info->L, -1, NULL), int64_t);
+}
+
+static void
+u_integer(Info *info) {                                              /* ... */
+  eris_checkstack(info->L, 1);
+  lua_pushinteger64(info->L, READ_VALUE(int64_t));              /* ... int */
+  eris_checktype(info, -1, LUA_TINTEGER);
 }
 
 /** ======================================================================== */
@@ -2746,6 +2766,9 @@ persist_typed(Info *info, int type) {                 /* perms reftbl ... obj */
     case LUA_TUPVAL:
       p_upval(info);
       break;
+    case LUA_TINTEGER:
+      p_integer(info);
+      break;
     default:
       eris_error(info, ERIS_ERR_TYPEP, type);
   }                                                   /* perms reftbl ... obj */
@@ -2824,6 +2847,7 @@ persist(Info *info) {                                 /* perms reftbl ... obj */
   else if (type == LUA_TBOOLEAN ||
            type == LUA_TLIGHTUSERDATA ||
            type == LUA_TNUMBER ||
+           type == LUA_TINTEGER ||
            type == LUA_TVECTOR)
   {
     persist_typed(info, type);                        /* perms reftbl ... obj */
@@ -2926,6 +2950,9 @@ unpersist(Info *info) {                                   /* perms reftbl ... */
         break;
       case LUA_TUPVAL:
         u_upval(info);
+        break;
+      case LUA_TINTEGER:
+        u_integer(info);
         break;
       case ERIS_PERMANENT:
         u_permanent(info);
