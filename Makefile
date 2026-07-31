@@ -88,6 +88,9 @@ endif
 OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(FUZZ_OBJECTS)
 EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-tests
 
+# `LUAU_CONFORMANCE_SOURCE_DIR` is configured at build time
+LUAU_CONFORMANCE_SOURCE_DIR = "\"$(realpath .)/tests/conformance\""
+
 # common flags
 # We have to do tailslide builds for `make`-based builds, conditionally including the LSL compiler is annoying in `make`.
 CXXFLAGS+=-g -Wall -DLUAU_USE_TAILSLIDE=1
@@ -166,8 +169,8 @@ $(APR_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -
 $(CJSON_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -ILSLBuiltins/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -I$(BUILD)
-$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -I$(BUILD)
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IRequire/include -ICLI/include -ILSLBuiltins/include -Iextern -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
+$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include
 $(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include -I$(BUILD)
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include

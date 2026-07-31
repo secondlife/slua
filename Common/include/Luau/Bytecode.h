@@ -734,6 +734,10 @@ enum LuauBuiltinFunction
     LBF_INTEGER_COUNTRZ,
     LBF_INTEGER_COUNTLZ,
     LBF_INTEGER_BSWAP,
+
+    // buffer.readinteger / buffer.writeinteger (int64_t)
+    LBF_BUFFER_READINTEGER,
+    LBF_BUFFER_WRITEINTEGER,
 };
 
 // Capture type, used in LOP_CAPTURE
