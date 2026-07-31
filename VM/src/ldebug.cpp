@@ -707,7 +707,7 @@ void luaG_dumpvalue(lua_State *L, const lua_TValue *tv) {
         fprintf(stderr, "(%d) %p\n", lightuserdatatag(tv), pvalue(tv));
         break;
     case LUA_TINTEGER:
-        fprintf(stderr, "(integer) %d\n", intvalue(tv));
+        fprintf(stderr, "(integer) %lld\n", intvalue(tv));
         break;
     case LUA_TFUNCTION:
     {
