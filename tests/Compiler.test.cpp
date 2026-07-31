@@ -30,10 +30,11 @@ LUAU_FASTFLAG(LuauCompileExtraTypes)
 LUAU_FASTFLAG(LuauCompileVectorReveseMul)
 LUAU_FASTFLAG(LuauIntegerType)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
-    LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
+LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileFoldStringLimit)
 LUAU_FASTFLAG(LuauCompileNewMathConstantsFolded)
 LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuauCompileTypeAliases)
 
 using namespace Luau;
 
@@ -9890,12 +9891,14 @@ type Instance = string
 
 TEST_CASE("TypeAliasResolve")
 {
+    ScopedFastFlag luauTypeAliases{FFlag::LuauCompileTypeAliases, true};
+
     CHECK_EQ(
         "\n" + compileTypeTable(R"(
 type Foo1 = number
 type Foo2 = { number }
 type Foo3 = Part
-type Foo4 = Foo1 -- we do not resolve aliases within aliases
+type Foo4 = Foo1
 type Foo5<X> = X
 
 function myfunc(f1: Foo1, f2: Foo2, f3: Foo3, f4: Foo4, f5: Foo5<number>)
@@ -9906,7 +9909,7 @@ end
 
 )"),
         R"(
-0: function(number, table, userdata, any, any)
+0: function(number, table, userdata, number, any)
 1: function(number, any)
 )"
     );
@@ -10798,7 +10801,7 @@ RETURN R1 1
 TEST_CASE("BufferIntegerFastcall")
 {
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag luauIntegerBufferFastcalls { FFlag::LuauIntegerBufferFastcalls, true};
+    ScopedFastFlag luauIntegerBufferFastcalls{FFlag::LuauIntegerBufferFastcalls, true};
 
     CHECK_EQ(
         "\n" + compileFunction0(R"(
@@ -10815,7 +10818,8 @@ LOADK R3 K3 [0]
 GETIMPORT R1 5 [buffer.readinteger]
 CALL R1 2 -1
 L0: RETURN R1 -1
-)");
+)"
+    );
 
     CHECK_EQ(
         "\n" + compileFunction0(R"(
@@ -10831,7 +10835,8 @@ MOVE R5 R1
 GETIMPORT R2 2 [buffer.writeinteger]
 CALL R2 3 0
 L0: RETURN R0 0
-)");
+)"
+    );
 }
 
 TEST_SUITE_END();

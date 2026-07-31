@@ -439,7 +439,7 @@ enum LuauOpcode
     // LSL_DOUBLE2FLOAT: truncate double to 32-bit float range
     // A: target register
     // B: source register
-    LOP_LSL_DOUBLE2FLOAT,
+    LOP_LSL_DOUBLE2FLOAT = LOP_LSL__START,
 
     // LSL_CASTINTFLOAT: convert between LSL integer and float
     // A: target register
@@ -447,7 +447,7 @@ enum LuauOpcode
     // C: direction (0 = int->float, 1 = float->int)
     LOP_LSL_CASTINTFLOAT,
 
-    LOP_LSL__END,
+    LOP_LSL__END = LOP_LSL_CASTINTFLOAT,
 };
 
 // Bytecode instruction header: it's always a 32-bit integer, with low byte (first byte in little endian) containing the opcode

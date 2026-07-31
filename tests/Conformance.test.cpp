@@ -58,7 +58,7 @@ LUAU_FASTFLAG(LuauIntegerType)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauNewMathConstantsRuntime)
 LUAU_FASTFLAG(LuauCompileStringInterpWithZero)
-LUAU_FASTFLAG(LuauUdataDirectAccess2)
+LUAU_FASTFLAG(LuauUdataDirectAccess3)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -404,7 +404,7 @@ static StateRef runConformance(
     }
 
     // Extra test for lowering on both platforms with assembly generation
-    if (luau_codegen_supported())
+    if (result == 0 && luau_codegen_supported())
     {
         // ServerLua: let Ares access the compilation func
         eris_set_compile_func([](lua_State *L, int idx) {
@@ -1667,8 +1667,31 @@ TEST_CASE("Math")
 TEST_CASE("Integers")
 {
     if (FFlag::LuauIntegerType && FFlag::LuauIntegerLibrary)
-        runConformance("integers.luau");
+    {
+        runConformance(
+            "integers.luau",
+            [](lua_State* L)
+            {
+                setupNativeHelpers(L);
+            }
+        );
+
+	if (codegen && luau_codegen_supported())
+	{
+        runConformance(
+            "integers_regspill.luau",
+
+            [](lua_State* L)
+            {
+                setupNativeHelpers(L);
+            }
+        );
+
+	}
+    }
 }
+
+
 
 TEST_CASE("Tables")
 {
@@ -4794,7 +4817,7 @@ TEST_CASE("NativeUserdata")
 
 TEST_CASE("UserdataDirectAccess")
 {
-    ScopedFastFlag sff{FFlag::LuauUdataDirectAccess2, true};
+    ScopedFastFlag sff{FFlag::LuauUdataDirectAccess3, true};
 
     // Reset global state
     nameToAtom.clear();

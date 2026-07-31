@@ -408,10 +408,11 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
     Instruction insn = *pc++;
+    int op = LUAU_INSN_OP(insn);
     StkId ra = VM_REG(LUAU_INSN_A(insn));
     StkId rb = VM_REG(LUAU_INSN_B(insn));
     uint32_t aux = *pc++;
-    TValue* kv = VM_KV(aux);
+    TValue* kv = VM_KV(op == LOP_GETUDATAKS ? LUAU_INSN_AUX_KV16(aux) : aux);
     LUAU_ASSERT(ttisstring(kv));
 
     // fast-path: built-in table
@@ -520,10 +521,11 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
     Instruction insn = *pc++;
+    int op = LUAU_INSN_OP(insn);
     StkId ra = VM_REG(LUAU_INSN_A(insn));
     StkId rb = VM_REG(LUAU_INSN_B(insn));
     uint32_t aux = *pc++;
-    TValue* kv = VM_KV(aux);
+    TValue* kv = VM_KV(op == LOP_SETUDATAKS ? LUAU_INSN_AUX_KV16(aux) : aux);
     LUAU_ASSERT(ttisstring(kv));
 
     // fast-path: built-in table
@@ -590,10 +592,11 @@ const Instruction* executeNAMECALL(lua_State* L, const Instruction* pc, StkId ba
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
     Instruction insn = *pc++;
+    int op = LUAU_INSN_OP(insn);
     StkId ra = VM_REG(LUAU_INSN_A(insn));
     StkId rb = VM_REG(LUAU_INSN_B(insn));
     uint32_t aux = *pc++;
-    TValue* kv = VM_KV(aux);
+    TValue* kv = VM_KV(op == LOP_NAMECALLUDATA ? LUAU_INSN_AUX_KV16(aux) : aux);
     LUAU_ASSERT(ttisstring(kv));
 
     if (ttistable(rb))
