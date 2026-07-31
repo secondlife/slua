@@ -23,6 +23,8 @@
 LUAI_FUNC int luaB_pairs(lua_State* L);
 
 LUAU_FASTFLAGVARIABLE(LuauDirectFieldGet)
+LUAU_FLAGVERSION(LuauDirectFieldGet, 2)
+
 LUAU_FASTFLAGVARIABLE(LuauClosureUsageCounter)
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAGVARIABLE(LuauCallFeedback)

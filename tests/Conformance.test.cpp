@@ -60,7 +60,10 @@ LUAU_FASTFLAG(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauCodegenBufferInteger)
 LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
+LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuauAutoStack)
+LUAU_FASTFLAG(LuauUdataMetatablePinned)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -808,7 +811,11 @@ static int lua_vertex_namecall(lua_State* L)
 void setupUserdataHelpers(lua_State* L)
 {
     // create metatable with all the metamethods
-    luaL_newmetatable(L, "vec2");
+    if (FFlag::LuauUdataMetatablePinned)
+        lua_newtable(L);
+    else
+        luaL_newmetatable(L, "vec2");
+
     lua_pushvalue(L, -1);
     lua_setuserdatametatable(L, kTagVec2);
 
@@ -924,7 +931,11 @@ void setupUserdataHelpers(lua_State* L)
     lua_pop(L, 1);
 
     // register vertex as well
-    luaL_newmetatable(L, "vertex");
+    if (FFlag::LuauUdataMetatablePinned)
+        lua_newtable(L);
+    else
+        luaL_newmetatable(L, "vertex");
+
     lua_pushvalue(L, -1);
     lua_setuserdatametatable(L, kTagVertex);
 
@@ -944,6 +955,10 @@ void setupUserdataHelpers(lua_State* L)
     lua_setglobal(L, "vertex");
 
     lua_pop(L, 1);
+
+    // check that metatables are correctly pinned
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    luaC_validate(L);
 }
 
 enum class DirectSlot : uint16_t
@@ -2100,7 +2115,8 @@ int multipleYields(lua_State* L)
     lua_settop(L, 1); // Only 1 argument expected
     int base = luaL_checkinteger(L, 1);
 
-    luaL_checkstack(L, 2, "cmultiyield");
+    if (!FFlag::LuauAutoStack)
+        luaL_checkstack(L, 2, "cmultiyield");
 
     // current state
     int pos = 1;
@@ -2118,11 +2134,13 @@ int multipleYieldsContinuation(lua_State* L, int status)
 
     // function state is still alive
     int pos = luaL_checkinteger(L, 2) + 1;
-    luaL_checkstack(L, 1, "cmultiyieldcont");
+    if (!FFlag::LuauAutoStack)
+        luaL_checkstack(L, 1, "cmultiyieldcont");
     lua_pushinteger(L, pos);
     lua_replace(L, 2);
 
-    luaL_checkstack(L, 1, "cmultiyieldcont");
+    if (!FFlag::LuauAutoStack)
+        luaL_checkstack(L, 1, "cmultiyieldcont");
 
     if (pos < 4)
     {
@@ -2177,7 +2195,8 @@ int multipleYieldsWithNestedCall(lua_State* L)
 int multipleYieldsWithNestedCallContinuation(lua_State* L, int status)
 {
     int state = luaL_checkinteger(L, 3);
-    luaL_checkstack(L, 1, "cnestedmultiyieldcont");
+    if (!FFlag::LuauAutoStack)
+        luaL_checkstack(L, 1, "cnestedmultiyieldcont");
     lua_pushinteger(L, state + 1);
     lua_replace(L, 3);
 
@@ -2199,7 +2218,8 @@ int multipleYieldsWithNestedCallContinuation(lua_State* L, int status)
 
 int passthroughCall(lua_State* L)
 {
-    luaL_checkstack(L, 3, "cpass");
+    if (!FFlag::LuauAutoStack)
+        luaL_checkstack(L, 3, "cpass");
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     lua_pushvalue(L, 3);
@@ -2215,7 +2235,8 @@ int passthroughCallContinuation(lua_State* L, int status)
 
 int passthroughCallMoreResults(lua_State* L)
 {
-    luaL_checkstack(L, 3, "cpass");
+    if (!FFlag::LuauAutoStack)
+        luaL_checkstack(L, 3, "cpass");
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     lua_pushvalue(L, 3);
@@ -2277,9 +2298,61 @@ int passthroughCallWithStateContinuation(lua_State* L, int status)
     return lua_gettop(L) - 1;
 }
 
+int pcallThenXCall(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    luaL_checkany(L, 2);
+
+    luaL_checkstack(L, 3, "pcallThenCall");
+    lua_pushinteger(L, 0); // state
+    lua_pushinteger(L, 0); // multiplier
+
+    lua_pushvalue(L, 1); // call first function
+    return luaL_pcallyieldable(L, 0, 1, 0);
+}
+
+int pcallThenXCallContinuation(lua_State* L, int status)
+{
+    luaL_checkstack(L, 1, "pcallThenCallContinuation");
+
+    int pcallVariant = lua_tointeger(L, lua_upvalueindex(1));
+    int state = luaL_checkinteger(L, 3);
+
+    if (state == 0)
+    {
+        if (status != LUA_OK)
+        {
+            lua_pushinteger(L, -1);
+            lua_replace(L, 4);
+        }
+        else
+        {
+            lua_replace(L, 4);
+        }
+
+        lua_pushinteger(L, 1);
+        lua_replace(L, 3);
+
+        lua_pushvalue(L, 2); // call second function
+        return pcallVariant ? luaL_pcallyieldable(L, 0, LUA_MULTRET, 0) : luaL_callyieldable(L, 0, LUA_MULTRET);
+    }
+
+    int multiplier = luaL_checkinteger(L, 4);
+    int value = -1;
+
+    if (status != LUA_OK)
+        LUAU_ASSERT(pcallVariant);
+    else
+        value = lua_tointeger(L, -1);
+
+    lua_pushinteger(L, multiplier * value);
+    return 1;
+}
+
 TEST_CASE("CYield")
 {
     ScopedFastFlag luauResumeRestoreCcalls{FFlag::LuauResumeRestoreCcalls, true};
+    ScopedFastFlag luauCustomYieldablePcalls{FFlag::LuauCustomYieldablePcalls, true};
 
     runConformance(
         "cyield.luau",
@@ -2308,6 +2381,14 @@ TEST_CASE("CYield")
 
             lua_pushcclosurek(L, passthroughCallWithState, "passthroughCallWithState", 0, passthroughCallWithStateContinuation);
             lua_setglobal(L, "passthroughCallWithState");
+
+            lua_pushinteger(L, 0);
+            lua_pushcclosurek(L, pcallThenXCall, "pcallThenCall", 1, pcallThenXCallContinuation);
+            lua_setglobal(L, "pcallThenCall");
+
+            lua_pushinteger(L, 1);
+            lua_pushcclosurek(L, pcallThenXCall, "pcallThenPcall", 1, pcallThenXCallContinuation);
+            lua_setglobal(L, "pcallThenPcall");
         }
     );
 }
@@ -2596,7 +2677,8 @@ TEST_CASE("Debugger")
         {
             CHECK(breakhits % 2 == 1);
 
-            lua_checkstack(L, LUA_MINSTACK);
+            if (!FFlag::LuauAutoStack)
+                lua_checkstack(L, LUA_MINSTACK);
 
             if (breakhits == 1)
             {
@@ -2827,7 +2909,8 @@ TEST_CASE("NDebugGetUpValue")
         nullptr,
         [](lua_State* L) -> bool
         {
-            lua_checkstack(L, LUA_MINSTACK);
+            if (!FFlag::LuauAutoStack)
+                lua_checkstack(L, LUA_MINSTACK);
 
             // push the second frame's closure to the stack
             lua_Debug ar = {};
@@ -3081,7 +3164,8 @@ TEST_CASE("ApiIter")
     lua_pushvalue(L, 1);
 
     CHECK(lua_gettop(L) == 19);
-    CHECK(lua_checkstack(L, 2));
+    if (!FFlag::LuauAutoStack)
+        CHECK(lua_checkstack(L, 2));
 
     // Luau iteration interface: lua_rawiter (faster and preferable to lua_next)
     double sum3 = 0;
