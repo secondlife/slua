@@ -988,6 +988,10 @@ struct Printer
             if (FFlag::LuauExportValueSyntax && FFlag::LuauConst2 && a->isExported)
             {
                 writer.keyword("export");
+
+                if (cstNode)
+                    advance(cstNode->declarationKeywordPosition);
+
                 writer.keyword(a->isConst ? "const" : "local");
             }
             else if (FFlag::LuauConst2 && a->isConst)
@@ -2062,6 +2066,11 @@ std::string prettyPrint(AstStatBlock& block, const CstNodeMap& cstNodeMap)
     StringWriter writer;
     Printer(writer, cstNodeMap).visualizeBlock(block);
     return writer.str();
+}
+
+std::string prettyPrint(AstStatBlock& block)
+{
+    return prettyPrint(block, CstNodeMap{nullptr});
 }
 
 std::string prettyPrintWithTypes(AstStatBlock& block, const CstNodeMap& cstNodeMap)
