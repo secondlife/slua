@@ -10,6 +10,7 @@
 
 LUAU_FASTFLAG(LuauCompileDuptableConstantPack2)
 LUAU_FASTFLAG(LuauIntegerType)
+LUAU_FASTFLAGVARIABLE(LuauCompileUdataDirect)
 
 namespace Luau
 {
@@ -1332,6 +1333,9 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
+    if (FFlag::LuauCompileUdataDirect)
+        return 9;
+
     // ServerLua: made unconditional
     return 8;
 }
@@ -1755,6 +1759,20 @@ void BytecodeBuilder::validateInstructions() const
             default:
                 LUAU_ASSERT(!"Unsupported capture type");
             }
+            break;
+
+        case LOP_GETUDATAKS:
+        case LOP_SETUDATAKS:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VCONST(LUAU_INSN_AUX_KV16(insns[i + 1]), String);
+            break;
+
+        case LOP_NAMECALLUDATA:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VCONST(LUAU_INSN_AUX_KV16(insns[i + 1]), String);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 2]) == LOP_CALL);
             break;
 
         default:
@@ -2455,6 +2473,27 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         code++;
         break;
 
+    case LOP_GETUDATAKS:
+        formatAppend(result, "GETUDATAKS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_AUX_KV16(*code));
+        dumpConstant(result, LUAU_INSN_AUX_KV16(*code));
+        result.append("]\n");
+        code++;
+        break;
+
+    case LOP_SETUDATAKS:
+        formatAppend(result, "SETUDATAKS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_AUX_KV16(*code));
+        dumpConstant(result, LUAU_INSN_AUX_KV16(*code));
+        result.append("]\n");
+        code++;
+        break;
+
+    case LOP_NAMECALLUDATA:
+        formatAppend(result, "NAMECALLUDATA R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_AUX_KV16(*code));
+        dumpConstant(result, LUAU_INSN_AUX_KV16(*code));
+        result.append("]\n");
+        code++;
+        break;
+
     default:
         LUAU_ASSERT(!"Unsupported opcode");
     }
@@ -2469,11 +2508,10 @@ static const char* getBaseTypeString(uint8_t type)
         return "nil";
     case LBC_TYPE_BOOLEAN:
         return "boolean";
-    // ServerLua: added by us for integer constant support
-    case LBC_TYPE_INTEGER:
-        return "integer";
     case LBC_TYPE_NUMBER:
         return "number";
+    case LBC_TYPE_INTEGER:
+        return "integer";
     case LBC_TYPE_STRING:
         return "string";
     case LBC_TYPE_TABLE:
