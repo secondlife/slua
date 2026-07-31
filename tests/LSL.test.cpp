@@ -35,7 +35,7 @@ extern int optimizationLevel;
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_DYNAMIC_FASTFLAG(LuauCodegenTrackingMultilocationFix)
 LUAU_FASTFLAG(LuauCodegenDetailedCompilationResult)
-LUAU_FASTFLAG(LuauIntegerType)
+LUAU_FASTFLAG(LuauIntegerType2)
 
 
 static int yielding_print(lua_State* L)

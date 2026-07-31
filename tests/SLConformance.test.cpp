@@ -38,7 +38,7 @@ extern int optimizationLevel;
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_DYNAMIC_FASTFLAG(LuauCodegenTrackingMultilocationFix)
 LUAU_FASTFLAG(LuauCodegenDetailedCompilationResult)
-LUAU_FASTFLAG(LuauIntegerType)
+LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuauYieldIter2)
 
@@ -200,12 +200,9 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
 static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr,
     lua_State* initialLuaState = nullptr, lua_CompileOptions* options = nullptr, bool setupConstants = true)
 {
-    // The SL runtime always has the integer feature enabled
-    FFlag::LuauIntegerType.value = true;
-    FFlag::LuauIntegerLibrary.value = true;
-
-    // The SL runtime always uses the yieldable FORGLOOP path
-    FFlag::LuauYieldIter2.value = true;
+    ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag luauIntegerLib{FFlag::LuauIntegerLibrary, true};
+    ScopedFastFlag luauYieldIter2{FFlag::LuauYieldIter2, true};
 
     luauSL_init_global_builtins(nullptr);
 

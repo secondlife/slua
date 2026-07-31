@@ -54,7 +54,7 @@ LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_FASTFLAG(LuauResumeRestoreCcalls)
 LUAU_FASTFLAG(LuauIntegerLibrary)
-LUAU_FASTFLAG(LuauIntegerType)
+LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauUdataDirectAccess5)
 LUAU_FASTFLAG(LuauCodegenBufferInteger)
@@ -1679,7 +1679,7 @@ TEST_CASE("Integers")
     ScopedFastFlag ncgBufferInteger{FFlag::LuauCodegenBufferInteger, true};
     ScopedFastFlag luauCodegenFixBufferLenCheck{FFlag::LuauCodegenFixBufferLenCheck, true};
 
-    if (FFlag::LuauIntegerType && FFlag::LuauIntegerLibrary)
+    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
     {
         runConformance(
             "integers.luau",
@@ -1774,6 +1774,8 @@ static double pmMaxDelta = 0;
 
 TEST_CASE("StdlibYield")
 {
+    ScopedFastFlag luauYieldIter{FFlag::LuauYieldIter2, true};
+
     pmInterruptEnabled = false;
     pmYieldCount = 0;
     pmTimingMode = false;
@@ -2396,7 +2398,7 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
             break;
 
         case Luau::PrimitiveType::Integer:
-            if (FFlag::LuauIntegerType)
+            if (FFlag::LuauIntegerType2)
                 lua_pushstring(L, "integer");
             break;
 
