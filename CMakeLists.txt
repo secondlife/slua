@@ -334,7 +334,7 @@ if(LUAU_BUILD_TESTS)
 
     target_compile_options(Luau.Conformance PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY)
-    target_include_directories(Luau.Conformance PRIVATE extern "${PACKAGE_INCLUDE_DIR}")
+    target_include_directories(Luau.Conformance PRIVATE extern VM/src "${PACKAGE_INCLUDE_DIR}")
     target_link_directories(Luau.Conformance PRIVATE "${PACKAGE_LIB_DIR}")
     target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Bytecode Luau.Compiler Luau.CodeGen Luau.VM Luau.LSLBuiltins "${TAILSLIDE_LIBRARY}")
 

@@ -1360,6 +1360,12 @@ YieldableStatus luaSL_may_interrupt(lua_State *L)
             out_of_bounds = (real_pc >= upper_pc_bound || real_pc < proto->code);
             if (!out_of_bounds && LUAU_INSN_OP(*real_pc) == LOP_CALL)
                 return YieldableStatus::OK;
+            // LOP_CALLFB carries an extra feedback word between the op and the
+            // return pc, so the op is one further back still.
+            --real_pc;
+            out_of_bounds = (real_pc >= upper_pc_bound || real_pc < proto->code);
+            if (!out_of_bounds && LUAU_INSN_OP(*real_pc) == LOP_CALLFB)
+                return YieldableStatus::OK;
         }
         LUAU_ASSERT(!"Can't preempt instruction");
         // Don't want to yield here, bail out.

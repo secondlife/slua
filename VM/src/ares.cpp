@@ -62,6 +62,8 @@ THE SOFTWARE.
 #include "lljson.h"
 #include "Luau/Bytecode.h"
 
+LUAU_FASTFLAG(LuauClosureUsageCounter)
+
 /*
 ** {===========================================================================
 ** Default settings.
@@ -206,10 +208,13 @@ typedef uint64_t ares_size_t;
 
 /* The "type" we write when we persist a value via a replacement from the
  * permanents table. This is just an arbitrary number, but it must be outside
- * the range Lua uses for its types (> LUA_TOTALTAGS). */
-#define ERIS_PERMANENT (LUA_TDEADKEY + 1)
+ * the range Lua uses for its types. Pinned far above the lua_Type range so
+ * upstream enum growth or reordering can never collide with it (these are
+ * wire values and must not drift). */
+#define ERIS_PERMANENT 64
 /* The "type" we use to reference something from the (ephemeral) reftable */
 #define ERIS_REFERENCE (ERIS_PERMANENT + 1)
+static_assert(LUA_TUPVAL < ERIS_PERMANENT, "lua_Type range grew into the ares wire-tag range");
 
 /* Avoids having to write the nullptr all the time, plus makes it easier adding
  * a custom error message should you ever decide you want one. */
@@ -2614,6 +2619,18 @@ u_thread(Info *info) {                                                 /* ... */
     poppath(info);
     UNLOCK(thread);
   }
+
+  /* Reconstruct the closure usage counts that LOP_CALL / luau_precall would
+   * have incremented for each in-flight frame; every return/unwind path
+   * (including cleanupcistack) decrements them. */
+  if (FFlag::LuauClosureUsageCounter) {
+    for (CallInfo *ci = thread->base_ci + 1; ci <= thread->ci; ++ci) {
+      if (ttisfunction(ci->func)) {
+        clvalue(ci->func)->usage++;
+      }
+    }
+  }
+
   if (thread->status == LUA_YIELD) {
 //    thread->ci->extra = eris_savestack(thread,
 //      eris_restorestackidx(thread, (size_t)READ_VALUE(ares_size_t)));
