@@ -15,7 +15,6 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(LuauIntegerType)
 LUAU_FASTFLAGVARIABLE(LuauUdataDirectAccess4)
 
 template<typename T>
@@ -577,7 +576,6 @@ static int loadsafe(
 
             case LBC_CONSTANT_INTEGER:
             {
-                // ServerLua: made unconditional
                 bool isNegative = read<uint8_t>(data, size, offset);
                 uint64_t magnitude = readVarInt64(data, size, offset);
                 setlvalue(&p->k[j], isNegative ? (int64_t)(~magnitude + 1) : (int64_t)magnitude);

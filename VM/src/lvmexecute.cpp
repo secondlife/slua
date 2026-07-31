@@ -23,9 +23,6 @@ LUAI_FUNC int luaB_pairs(lua_State* L);
 
 LUAU_FASTFLAGVARIABLE(LuauDirectFieldGet)
 
-LUAU_FASTFLAG(LuauIntegerType)
-
-
 // Disable c99-designator to avoid the warning in computed goto dispatch table
 #ifdef __clang__
 #if __has_warning("-Wc99-designator")
@@ -1351,7 +1348,6 @@ reentry:
                         break;
 
                     case LUA_TINTEGER:
-                        // ServerLua: made unconditional
                         pc += lvalue(ra) == lvalue(rb) ? LUAU_INSN_D(insn) : 1;
                         LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                         VM_NEXT();
@@ -1472,7 +1468,6 @@ reentry:
                         break;
 
                     case LUA_TINTEGER:
-                        // ServerLua: made unconditional
                         pc += lvalue(ra) != lvalue(rb) ? LUAU_INSN_D(insn) : 1;
                         LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                         VM_NEXT();
