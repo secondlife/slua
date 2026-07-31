@@ -626,6 +626,7 @@ if(TARGET Luau.Conformance)
         tests/RegisterCallbacks.cpp
         tests/ConformanceIrHooks.h
         tests/Conformance.test.cpp
+        tests/DirectFieldAccess.test.cpp
         tests/IrLowering.test.cpp
         tests/SharedCodeAllocator.test.cpp
         tests/SLConformance.test.cpp

@@ -1,6 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Repl.h"
 
+#include "Luau/CodeGenOptions.h"
 #include "Luau/Common.h"
 #include "lua.h"
 #include "lualib.h"
@@ -54,6 +55,8 @@ LUAU_FASTFLAG(DebugLuauTimeTracing)
 constexpr int MaxTraversalLimit = 50;
 
 static bool codegen = false;
+static bool codegenCold = false;
+
 static bool lsl = false;
 static bool sl = false;
 static bool builtinsLoaded = false;
@@ -744,6 +747,10 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
         if (codegen)
         {
             Luau::CodeGen::CompilationOptions nativeOptions;
+            if (codegenCold)
+            {
+                nativeOptions.flags = Luau::CodeGen::CodeGen_ColdFunctions;
+            }
 
             if (countersActive())
                 nativeOptions.recordCounters = true;
@@ -817,6 +824,7 @@ static void displayHelp(const char* argv0)
     printf("  --lsl: run REPL with LSL semantics\n");
     printf("  --sl: run REPL with SL semantics\n");
     printf("  --codegen: execute code using native code generation\n");
+    printf("  --codegen-cold: execute code using native code generation, including any functions deemed not profitable to natively compile\n");
     printf("  --codegen-perf: execute code using native code generation and profile using perf (only on Linux)\n");
     printf("  --program-args,-a: declare start of arguments to be passed to the Luau program\n");
     printf("  --fflags=<flags>: comma-separated list of fast flags to enable/disable (--fflags=true,false,LuauFlag1=true,LuauFlag2=false).\n");
@@ -885,6 +893,11 @@ int replMain(int argc, char** argv)
         else if (strcmp(argv[i], "--codegen") == 0)
         {
             codegen = true;
+        }
+        else if (strcmp(argv[i], "--codegen-cold") == 0)
+        {
+            codegen = true;
+            codegenCold = true;
         }
         else if (strcmp(argv[i], "--codegen-perf") == 0)
         {
