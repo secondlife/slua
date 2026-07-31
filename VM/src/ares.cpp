@@ -1118,7 +1118,7 @@ static void p_table(Info *info) {                                  /* ... tbl */
       }
     }
 
-    luaA_pushobject(info->L, &key);                              /* ... tbl k */
+    luaA_pushvalue(info->L, &key);                              /* ... tbl k */
 
     if (info->generatePath) {
       int keytype = lua_type(info->L, -1);
@@ -1137,7 +1137,7 @@ static void p_table(Info *info) {                                  /* ... tbl */
 
     persist(info);                                               /* ... tbl k */
     lua_pop(info->L, 1);                                           /* ... tbl */
-    luaA_pushobject(info->L, &value);                            /* ... tbl v */
+    luaA_pushvalue(info->L, &value);                            /* ... tbl v */
     persist(info);                                               /* ... tbl v */
     lua_pop(info->L, 1);                                           /* ... tbl */
     poppath(info);
@@ -1238,7 +1238,7 @@ static void u_table(Info *info) {                                      /* ... */
     if (kv_idx >= array_size) {
       ++non_nil_nodes;
       // keep track of the key's original iter pos within the hash
-      luaA_pushobject(info->L, &kv_it->first);         /* ... tbl pos_tbl key */
+      luaA_pushvalue(info->L, &kv_it->first);         /* ... tbl pos_tbl key */
       lua_pushinteger(info->L, (int)(kv_idx - array_size));
                                                    /* ... tbl pos_tbl key pos */
       lua_rawset(info->L, -3);                             /* ... tbl pos_tbl */
@@ -1246,8 +1246,8 @@ static void u_table(Info *info) {                                      /* ... */
 
     // We still want to assign keys with nil values though, keys with tombstones are
     // distinct from keys that aren't present and may affect chaining.
-    luaA_pushobject(info->L, &kv_it->first);           /* ... tbl pos_tbl key */
-    luaA_pushobject(info->L, &kv_it->second);      /* ... tbl pos_tbl key val */
+    luaA_pushvalue(info->L, &kv_it->first);           /* ... tbl pos_tbl key */
+    luaA_pushvalue(info->L, &kv_it->second);      /* ... tbl pos_tbl key val */
 
     lua_rawset(info->L, -4);                               /* ... tbl pos_tbl */
   }
@@ -1306,7 +1306,7 @@ static void u_table(Info *info) {                                      /* ... */
       // Find the key's original iter pos
       TValue key_val;
       getnodekey(info->L, &key_val, node);
-      luaA_pushobject(info->L, &key_val);              /* ... tbl pos_tbl key */
+      luaA_pushvalue(info->L, &key_val);              /* ... tbl pos_tbl key */
       lua_rawget(info->L, -2);                         /* ... tbl pos_tbl val */
       // if the lookup failed then something is seriously wrong.
       eris_checktype(info, -1, LUA_TNUMBER);
@@ -2380,7 +2380,7 @@ p_thread(Info *info) {                                          /* ... thread */
       // loaded from there during unpersist. We expect we're really only
       // serializing a reference here and that the actual closure was serialized
       // when Ares was handling the stack.
-      luaA_pushobject(info->L, ci->func);                     /* ... thread func */
+      luaA_pushvalue(info->L, ci->func);                     /* ... thread func */
       persist(info);
       lua_pop(info->L, 1);                                    /* ... thread */
       eris_assert(lua_gettop(info->L) == pre_closure_top);
@@ -3226,7 +3226,7 @@ static void scavenge_global_perms(lua_State *L, bool forUnpersist) {
     // Push the real, underlying globals table onto the stack
     TValue gt_tv;
     sethvalue(L, &gt_tv, eris_getglobalsbase(L));
-    luaA_pushobject(L, &gt_tv);                         /* ... perms glob_tab */
+    luaA_pushvalue(L, &gt_tv);                         /* ... perms glob_tab */
 
     scavenge_general_perms_internal(L, forUnpersist, "g");
 
@@ -3253,7 +3253,7 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
 
         TValue udata_mt_tv;
         sethvalue(L, &udata_mt_tv, udata_mt);
-        luaA_pushobject(L, &udata_mt_tv);           /* ... perms udata_mt */
+        luaA_pushvalue(L, &udata_mt_tv);           /* ... perms udata_mt */
 
         scan_metatable(L, forUnpersist, mt_prefix, perms_idx);
         lua_pop(L, 1);                                       /* ... perms */
@@ -3267,7 +3267,7 @@ static void scavenge_sl_vm_internals(lua_State *L, bool forUnpersist) {
 
         TValue mt_tv;
         sethvalue(L, &mt_tv, L->global->mt[type_idx]);
-        luaA_pushobject(L, &mt_tv);
+        luaA_pushvalue(L, &mt_tv);
 
         std::string mt_name = std::string("type/") + lua_typename(L, type_idx);
 

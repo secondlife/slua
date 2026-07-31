@@ -515,12 +515,12 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
                 if (ttisstring(&table_val->array[idx]))
                 {
                     // Don't need to cast strings, just push.
-                    luaA_pushobject(L, &table_val->array[idx]);
+                    luaA_pushvalue(L, &table_val->array[idx]);
                 }
                 else
                 {
                     lua_pushcfunction(L, &lsl_cast_list_elem, "cast_list");
-                    luaA_pushobject(L, &table_val->array[idx]);
+                    luaA_pushvalue(L, &table_val->array[idx]);
                     luaSL_pushinteger(L, LSLIType::LST_STRING);
                     lua_call(L, 2, 1);
                 }
@@ -539,7 +539,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
             return 0;
         }
     }
-    luaA_pushobject(L, &new_tv);
+    luaA_pushvalue(L, &new_tv);
     return 1;
 }
 
@@ -1107,7 +1107,7 @@ static int lsl_tostring_uuid(lua_State *L)
     {
         TValue tv;
         setsvalue(L, &tv, a->str);
-        luaA_pushobject(L, &tv);
+        luaA_pushvalue(L, &tv);
     }
     return 1;
 }
@@ -1135,7 +1135,7 @@ static int lsl_index_uuid(lua_State *L)
         {
             setnilvalue(&tv);
         }
-        luaA_pushobject(L, &tv);
+        luaA_pushvalue(L, &tv);
         return 1;
     }
     else

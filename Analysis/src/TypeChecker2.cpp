@@ -1524,7 +1524,7 @@ void TypeChecker2::visit(AstExprVarargs* expr)
     // TODO!
 }
 
-static void reportAvailableOverloads(ErrorVec& errors, Location location, const std::vector<TypeId>& overloads)
+static void reportAvailableOverloads(ErrorVec& errors, Location location, const ModuleName& moduleName, const std::vector<TypeId>& overloads)
 {
     if (overloads.empty())
         return;
@@ -1543,7 +1543,7 @@ static void reportAvailableOverloads(ErrorVec& errors, Location location, const 
         s << toString(overloads[i]);
     }
 
-    errors.emplace_back(location, ExtraInformation{s.str()});
+    errors.emplace_back(location, moduleName, ExtraInformation{s.str()});
 }
 
 void TypeChecker2::visitCall(AstExprCall* call)
@@ -1766,7 +1766,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
         if (!overloadsToReport.empty())
         {
             reportError(MultipleNonviableOverloads{argHead.size()}, call->location);
-            reportAvailableOverloads(module->errors, call->location, overloadsToReport);
+            reportAvailableOverloads(module->errors, call->location, module->name, overloadsToReport);
         }
 
         return;
@@ -1795,7 +1795,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
         std::stringstream ss;
         ss << "No overload for function accepts " << argHead.size() << " arguments.";
         reportError(GenericError{ss.str()}, call->func->location);
-        reportAvailableOverloads(module->errors, call->func->location, result2.arityMismatches);
+        reportAvailableOverloads(module->errors, call->func->location, module->name, result2.arityMismatches);
         return;
     }
 
@@ -3783,17 +3783,17 @@ PropertyType TypeChecker2::hasIndexTypeFromType(
         {
             if (cls->metatable)
             {
-                std::optional<TypeId> mtIndex = Luau::findMetatableEntry(builtinTypes, errors, ty, "__index", location);
-                if (mtIndex)
+                // For user-defined classes, the object metatable holds metamethods (e.g. __add)
+                // directly in its props rather than under an __index table.
+                if (const TableType* mtt = get<TableType>(follow(*cls->metatable)))
                 {
-                    if (auto mtIndexFunction = get<FunctionType>(follow(*mtIndex)))
+                    if (auto mtProp = mtt->props.find(prop); mtProp != mtt->props.end())
                     {
-                        std::optional<TypeId> firstRet = first(mtIndexFunction->retTypes);
-                        if (firstRet)
-                            return hasIndexTypeFromType(*firstRet, prop, context, location, seen, astIndexExprType, errors);
+                        if ((context == ValueContext::LValue && !mtProp->second.writeTy) ||
+                            (context == ValueContext::RValue && !mtProp->second.readTy))
+                            return {NormalizationResult::False, {}};
+                        return {NormalizationResult::True, context == ValueContext::LValue ? mtProp->second.writeTy : mtProp->second.readTy};
                     }
-                    else
-                        return hasIndexTypeFromType(*mtIndex, prop, context, location, seen, astIndexExprType, errors);
                 }
             }
         }

@@ -392,7 +392,7 @@ static int llevents_once_wrapper(lua_State *L)
     lua_rawgetfield(L, -1, "off");
     lua_pushvalue(L, lua_upvalueindex(ONCE_SELF));
     lua_pushvalue(L, lua_upvalueindex(ONCE_EVENT_NAME));
-    luaA_pushobject(L, L->ci->func); // Push currently executing function (this wrapper)
+    luaA_pushvalue(L, L->ci->func); // Push currently executing function (this wrapper)
     lua_call(L, 3, 0);
 
     // Get rid of things we don't need on the stack, because we're about to call the real event handler.

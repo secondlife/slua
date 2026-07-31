@@ -40,6 +40,7 @@ LUAU_DYNAMIC_FASTFLAG(LuauCodegenTrackingMultilocationFix)
 LUAU_FASTFLAG(LuauCodegenDetailedCompilationResult)
 LUAU_FASTFLAG(LuauIntegerType)
 LUAU_FASTFLAG(LuauIntegerLibrary)
+LUAU_FASTFLAG(LuauYieldIter2)
 
 
 using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
@@ -202,6 +203,9 @@ static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = n
     // The SL runtime always has the integer feature enabled
     FFlag::LuauIntegerType.value = true;
     FFlag::LuauIntegerLibrary.value = true;
+
+    // The SL runtime always uses the yieldable FORGLOOP path
+    FFlag::LuauYieldIter2.value = true;
 
     luauSL_init_global_builtins(nullptr);
 
