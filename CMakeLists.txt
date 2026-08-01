@@ -327,13 +327,13 @@ endif()
 
 if(LUAU_BUILD_TESTS)
     target_compile_options(Luau.UnitTest PRIVATE ${LUAU_OPTIONS})
-    target_compile_definitions(Luau.UnitTest PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY)
+    target_compile_definitions(Luau.UnitTest PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luau.UnitTest PRIVATE extern "${PACKAGE_INCLUDE_DIR}")
     target_link_directories(Luau.UnitTest PRIVATE "${PACKAGE_LIB_DIR}")
     target_link_libraries(Luau.UnitTest PRIVATE Luau.Analysis Luau.Bytecode Luau.Compiler Luau.CodeGen "${TAILSLIDE_LIBRARY}")
 
     target_compile_options(Luau.Conformance PRIVATE ${LUAU_OPTIONS})
-    target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY)
+    target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luau.Conformance PRIVATE extern VM/src "${PACKAGE_INCLUDE_DIR}")
     target_link_directories(Luau.Conformance PRIVATE "${PACKAGE_LIB_DIR}")
     target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Bytecode Luau.Compiler Luau.CodeGen Luau.VM Luau.LSLBuiltins "${TAILSLIDE_LIBRARY}")
@@ -348,6 +348,7 @@ if(LUAU_BUILD_TESTS)
     target_compile_definitions(Luau.Conformance PRIVATE LUAU_CONFORMANCE_SOURCE_DIR="${LUAU_CONFORMANCE_SOURCE_DIR}")
 
     target_compile_options(Luau.CLI.Test PRIVATE ${LUAU_OPTIONS})
+    target_compile_definitions(Luau.CLI.Test PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luau.CLI.Test PRIVATE extern CLI)
 
     target_link_directories(Luau.CLI.Test PRIVATE "${PACKAGE_LIB_DIR}")

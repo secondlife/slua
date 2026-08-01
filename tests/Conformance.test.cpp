@@ -2558,6 +2558,8 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
 
 TEST_CASE("Types")
 {
+    ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
+
     runConformance(
         "types.luau",
         [](lua_State* L)
