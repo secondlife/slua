@@ -62,7 +62,7 @@ THE SOFTWARE.
 #include "lljson.h"
 #include "Luau/Bytecode.h"
 
-LUAU_FASTFLAG(LuauClosureUsageCounter)
+LUAU_FASTFLAG(LuauCIProto)
 
 /*
 ** {===========================================================================
@@ -1588,6 +1588,12 @@ p_proto(Info *info) {                                            /* ... proto */
   eris_assert(p);
   eris_checkstack(info->L, 3);
 
+  // Inliner output. Snapshots must only ever contain compiled bytecode, never code
+  // this VM generated at runtime.
+  if (p->deoptimized != nullptr) {
+    eris_error(info, "cannot persist an inlined proto");
+  }
+
   info->anyProtoNative |= p->execdata != nullptr;
 
   /* Write function source code */
@@ -2337,12 +2343,21 @@ p_thread(Info *info) {                                          /* ... thread */
       WRITE_VALUE(ERIS_CI_KIND_LUA, uint8_t);
       const Closure *lcl = eris_ci_func(ci);
 
+      // savedpc is relative to the frame's proto, not the closure's current one.
+      const Proto *p = FFlag::LuauCIProto ? ci->p : lcl->l.p;
+
+      // Inliner output: regenerated at runtime, so no yieldpoints and pcs that mean
+      // nothing once reloaded.
+      if (p->deoptimized != nullptr) {
+        eris_error(info, "cannot persist a frame running an optimized proto");
+      }
+
       // PC relative to the start of the code
-      int64_t pc_offset = ci->savedpc - lcl->l.p->code;
+      int64_t pc_offset = ci->savedpc - p->code;
 
       int yield_point = -1;
-      for (int j = 0; j< lcl->l.p->sizeyieldpoints; ++j) {
-        if (lcl->l.p->yieldpoints[j] == pc_offset) {
+      for (int j = 0; j< p->sizeyieldpoints; ++j) {
+        if (p->yieldpoints[j] == pc_offset) {
             yield_point = j;
             break;
         }
@@ -2546,6 +2561,9 @@ u_thread(Info *info) {                                                 /* ... */
     thread->ci->nresults = READ_VALUE(int32_t);
     thread->ci->flags = READ_VALUE(uint8_t);
 
+    // luau_execute dereferences ci->p, and reallocCI slots hold stale bytes.
+    thread->ci->p = nullptr;
+
     // We have to do this later to not run afoul of hardmem tests,
     // otherwise this would be at the top of the loop.
     LOCK(thread);
@@ -2590,6 +2608,8 @@ u_thread(Info *info) {                                                 /* ... */
             pc_offset = std::max(0, std::min(real_pc, lcl->l.p->sizecode - 1));
           break;
       }
+      // Notably NOT getproto() for now. Need to figure out how to even handle that.
+      thread->ci->p = lcl->l.p;
       thread->ci->savedpc = lcl->l.p->code + pc_offset;
       if (thread->ci->savedpc < lcl->l.p->code ||
           thread->ci->savedpc > lcl->l.p->code + lcl->l.p->sizecode)
@@ -2618,17 +2638,6 @@ u_thread(Info *info) {                                                 /* ... */
     LOCK(thread);
     poppath(info);
     UNLOCK(thread);
-  }
-
-  /* Reconstruct the closure usage counts that LOP_CALL / luau_precall would
-   * have incremented for each in-flight frame; every return/unwind path
-   * (including cleanupcistack) decrements them. */
-  if (FFlag::LuauClosureUsageCounter) {
-    for (CallInfo *ci = thread->base_ci + 1; ci <= thread->ci; ++ci) {
-      if (ttisfunction(ci->func)) {
-        clvalue(ci->func)->usage++;
-      }
-    }
   }
 
   if (thread->status == LUA_YIELD) {

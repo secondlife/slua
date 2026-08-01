@@ -17,7 +17,6 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(LuauClosureUsageCounter)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAGVARIABLE(LuauResumeRestoreCcalls)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
@@ -223,10 +222,17 @@ void luaD_reallocstack(lua_State* L, int newsize, int fornewci)
 void luaD_reallocCI(lua_State* L, int newsize)
 {
     CallInfo* oldci = L->base_ci;
+    int oldsize = L->size_ci; // ServerLua
     luaM_reallocarray(L, L->base_ci, L->size_ci, newsize, CallInfo, L->memcat);
     L->size_ci = newsize;
     L->ci = (L->ci - oldci) + L->base_ci;
     L->end_ci = L->base_ci + L->size_ci - 1;
+
+#ifdef LUAU_ASSERTENABLED
+    // ServerLua: a missing ci->p init would otherwise read stale bytes, not null.
+    for (int i = oldsize; i < newsize; i++)
+        L->base_ci[i].p = nullptr;
+#endif
 }
 
 // ServerLua: cap exponential growth so a single deep recursion or unpack()
@@ -843,18 +849,6 @@ int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t e
     if (status != 0)
     {
         int errstatus = status;
-
-        if (FFlag::LuauClosureUsageCounter)
-        {
-            CallInfo* lastci = L->ci;
-            CallInfo* savedci = restoreci(L, old_ci);
-            while (lastci != savedci)
-            {
-                LUAU_ASSERT(clvalue(lastci->func)->usage > 0);
-                clvalue(lastci->func)->usage--;
-                lastci--;
-            }
-        }
 
         // call user-defined error function (used in xpcall)
         if (ef)

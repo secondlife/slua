@@ -22,6 +22,10 @@ BYTECODE_SOURCES=$(wildcard Bytecode/src/*.cpp)
 BYTECODE_OBJECTS=$(BYTECODE_SOURCES:%=$(BUILD)/%.o)
 BYTECODE_TARGET=$(BUILD)/libluaubytecode.a
 
+JITINLINER_SOURCES=$(wildcard Inliner/src/*.cpp)
+JITINLINER_OBJECTS=$(JITINLINER_SOURCES:%=$(BUILD)/%.o)
+JITINLINER_TARGET=$(BUILD)/libluaujitinliner.a
+
 COMPILER_SOURCES=$(wildcard Compiler/src/*.cpp)
 COMPILER_OBJECTS=$(COMPILER_SOURCES:%=$(BUILD)/%.o)
 COMPILER_TARGET=$(BUILD)/libluaucompiler.a
@@ -97,7 +101,7 @@ ifneq ($(opt),)
 	TESTS_ARGS+=-O$(opt)
 endif
 
-OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS)
+OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(CONFIG_OBJECTS) $(JITINLINER_OBJECTS) $(ANALYSIS_OBJECTS) $(EQSAT_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS)
 EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-tests
 
 # `LUAU_CONFORMANCE_SOURCE_DIR` is configured at build time
@@ -174,6 +178,7 @@ $(COMMON_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include
 $(AST_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include
 
 $(BYTECODE_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICommon/include
+$(JITINLINER_OBJECTS): CXXFLAGS+=-std=c++17 -IInliner/include -IBytecode/include -IBytecode/src -ICommon/include -IVM/include -IVM/src
 $(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICompiler/include -ICommon/include -IAst/include -Istage/packages/include
 $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IBytecode/include -ICompiler/include -IVM/include
@@ -183,12 +188,10 @@ $(APR_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -
 $(CJSON_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IRequire/include -ICLI/include -Iextern -ILSLBuiltins/include -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
-$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IRequire/include -ICLI/include -Iextern -ILSLBuiltins/include -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
+$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include -ILSLBuiltins/include -Istage/packages/include
 $(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include -I$(BUILD)
-
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
 $(TEST_LINK_VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(TEST_LINK_CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -ICodeGen/include
@@ -275,8 +278,8 @@ slua-tests: $(TESTS_TARGET) $(TEST_LINK_VM_TARGET) $(TEST_LINK_CODEGEN_TARGET)
 	ln -fs $(TESTS_TARGET) $@
 
 # executable targets
-$(TESTS_TARGET): $(TESTS_OBJECTS) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
-$(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
+$(TESTS_TARGET): $(TESTS_OBJECTS) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
+$(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
 $(ANALYZE_CLI_TARGET): $(ANALYZE_CLI_OBJECTS) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(COMMON_TARGET)
 $(COMPILE_CLI_TARGET): $(COMPILE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
 $(BYTECODE_CLI_TARGET): $(BYTECODE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
@@ -294,7 +297,7 @@ $(TEST_LINK_CODEGEN_TARGET): $(TEST_LINK_CODEGEN_OBJECTS) $(CODEGEN_TARGET) $(VM
 	$(CXX) $< $(LDFLAGS) $(WHOLE_ARCHIVE_START) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET) $(WHOLE_ARCHIVE_END) -o $@
 
 # executable targets for fuzzing
-fuzz-%: $(BUILD)/fuzz/%.cpp.o $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CONFIG_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
+fuzz-%: $(BUILD)/fuzz/%.cpp.o $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(AST_TARGET) $(CONFIG_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
 	$(CXX) $^ $(LDFLAGS) -o $@
 
 fuzz-proto: $(BUILD)/fuzz/proto.cpp.o $(BUILD)/fuzz/protoprint.cpp.o $(BUILD)/fuzz/luau.pb.cpp.o $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(COMPILER_TARGET) $(AST_TARGET) $(CONFIG_TARGET) $(VM_TARGET) $(COMMON_TARGET) $(MUTATOR_LIBS) | build/libprotobuf-mutator
@@ -304,6 +307,7 @@ fuzz-prototest: $(BUILD)/fuzz/prototest.cpp.o $(BUILD)/fuzz/protoprint.cpp.o $(B
 $(COMMON_TARGET): $(COMMON_OBJECTS)
 $(AST_TARGET): $(AST_OBJECTS)
 $(BYTECODE_TARGET): $(BYTECODE_OBJECTS)
+$(JITINLINER_TARGET): $(JITINLINER_OBJECTS)
 $(COMPILER_TARGET): $(COMPILER_OBJECTS)
 $(CONFIG_TARGET): $(CONFIG_OBJECTS)
 $(ANALYSIS_TARGET): $(ANALYSIS_OBJECTS)
@@ -313,7 +317,7 @@ $(VM_TARGET): $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
 $(REQUIRE_TARGET): $(REQUIRE_OBJECTS)
 $(ISOCLINE_TARGET): $(ISOCLINE_OBJECTS)
 
-$(COMMON_TARGET) $(AST_TARGET) $(BYTECODE_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
+$(COMMON_TARGET) $(AST_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(EQSAT_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
 	ar rcs $@ $^
 
 # generated header for embedded builtins

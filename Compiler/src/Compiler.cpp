@@ -30,14 +30,10 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(LuauConst2)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
-LUAU_FASTFLAGVARIABLE(LuauCompileNoOptNext)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
-LUAU_FASTFLAG(LuauCompilePropagateTableProps2)
-LUAU_FASTFLAG(LuauCompileFoldOptimize)
 LUAU_FASTFLAGVARIABLE(LuauCompileInlineTableFunctions)
 
 namespace Luau
@@ -914,11 +910,8 @@ struct Compiler
         }
 
         // fold constant values updated above into expressions in the function body, recording changes for undo
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-        {
-            exprChanges.clear();
-            localChanges.clear();
-        }
+        exprChanges.clear();
+        localChanges.clear();
 
         foldConstants(
             constants,
@@ -944,25 +937,8 @@ struct Compiler
                 var->type = Constant::Type_Unknown;
         }
 
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-        {
-            Compile::undoChanges(constants, exprChanges);
-            Compile::undoChanges(locstants, localChanges);
-        }
-        else
-        {
-            foldConstants(
-                constants,
-                variables,
-                locstants,
-                builtinsFold,
-                builtinsFoldLibraryK,
-                options.libraryMemberConstantCb,
-                func->body,
-                names,
-                tableConstants
-            );
-        }
+        Compile::undoChanges(constants, exprChanges);
+        Compile::undoChanges(locstants, localChanges);
 
         return cost;
     }
@@ -1096,11 +1072,8 @@ struct Compiler
         }
 
         // fold constant values updated above into expressions in the function body, recording changes for undo
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-        {
-            exprChanges.clear();
-            localChanges.clear();
-        }
+        exprChanges.clear();
+        localChanges.clear();
 
         foldConstants(
             constants,
@@ -1174,25 +1147,8 @@ struct Compiler
             inlineBuiltinsBackup.clear();
         }
 
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-        {
-            Compile::undoChanges(constants, exprChanges);
-            Compile::undoChanges(locstants, localChanges);
-        }
-        else
-        {
-            foldConstants(
-                constants,
-                variables,
-                locstants,
-                builtinsFold,
-                builtinsFoldLibraryK,
-                options.libraryMemberConstantCb,
-                func->body,
-                names,
-                tableConstants
-            );
-        }
+        Compile::undoChanges(constants, exprChanges);
+        Compile::undoChanges(locstants, localChanges);
     }
 
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
@@ -3798,11 +3754,8 @@ struct Compiler
         loops.push_back({oldLocals, oldLocals, nullptr});
 
         // record changes on the first iteration to capture the pre-loop state
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-        {
-            exprChanges.clear();
-            localChanges.clear();
-        }
+        exprChanges.clear();
+        localChanges.clear();
 
         for (int iv = 0; iv < tripCount; ++iv)
         {
@@ -3810,7 +3763,7 @@ struct Compiler
             locstants[var].type = Constant::Type_Number;
             locstants[var].valueNumber = from + iv * step;
 
-            if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize && iv == 0)
+            if (iv == 0)
                 foldConstants(
                     constants,
                     variables,
@@ -3856,17 +3809,8 @@ struct Compiler
         // clean up fold state in case we need to recompile - normally we compile the loop body once, but due to inlining we may need to do it again
         locstants[var].type = Constant::Type_Unknown;
 
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-        {
-            Compile::undoChanges(constants, exprChanges);
-            Compile::undoChanges(locstants, localChanges);
-        }
-        else
-        {
-            foldConstants(
-                constants, variables, locstants, builtinsFold, builtinsFoldLibraryK, options.libraryMemberConstantCb, stat, names, tableConstants
-            );
-        }
+        Compile::undoChanges(constants, exprChanges);
+        Compile::undoChanges(locstants, localChanges);
     }
 
     void compileStatFor(AstStatFor* stat)
@@ -3977,7 +3921,7 @@ struct Compiler
                 else if (builtin.isGlobal("pairs")) // for .. in pairs(t)
                     skipOp = LOP_FORGPREP_NEXT;
             }
-            else if (stat->values.size == 2 && (!FFlag::LuauCompileNoOptNext || (!getfenvUsed && !setfenvUsed)))
+            else if (stat->values.size == 2 && (!getfenvUsed && !setfenvUsed))
             {
                 Builtin builtin = getBuiltin(stat->values.data[0], globals, variables);
 
@@ -5105,8 +5049,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
         analyzeBuiltins(compiler.builtins, compiler.globals, compiler.variables, options, root, names);
 
         // this pass determines which locals hold constant tables that are never mutated
-        if (FFlag::LuauCompilePropagateTableProps2 && FFlag::LuauCompileFoldOptimize)
-            buildTableConstantMap(compiler.tableConstants, compiler.variables, root);
+        buildTableConstantMap(compiler.tableConstants, compiler.variables, root);
 
         // this pass analyzes constantness of expressions
         foldConstants(
