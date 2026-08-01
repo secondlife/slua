@@ -224,6 +224,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/ControlFlow.h
     Analysis/include/Luau/ControlFlowGraph.h
     Analysis/include/Luau/DumpCFG.h
+    Analysis/include/Luau/TypeStateMap.h
     Analysis/include/Luau/DataFlowGraph.h
     Analysis/include/Luau/DcrLogger.h
     Analysis/include/Luau/Def.h
@@ -313,6 +314,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/ConstraintSolver.cpp
     Analysis/src/ControlFlowGraph.cpp
     Analysis/src/DumpCFG.cpp
+    Analysis/src/TypeStateMap.cpp
     Analysis/src/DataFlowGraph.cpp
     Analysis/src/DcrLogger.cpp
     Analysis/src/Def.cpp
