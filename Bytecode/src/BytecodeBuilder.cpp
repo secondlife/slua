@@ -9,7 +9,6 @@
 #include <climits>
 
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAGVARIABLE(LuauCompileUdataDirect)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
@@ -1436,11 +1435,7 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::DebugLuauUserDefinedClasses)
         return 10;
 
-    if (FFlag::LuauCompileUdataDirect)
-        return 9;
-
-    // ServerLua: made unconditional
-    return 8;
+    return LBC_VERSION_TARGET;
 }
 
 uint8_t BytecodeBuilder::getTypeEncodingVersion()
@@ -1486,7 +1481,9 @@ void BytecodeBuilder::validateInstructions() const
 #define VREG(v) LUAU_ASSERT(unsigned(v) < func.maxstacksize)
 #define VREGRANGE(v, count) LUAU_ASSERT(unsigned(v + (count < 0 ? 0 : count)) <= func.maxstacksize)
 #define VUPVAL(v) LUAU_ASSERT(unsigned(v) < func.numupvalues)
-#define VCONST(v, kind) FFlag::LuauVirtualBcBuilder ? validateConst(v, Constant::Type_##kind) : LUAU_ASSERT(unsigned(v) < constants.size() && constants[v].type == Constant::Type_##kind)
+#define VCONST(v, kind) \
+    FFlag::LuauVirtualBcBuilder ? validateConst(v, Constant::Type_##kind) \
+                                : LUAU_ASSERT(unsigned(v) < constants.size() && constants[v].type == Constant::Type_##kind)
 #define VCONSTANY(v) FFlag::LuauVirtualBcBuilder ? validateConst(v) : LUAU_ASSERT(unsigned(v) < constants.size())
 #define VJUMP(v) LUAU_ASSERT(size_t(i + 1 + v) < insns.size() && insnvalid[i + 1 + v])
 

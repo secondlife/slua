@@ -21,6 +21,7 @@ LUAU_FASTFLAG(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAGVARIABLE(LuauUdataMetatablePinned)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcTableStepFix, false)
+LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
 
 /*
  * Luau uses an incremental non-generational non-moving mark&sweep garbage collector.
@@ -480,9 +481,9 @@ static void traverseclass(global_State* g, LuauClass* classobject)
 {
     markobject(g, classobject->name);
     markobject(g, classobject->memberstooffset);
-    for (int i = 0; i < classobject->numberofallmembers; i++)
+    for (uint32_t i = 0; i < classobject->numberofallmembers; i++)
         markobject(g, classobject->offsettomember[i]);
-    for (int i = 0; i < classobject->numberofallmembers - classobject->numberofinstancemembers; i++)
+    for (uint32_t i = 0; i < classobject->numberofallmembers - classobject->numberofinstancemembers; i++)
         markvalue(g, &classobject->staticmembers[i]);
     markobject(g, classobject->metatable);
     if (classobject->instancemetatable)
@@ -492,7 +493,7 @@ static void traverseclass(global_State* g, LuauClass* classobject)
 static void traverseobject(global_State* g, LuauObject* classinst)
 {
     markobject(g, classinst->lclass);
-    for (int i = 0; i < classinst->numberofmembers; i++)
+    for (uint32_t i = 0; i < classinst->numberofmembers; i++)
         markvalue(g, &classinst->members[i]);
 }
 
@@ -865,6 +866,19 @@ void luaC_freeall(lua_State* L)
     LUAU_ASSERT(L->global->strt.nuse == 0);
 }
 
+static void markudatadirectaccess(global_State* g)
+{
+    LUAU_ASSERT(DFFlag::LuauGcMarkUdataAccess);
+    for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
+    {
+        lua_UdataDirectAccessData& udatadirect = g->udatadirect[i];
+
+        markvalue(g, &udatadirect.indextm);
+        markvalue(g, &udatadirect.newindextm);
+        markvalue(g, &udatadirect.namecalltm);
+    }
+}
+
 static void markudatadirectfields(global_State* g)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
@@ -904,13 +918,20 @@ static void markroot(lua_State* L)
 
     if (FFlag::LuauUdataDirectAccess6)
     {
-        for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
+        if (DFFlag::LuauGcMarkUdataAccess)
         {
-            lua_UdataDirectAccessData& udatadirect = L->global->udatadirect[i];
+            markudatadirectaccess(g);
+        }
+        else
+        {
+            for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
+            {
+                lua_UdataDirectAccessData& udatadirect = L->global->udatadirect[i];
 
-            markvalue(g, &udatadirect.indextm);
-            markvalue(g, &udatadirect.newindextm);
-            markvalue(g, &udatadirect.namecalltm);
+                markvalue(g, &udatadirect.indextm);
+                markvalue(g, &udatadirect.newindextm);
+                markvalue(g, &udatadirect.namecalltm);
+            }
         }
     }
 
@@ -1010,6 +1031,9 @@ static size_t atomic(lua_State* L)
 
     if (FFlag::LuauUdataMetatablePinned)
         marktaggetmt(g); // mark tagged userdata metatables (again)
+
+    if (DFFlag::LuauGcMarkUdataAccess)
+        markudatadirectaccess(g); // mark tagged userdata direct access functions (again)
 
     if (FFlag::LuauDirectFieldGet)
         markudatadirectfields(g); // mark direct field dispatch tables (again)
