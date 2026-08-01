@@ -12,6 +12,8 @@
 #include <cstring>
 
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuauCostModel)
+LUAU_FASTFLAG(LuauCallFeedback)
 
 namespace Luau
 {
@@ -227,6 +229,29 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
 
         for (int i = 0; i < sizeupvalues; i++)
             fn.upvalueNames[i] = readString(strings, data, offset);
+    }
+
+    // ServerLua: yield points, recomputed by tagYieldPoints() on re-serialization.
+    uint32_t numyields = readVarInt(data, offset);
+    for (uint32_t j = 0; j < numyields; j++)
+        readVarInt(data, offset);
+
+    if (FFlag::LuauCallFeedback)
+    {
+        uint32_t feedbackvecsize = readVarInt(data, offset);
+        for (uint32_t j = 0; j < feedbackvecsize; j++)
+        {
+            uint8_t slottype = read<uint8_t>(data, offset);
+            LUAU_ASSERT(slottype == LFT_CALLTARGET);
+            // read slot PC. ignore it for now.
+            readVarInt(data, offset);
+        }
+    }
+
+    if (FFlag::LuauCostModel)
+    {
+        if ((fn.flags & LPF_INLINABLE) != 0)
+            readVarInt64(data, offset);
     }
 
     std::vector<uint32_t> insnsPC;

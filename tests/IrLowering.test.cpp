@@ -16,11 +16,9 @@
 #include <memory>
 #include <string_view>
 
-LUAU_FASTFLAG(LuauCompileTypeAliases)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauCodegenVmExitSync)
 LUAU_FASTFLAG(LuauCodegenLoadPropagateOrigin)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauCallFeedback)
@@ -1489,7 +1487,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecallChain2")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -1682,8 +1679,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed1")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2104,8 +2099,6 @@ bb_bytecode_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ExplicitUpvalueAndLocalTypes")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3269,7 +3262,6 @@ bb_linear_9:
 TEST_CASE_FIXTURE(LoweringFixture, "FastcallTypeInferThroughLocal")
 {
     ensureVectorSize3();
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -3321,7 +3313,6 @@ bb_bytecode_1:
 TEST_CASE_FIXTURE(LoweringFixture, "FastcallTypeInferThroughUpvalue")
 {
     ensureVectorSize3();
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
 
     // TODO: opportunity - bb_3 and bb_bytecode_1 have only one predecessor, so they should know that the upvalue u0 is already in r2
     CHECK_EQ(
@@ -3456,7 +3447,6 @@ bb_bytecode_4:
 TEST_CASE_FIXTURE(LoweringFixture, "ArgumentTypeRefinement")
 {
     ensureVectorSize3();
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -4326,8 +4316,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataMetamethod")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4649,8 +4637,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "Bit32ExtractDirect")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: number, b: number)
@@ -5212,8 +5198,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveBaseInverted")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(buf: buffer, a: number)
@@ -5255,8 +5239,6 @@ bb_bytecode_1:
 }
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveDynamicBase")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(index: buffer, data: buffer, a: number)
@@ -5305,7 +5287,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveLoopRangeBase")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
@@ -5443,8 +5424,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesNegativeBase")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(buf: buffer, a: number)
@@ -5527,8 +5506,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferSanityPositive")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(zero: number, b1: buffer, b2: buffer)
@@ -5586,8 +5563,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferSanityNegative")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(one: number, b1: buffer, b2: buffer)
@@ -5646,8 +5621,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "NumericConversionReplacementCheck")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(buf: buffer, a: number)
@@ -5687,8 +5660,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveMultBase")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(buf: buffer, a: number)
@@ -5731,8 +5702,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveMultBase2")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     // Different index multipliers are not merged
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
@@ -5776,8 +5745,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveMultBaseInt")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(buf: buffer, a: number)
@@ -5859,8 +5826,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferVmExitSync")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(buf: buffer, a: number, b: number, c: number)
@@ -5907,8 +5872,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferEffects")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -6393,8 +6356,6 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "FuzzTagsAcrossChains")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -7002,8 +6963,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore3")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local m = 1
@@ -7210,8 +7169,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferLoadStoreProp2")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function test(b: buffer)
@@ -7258,8 +7215,6 @@ bb_8:
 // When dealing with constants and buffer loads/store of the same size, all assertions disappear as conditions are true
 TEST_CASE_FIXTURE(LoweringFixture, "BufferLoadStoreProp3")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function storeloadpreserve(b: buffer)
@@ -7363,8 +7318,6 @@ bb_68:
 // When dealing with unknown numbers, stores can be propagated to loads with proper zero/signed extension
 TEST_CASE_FIXTURE(LoweringFixture, "BufferLoadStoreProp4")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function test(b: buffer, n: number, f: number)
@@ -7613,8 +7566,6 @@ bb_bytecode_3:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UintSourceSanity")
 {
-    ScopedFastFlag luauCodegenVmExitSync{FFlag::LuauCodegenVmExitSync, true};
-
     // TODO: opportunity - many conversions and stores remain because of VM exits
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -7992,8 +7943,6 @@ bb_bytecode_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "TypeAliasResolution")
 {
-    ScopedFastFlag luauCompileTypeAlias{FFlag::LuauCompileTypeAliases, true};
-
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
