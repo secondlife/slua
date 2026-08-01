@@ -63,6 +63,7 @@ THE SOFTWARE.
 #include "Luau/Bytecode.h"
 
 LUAU_FASTFLAG(LuauCIProto)
+LUAU_FASTFLAG(LuauManagedDebugNames)
 
 /*
 ** {===========================================================================
@@ -1896,6 +1897,16 @@ u_upval(Info *info) {                                                  /* ... */
 
 /** ======================================================================== */
 
+/* Which of the two fields holds the name depends on LuauManagedDebugNames,
+ * exactly as in getfuncname(). May return NULL. */
+static const char *
+cclosure_debugname(Closure *cl) {
+  if (FFlag::LuauManagedDebugNames) {
+    return cl->c.debugname ? getstr(cl->c.debugname) : NULL;
+  }
+  return cl->c.debugname_DEPRECATED;
+}
+
 /* For Lua closures we write the upvalue ID, which is usually the memory
  * address at which it is stored. This is used to tell which upvalues are
  * identical when unpersisting. */
@@ -1917,7 +1928,8 @@ p_closure(Info *info) {                              /* perms reftbl ... func */
      * persist_keyed().
      *
      * We cannot persist these. They have to be handled via the permtable. */
-    eris_error(info, ERIS_ERR_CFUNC, cl->c.f, cl->c.debugname);
+    const char *debugname = cclosure_debugname(cl);
+    eris_error(info, ERIS_ERR_CFUNC, cl->c.f, debugname ? debugname : "<unknown>");
     return;
   }
 
@@ -2058,7 +2070,7 @@ u_closure(Info *info) {                                                /* ... */
     for (nup = 1; nup <= nups; ++nup) {
       lua_pushnil(info->L);                        /* ... nil[1] ... nil[nup] */
     }
-    lua_pushcclosurek(info->L, cl->c.f, cl->c.debugname, nups, cl->c.cont);
+    lua_pushcclosurek(info->L, cl->c.f, cclosure_debugname(cl), nups, cl->c.cont);
                                                                    /* ... ccl */
     /* Create the entry in the reftable. */
     lua_pushvalue(info->L, -1);                   /* perms reftbl ... ccl ccl */

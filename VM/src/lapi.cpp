@@ -2,6 +2,7 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lapi.h"
 
+#include "lbytecode.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -26,6 +27,7 @@ LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAGVARIABLE(LuauAutoStack)
 LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
 LUAU_FASTFLAG(LuauGcTraceUdata)
+LUAU_FASTFLAGVARIABLE(LuauManagedDebugNames)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -848,7 +850,12 @@ void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, in
     Closure* cl = luaF_newCclosure(L, nup, getcurrenv(L));
     cl->c.f = fn;
     cl->c.cont = cont;
-    cl->c.debugname = debugname;
+
+    if (FFlag::LuauManagedDebugNames)
+        cl->c.debugname = debugname ? luaS_new(L, debugname) : nullptr;
+    else
+        cl->c.debugname_DEPRECATED = debugname;
+
     L->top -= nup;
     while (nup--)
         setobj2n(L, &cl->c.upvals[nup], L->top + nup);
@@ -1930,7 +1937,7 @@ void lua_getuserdatametatable(lua_State* L, int tag)
 const char* lua_getuserdataname(lua_State* L, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
-    
+
     const char* tname = "userdata";
 
     if (LuaTable* mt = L->global->udatamt[tag])
@@ -2014,6 +2021,15 @@ void lua_clonefunction(lua_State* L, int idx)
         setobj2n(L, &newcl->l.uprefs[i], &cl->l.uprefs[i]);
     setclvalue(L, L->top, newcl);
     api_incr_top(L);
+}
+
+int lua_usesexport(lua_State* L, int idx)
+{
+    StkId o = index2addr(L, idx);
+    if (!isLfunction(o))
+        return 0;
+    Closure* cl = clvalue(o);
+    return (cl->l.p->flags & LPF_USES_EXPORT) != 0;
 }
 
 void lua_cleartable(lua_State* L, int idx)
