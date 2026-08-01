@@ -4026,7 +4026,18 @@ reentry:
 
                         L->ci->savedpc = pc;
                         L->namecall = tsvalue(kv);
-                        L->top = (nparams == LUA_MULTRET) ? L->top : ra + 1 + nparams;
+
+                        StkId argtop = (nparams == LUA_MULTRET) ? L->top : ra + 1 + nparams;
+
+                        // ServerLua: Clear out all values _after_ the top of the args.
+                        // This makes sure that temporaries related to stack operations
+                        // no longer have references that are reachable by the garbage collector.
+                        for (StkId argafter = argtop; argafter < L->top; ++argafter)
+                        {
+                            setnilvalue(argafter);
+                        }
+
+                        L->top = argtop;
 
                         // note: namecalls do not increase C call number and allow yielding
 
@@ -4063,8 +4074,27 @@ reentry:
                         L->base = cip->base;
                         L->top = (nresults == LUA_MULTRET) ? res : cip->top;
 
+                        // ServerLua: Post-call hygiene above, so GC'd vals in consumed arg registers aren't reachable
+                        for (StkId scrub = res; scrub < cip->top; ++scrub)
+                            setnilvalue(scrub);
+
                         // stack may have been reallocated, so we need to refresh base ptr
                         base = L->base;
+
+                        // ServerLua: Now that the stack is all in order with the retvals, check if we need to
+                        // break for an interrupt. This helps us with C functions that will greatly overrun
+                        // the quanta that are followed by trivial code that incidentally don't allow yielding
+                        // (for example, __index metamethods.)
+                        // Note that the interrupt lands past the LOP_CALL/LOP_CALLFB this instruction
+                        // fused into itself, which is exactly where a plain LOP_CALL would leave it.
+                        if (L->global->calltailinterruptcheck)
+                        {
+                            // We're not doing this because the interrupt might fail, we're doing this because
+                            // we need to remember that we're _past_ the LOP_CALL if we interrupt.
+                            VM_PROTECT_PC();
+                            VM_INTERRUPT_WITHCODE(LUA_INTERRUPT_CALLTAIL);
+                            L->global->calltailinterruptcheck = 0;
+                        }
 
                         VM_NEXT();
                     }
@@ -4272,6 +4302,10 @@ int luau_precall(lua_State* L, StkId func, int nresults)
         L->base = cip->base;
         L->top = res;
 
+        // ServerLua: Post-call hygiene above, so GC'd vals in consumed arg registers aren't reachable
+        for (StkId scrub = res; scrub < cip->top; ++scrub)
+            setnilvalue(scrub);
+
         return PCRC;
     }
 }
@@ -4299,4 +4333,8 @@ void luau_poscall(lua_State* L, StkId first)
     L->ci = cip;
     L->base = cip->base;
     L->top = (ci->nresults == LUA_MULTRET) ? res : cip->top;
+
+    // ServerLua: Post-call hygiene above, so GC'd vals in consumed arg registers aren't reachable
+    for (StkId scrub = res; scrub < cip->top; ++scrub)
+        setnilvalue(scrub);
 }

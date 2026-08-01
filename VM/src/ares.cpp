@@ -310,7 +310,7 @@ static char const kHeader[] = { 'A', 'R', 'E', 'S' };
 static const lua_Number kHeaderNumber = (lua_Number)-1.234567890;
 
 /* Version number for the file format. */
-static const uint32_t kCurrentVersion = 2;
+static const uint32_t kCurrentVersion = 3;
 /* Old format magic bytes (0x08, 0x1B, 0xDE, 0x83 in little-endian). */
 static const uint32_t kOldMagicBytes = 0x83DE1B08;
 
@@ -2318,6 +2318,16 @@ p_thread(Info *info) {                                          /* ... thread */
 //    eris_restorestack(thread, thread->errfunc)), size_t);
   // no err func!
   WRITE_VALUE(0, ares_size_t);
+
+  // Write the pending namecall. May be a stale name, but that's harmless.
+  pushpath(info, ".namecall");
+  pushtstring(info->L, thread->namecall);                  /* ... thread str/nil */
+  persist(info);
+  lua_pop(info->L, 1);                                         /* ... thread */
+  poppath(info);
+  eris_assert(lua_gettop(info->L) == initial_stack_top);
+  eris_assert(lua_type(info->L, -1) == LUA_TTHREAD);
+
   /* These are only used while a thread is being executed or can be deduced:
   WRITE_VALUE(thread->nCcalls, uint16_t);
   WRITE_VALUE(thread->allowhook, uint8_t); */
@@ -2536,6 +2546,22 @@ u_thread(Info *info) {                                                 /* ... */
   if (info->u.upi.version >= 2)
       thread->activememcat = READ_VALUE(uint8_t);
   /* size_t _errfunc = */ READ_VALUE(ares_size_t);
+
+  // Read the pending namecall in version >= 3
+  if (info->u.upi.version >= 3) {
+    LOCK(thread);
+    pushpath(info, ".namecall");
+    UNLOCK(thread);
+    unpersist(info);                                       /* ... thread str/nil */
+    if (lua_type(info->L, -1) != LUA_TNIL)
+      eris_checktype(info, -1, LUA_TSTRING);
+    copytstring(info->L, &thread->namecall);
+    lua_pop(info->L, 1);                                       /* ... thread */
+    LOCK(thread);
+    poppath(info);
+    UNLOCK(thread);
+  }
+
   /* These are only used while a thread is being executed or can be deduced:
   thread->nCcalls = READ_VALUE(uint16_t);
   thread->allowhook = READ_VALUE(uint8_t); */
