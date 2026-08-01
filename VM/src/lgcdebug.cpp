@@ -230,6 +230,9 @@ static void validateobj(global_State* g, GCObject* o)
         validatestack(g, gco2th(o));
         break;
 
+    case LUA_TVECTOR:
+        break;
+
     case LUA_TBUFFER:
         break;
 
@@ -713,6 +716,9 @@ static void dumpobj(FILE* f, GCObject* o, bool include_size)
     case LUA_TTHREAD:
         return dumpthread(f, gco2th(o));
 
+    case LUA_TVECTOR:
+        return; // vector data is outlined, but is a constant cost of a vector
+
     case LUA_TBUFFER:
         return dumpbuffer(f, gco2buf(o));
 
@@ -1143,6 +1149,9 @@ static void enumobj(EnumContext* ctx, GCObject* o)
 
     case LUA_TTHREAD:
         return enumthread(ctx, gco2th(o));
+
+    case LUA_TVECTOR:
+        return enumnode(ctx, o, sizeof(LuauVector), NULL);
 
     case LUA_TBUFFER:
         return enumbuffer(ctx, gco2buf(o));

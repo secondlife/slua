@@ -22,7 +22,10 @@ const char* const luaT_typenames[] = {
     "userdata",
     "number",
     "integer",
+
+#if LUA_VECTOR_DOUBLE == 0
     "vector",
+#endif
 
     "string",
 
@@ -33,6 +36,9 @@ const char* const luaT_typenames[] = {
     "buffer",
     "class",
     "object",
+#if LUA_VECTOR_DOUBLE == 1
+    "vector",
+#endif
     // ServerLua: These are mainly for debugging, but surely they should be in here anyway?
     "deadkey",
     "proto",

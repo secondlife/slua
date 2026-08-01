@@ -1801,7 +1801,7 @@ int16_t LuauVisitor::addConstant(LSLConstant* cv) const
         case LST_VECTOR:
         {
             auto *vv = dynamic_cast<LSLVectorConstant *>(cv)->getValue();
-            constant_id = mBuilder->addConstantVector(vv->x, vv->y, vv->z, 0.0);
+            constant_id = mBuilder->addConstantVectorf(vv->x, vv->y, vv->z, 0.0);
             break;
         }
         default:

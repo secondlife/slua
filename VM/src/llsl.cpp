@@ -367,7 +367,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
 
                     if (num == 3)
                     {
-                        setvvalue(&new_tv, vec[0], vec[1], vec[2], 0.0f);
+                        setvvalue(L, &new_tv, vec[0], vec[1], vec[2], 0.0f);
                     }
                     else if(nil_as_default)
                     {
@@ -375,7 +375,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
                     }
                     else
                     {
-                        setvvalue(&new_tv, 0.0f, 0.0f, 0.0f, 0.0f);
+                        setvvalue(L, &new_tv, 0.0f, 0.0f, 0.0f, 0.0f);
                     }
                     break;
                 }
