@@ -192,6 +192,48 @@ static void traverseupval(ReachableContext* ctx, UpVal* uv)
         enqueueobj(ctx, gcvalue(uv->v));
 }
 
+static void traverseclass(ReachableContext* ctx, LuauClass* lco)
+{
+    // Traverse class name
+    enqueueobj(ctx, obj2gco(lco->name));
+
+    // Traverse the name -> offset map
+    enqueueobj(ctx, obj2gco(lco->memberstooffset));
+
+    // Traverse member names
+    for (uint32_t i = 0; i < lco->numberofallmembers; ++i)
+        enqueueobj(ctx, obj2gco(lco->offsettomember[i]));
+
+    // Traverse static members. Instance member offsets come first, so the
+    // static members are the tail of the offset space.
+    for (uint32_t i = 0; i < lco->numberofallmembers - lco->numberofinstancemembers; ++i)
+    {
+        if (iscollectable(&lco->staticmembers[i]))
+            enqueueobj(ctx, gcvalue(&lco->staticmembers[i]));
+    }
+
+    // Traverse the class object's own metatable, then the one handed to its instances
+    enqueueobj(ctx, obj2gco(lco->metatable));
+
+    if (lco->instancemetatable)
+        enqueueobj(ctx, obj2gco(lco->instancemetatable));
+}
+
+static void traverseobject(ReachableContext* ctx, LuauObject* inst)
+{
+    // Traverse the class this is an instance of
+    enqueueobj(ctx, obj2gco(inst->lclass));
+
+    // Traverse instance members. The instance owns this array and its count,
+    // so use those rather than reaching through the class - same as
+    // `traverseobject` in lgc.cpp and `luaR_freeobject`.
+    for (uint32_t i = 0; i < inst->numberofmembers; ++i)
+    {
+        if (iscollectable(&inst->members[i]))
+            enqueueobj(ctx, gcvalue(&inst->members[i]));
+    }
+}
+
 static void traverseobj(ReachableContext* ctx, GCObject* o)
 {
     switch (o->gch.tt)
@@ -227,6 +269,14 @@ static void traverseobj(ReachableContext* ctx, GCObject* o)
 
     case LUA_TUPVAL:
         traverseupval(ctx, gco2uv(o));
+        break;
+
+    case LUA_TCLASS:
+        traverseclass(ctx, gco2class(o));
+        break;
+
+    case LUA_TOBJECT:
+        traverseobject(ctx, gco2object(o));
         break;
 
     default:
@@ -272,6 +322,15 @@ static size_t calctruegcosize(GCObject *obj)
     }
     case LUA_TUPVAL:
         return sizeof(UpVal);
+    case LUA_TCLASS:
+    {
+        LuauClass* lco = gco2class(obj);
+        return sizeof(LuauClass) +
+               ((lco->numberofallmembers - lco->numberofinstancemembers) * sizeof(TValue)) +
+               (lco->numberofallmembers * sizeof(TString*));
+    }
+    case LUA_TOBJECT:
+        return sizeof(LuauObject) + (gco2object(obj)->numberofmembers * sizeof(TValue));
     default:
         LUAU_ASSERT(!"Unknown object type");
         return 0;
@@ -298,9 +357,13 @@ size_t luaC_calclogicalgcosize(GCObject *obj)
     constexpr size_t LUANODE_COST = TVALUE_COST * 2;
     constexpr size_t POINTER_COST = 4;
     constexpr size_t UPVAL_COST = 24;
+    constexpr size_t BASE_CLASS_COST = 40;
+    constexpr size_t BASE_OBJECT_COST = 20;
 
     // Make sure that these values are sensible. They should not be _more_ than the
     // actual size of these structs on i686.
+    CHECK_GCO_SIZE(BASE_OBJECT_COST, sizeof(LuauObject));
+    CHECK_GCO_SIZE(BASE_CLASS_COST, sizeof(LuauClass));
     CHECK_GCO_SIZE(UPVAL_COST, sizeof(UpVal));
     CHECK_GCO_SIZE(LUANODE_COST, sizeof(LuaNode));
     CHECK_GCO_SIZE(CALLINFO_COST, sizeof(CallInfo));
@@ -373,6 +436,15 @@ size_t luaC_calclogicalgcosize(GCObject *obj)
     }
     case LUA_TUPVAL:
         return UPVAL_COST;
+    case LUA_TCLASS:
+    {
+        LuauClass* lco = gco2class(obj);
+        return BASE_CLASS_COST +
+               ((lco->numberofallmembers - lco->numberofinstancemembers) * TVALUE_COST) +
+               (lco->numberofallmembers * POINTER_COST);
+    }
+    case LUA_TOBJECT:
+        return BASE_OBJECT_COST + (gco2object(obj)->numberofmembers * TVALUE_COST);
     default:
         LUAU_ASSERT(!"Unknown object type");
         return 0;

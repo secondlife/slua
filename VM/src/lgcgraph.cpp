@@ -149,6 +149,10 @@ static std::optional<std::string> gconame(GCObject *gco)
         }
         return std::nullopt;
     }
+    case LUA_TCLASS:
+        return std::string("class ") + getstr(gco2class(gco)->name);
+    case LUA_TOBJECT:
+        return std::string("object ") + getstr(gco2object(gco)->lclass->name);
     default:
         return std::nullopt;
     }
@@ -504,6 +508,44 @@ static void graph_traverse_upval(GraphContext *ctx, GCObject *from, UpVal *uv)
         graph_enqueue(ctx, from, gcvalue(uv->v), "value");
 }
 
+static void graph_traverse_class(GraphContext *ctx, GCObject *from, LuauClass *lco)
+{
+    graph_enqueue(ctx, from, obj2gco(lco->name), "classname");
+    graph_enqueue(ctx, from, obj2gco(lco->memberstooffset), "classoffsets");
+
+    for (uint32_t i = 0; i < lco->numberofallmembers; ++i)
+        graph_enqueue(ctx, from, obj2gco(lco->offsettomember[i]), "membername");
+
+    // Static members are the tail of the offset space, so recover each one's
+    // name by offsetting past the instance members.
+    for (uint32_t i = 0; i < lco->numberofallmembers - lco->numberofinstancemembers; ++i)
+    {
+        if (iscollectable(&lco->staticmembers[i]))
+        {
+            const char *name = getstr(lco->offsettomember[i + lco->numberofinstancemembers]);
+            graph_enqueue(ctx, from, gcvalue(&lco->staticmembers[i]), name);
+        }
+    }
+
+    graph_enqueue(ctx, from, obj2gco(lco->metatable), "metatable");
+
+    if (lco->instancemetatable)
+        graph_enqueue(ctx, from, obj2gco(lco->instancemetatable), "instancemetatable");
+}
+
+static void graph_traverse_object(GraphContext *ctx, GCObject *from, LuauObject *inst)
+{
+    graph_enqueue(ctx, from, obj2gco(inst->lclass), "class");
+
+    // The instance owns this array and its count, so use those rather than
+    // reaching through the class - same as `traverseobject` in lgc.cpp.
+    for (uint32_t i = 0; i < inst->numberofmembers; ++i)
+    {
+        if (iscollectable(&inst->members[i]))
+            graph_enqueue(ctx, from, gcvalue(&inst->members[i]), getstr(inst->lclass->offsettomember[i]));
+    }
+}
+
 static void graph_traverse(GraphContext *ctx, GCObject *o)
 {
     switch (o->gch.tt)
@@ -529,6 +571,12 @@ static void graph_traverse(GraphContext *ctx, GCObject *o)
         break;
     case LUA_TUPVAL:
         graph_traverse_upval(ctx, o, gco2uv(o));
+        break;
+    case LUA_TCLASS:
+        graph_traverse_class(ctx, o, gco2class(o));
+        break;
+    case LUA_TOBJECT:
+        graph_traverse_object(ctx, o, gco2object(o));
         break;
     default:
         LUAU_ASSERT(!"Unknown object type in graph_traverse");

@@ -1107,7 +1107,8 @@ static void enumclass(EnumContext* ctx, LuauClass* lco)
     char buf[LUA_IDSIZE];
     GCObject* obj = obj2gco(lco);
     snprintf(buf, sizeof(buf), "class object %s", getstr(lco->name));
-    enumnode(ctx, obj, sizeof(LuauClass), buf);
+    // ServerLua: charge the side arrays too, matching the accounting in `propagatemark`
+    enumnode(ctx, obj, luaC_calclogicalgcosize(obj), buf);
     enumedge(ctx, obj, obj2gco(lco->name), "classname");
     enumedge(ctx, obj, obj2gco(lco->memberstooffset), "classoffsets");
     uint32_t numberofstaticmembers = lco->numberofallmembers - lco->numberofinstancemembers;
@@ -1125,6 +1126,9 @@ static void enumclass(EnumContext* ctx, LuauClass* lco)
     for (uint32_t i = 0; i < lco->numberofallmembers; i++)
         enumedge(ctx, obj, obj2gco(lco->offsettomember[i]), "membername");
     enumedge(ctx, obj, obj2gco(lco->metatable), "metatable");
+    // ServerLua: `traverseclass` marks this, so the graph has to report it
+    if (lco->instancemetatable)
+        enumedge(ctx, obj, obj2gco(lco->instancemetatable), "instancemetatable");
 }
 
 static void enumobject(EnumContext* ctx, LuauObject* inst)
@@ -1132,8 +1136,13 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
     char buf[LUA_IDSIZE];
     GCObject* obj = obj2gco(inst);
     snprintf(buf, sizeof(buf), "object %s", getstr(inst->lclass->name));
-    enumnode(ctx, obj, sizeof(LuauObject), buf);
-    for (uint32_t i = 0; i < inst->lclass->numberofinstancemembers; i++)
+    enumnode(ctx, obj, luaC_calclogicalgcosize(obj), buf);
+    // ServerLua: `traverseobject` marks the class, so the graph has to report it
+    enumedge(ctx, obj, obj2gco(inst->lclass), "class");
+    // ServerLua: the instance owns this array and its count, so use those
+    // rather than reaching through the class - same as `traverseobject`,
+    // `validateobject` and `luaR_freeobject`.
+    for (uint32_t i = 0; i < inst->numberofmembers; i++)
     {
         // It's a bit strange that if we have a non-collectable static member,
         // we'll just not note it as an edge.

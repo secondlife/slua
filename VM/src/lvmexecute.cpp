@@ -4120,6 +4120,7 @@ reentry:
                 uint8_t super = LUAU_INSN_B(insn);
 
                 // Load unreified class object from constant table using offset in aux
+                // ServerLua: Note that this lazy initialization will be problematic for us in ares.
                 uint32_t aux = *pc++;
                 TValue* kv = VM_KV(aux);
 
