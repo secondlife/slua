@@ -99,10 +99,12 @@ bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
         // ServerLua: need to look up the "real" next index in `iterorder` if
         // this is an unpersisted table
         int node_idx = index - sizearray;
-        if (h->iterorder)
+        if (ghaveiterorder(h))
         {
             node_idx = h->iterorder[node_idx].node_idx;
-            if (node_idx == -1)
+            LUAU_ASSERT(node_idx <= sizenode && node_idx >= ITERORDER_EMPTY);
+            // nil equivalent, try the next entry
+            if (node_idx == ITERORDER_EMPTY)
             {
                 ++index;
                 continue;
@@ -137,10 +139,12 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
         // ServerLua: need to look up the "real" next index in `iterorder` if
         // this is an unpersisted table
         int node_idx = index - sizearray;
-        if (h->iterorder)
+        if (ghaveiterorder(h))
         {
             node_idx = h->iterorder[node_idx].node_idx;
-            if (node_idx == -1)
+            LUAU_ASSERT(node_idx <= sizenode && node_idx >= ITERORDER_EMPTY);
+            // nil equivalent, try the next entry
+            if (node_idx == ITERORDER_EMPTY)
             {
                 ++index;
                 continue;
