@@ -2506,10 +2506,6 @@ p_thread(Info *info) {                                          /* ... thread */
   WRITE_VALUE(ares_status_from_lua(info, thread->status), uint8_t);
   // Write thread's activememcat
   WRITE_VALUE(thread->activememcat, uint8_t);
-//  WRITE_VALUE(eris_savestackidx(thread,
-//    eris_restorestack(thread, thread->errfunc)), size_t);
-  // no err func!
-  WRITE_VALUE(0, ares_size_t);
 
   // Write the pending namecall. May be a stale name, but that's harmless.
   pushpath(info, ".namecall");
@@ -2603,6 +2599,11 @@ p_thread(Info *info) {                                          /* ... thread */
       // Unlike eris, we don't write a status here. I'm assuming that
       // only _threads_ have statuses now, which I guess makes sense.
       // When would you ever expect them to differ anyway?
+
+      // Protected call's error function: 1-based index relative to ci->base, 0 for none.
+      // C frames only, Lua frames use the same union member as savedpc.
+      WRITE_VALUE(ci->errfunc, int32_t);
+
       eris_ifassert(const int pre_closure_top = lua_gettop(info->L));
       // Copy the original closure from ci->func to info->L's stack for serialization.
       // The closure is already on the thread's stack at ci->func, and will be
@@ -2736,7 +2737,6 @@ u_thread(Info *info) {                                                 /* ... */
   thread->status = ares_status_to_lua(info, (AresStatus)READ_VALUE(uint8_t));
   // Read thread's activememcat
   thread->activememcat = READ_VALUE(uint8_t);
-  /* size_t _errfunc = */ READ_VALUE(ares_size_t);
 
   // Read the pending namecall
   LOCK(thread);
@@ -2787,9 +2787,9 @@ u_thread(Info *info) {                                                 /* ... */
     validate(thread->ci->base, thread->top);
     thread->ci->nresults = READ_VALUE(int32_t);
     thread->ci->flags = READ_VALUE(uint8_t);
-
-    // luau_execute dereferences ci->p, and reallocCI slots hold stale bytes.
+    // We'll set these later if relevant for the CI type.
     thread->ci->p = nullptr;
+    thread->ci->errfunc = 0;
 
     // We have to do this later to not run afoul of hardmem tests,
     // otherwise this would be at the top of the loop.
@@ -2810,6 +2810,7 @@ u_thread(Info *info) {                                                 /* ... */
     if (ci_kind != actual_kind) {
       eris_error(info, "malformed data: callinfo kind mismatch");
     }
+
     if (ci_kind == ERIS_CI_KIND_LUA) {
       Closure *lcl = eris_ci_func(thread->ci);
       int yield_point = READ_VALUE(int);
@@ -2845,6 +2846,17 @@ u_thread(Info *info) {                                                 /* ... */
         eris_error(info, ERIS_ERR_THREADPC);
       }
     } else if (ci_kind == ERIS_CI_KIND_C) {
+      // resume_handle() resolves this as ci->base + (errfunc - 1).
+      int errfunc = READ_VALUE(int32_t);
+      if (errfunc != 0) {
+        StkId ef = thread->ci->base + (errfunc - 1);
+        validate(ef, thread->top);
+        if (!ttisfunction(ef)) {
+          eris_error(info, ERIS_ERR_THREADERRF);
+        }
+      }
+      thread->ci->errfunc = errfunc;
+
       // This function _should_ already be on the stack, let's make sure.
       LOCK(thread);
       unpersist(info);                                  /* ... thread func? */
