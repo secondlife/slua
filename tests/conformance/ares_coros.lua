@@ -1,5 +1,5 @@
-local perms = {[coroutine.yield]="yield", [coroutine.wrap]="wrap", [coroutine.resume]="resume", [assert]="assert", [table.create]="table.create", [unpack]="unpack"}
-local uperms = {yield=coroutine.yield, wrap=coroutine.wrap, resume=coroutine.resume, assert=assert, ["table.create"]=table.create, unpack=unpack}
+local perms = {[coroutine.yield]="yield", [coroutine.wrap]="wrap", [coroutine.resume]="resume", [assert]="assert", [table.create]="table.create", [unpack]="unpack", [error]="error"}
+local uperms = {yield=coroutine.yield, wrap=coroutine.wrap, resume=coroutine.resume, assert=assert, ["table.create"]=table.create, unpack=unpack, error=error}
 
 
 -- so we can run these tests with eris too
@@ -60,6 +60,15 @@ assert(coroutine.status(new_setter) == 'dead')
 local unpersisted_dead = ares.unpersist(uperms, ares.persist(perms, new_yielder))
 assert(coroutine.status(unpersisted_dead) == 'dead')
 assert(coroutine.resume(unpersisted_dead) == false)
+
+-- a coroutine that died to an error keeps a status other than ok or suspended
+local errored = coroutine.create(function() error("boom") end)
+assert(coroutine.resume(errored) == false)
+assert(coroutine.status(errored) == 'dead')
+
+local unpersisted_errored = ares.unpersist(uperms, ares.persist(perms, errored))
+assert(coroutine.status(unpersisted_errored) == 'dead')
+assert(coroutine.resume(unpersisted_errored) == false)
 
 -- this coroutine should be able to pick up where it left off
 assert(coroutine.status(unpersisted_mid_execution) == 'suspended')

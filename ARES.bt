@@ -33,63 +33,47 @@ const uchar UTAG_LLTIMERS = 30;
 const uchar UTAG_STRBUF = 31;
 const uchar UTAG_OPAQUE_BUFFER = 32;
 
-#define LUA_TNONE		(-1)
-
-#define LUA_TNIL		0
-#define LUA_TBOOLEAN		1
-#define LUA_TLIGHTUSERDATA	2
-#define LUA_TNUMBER		3
-#define LUA_TVECTOR		4
-#define LUA_TSTRING		5
-#define LUA_TTABLE		6
-#define LUA_TFUNCTION		7
-#define LUA_TUSERDATA		8
-#define LUA_TTHREAD		9
-#define LUA_TBUFFER		10
-#define LUA_NUMTAGS		11
-
-#define LUA_TPROTO	LUA_NUMTAGS
-#define LUA_TUPVAL	(LUA_NUMTAGS+1)
-#define LUA_TDEADKEY	(LUA_NUMTAGS+2)
-
-/*
-** number of all possible tags (including LUA_TNONE but excluding DEADKEY)
-*/
-#define LUA_TOTALTAGS	(LUA_TUPVAL+1)
-
-#define ERIS_PERMANENT (LUA_TOTALTAGS + 1)
-#define ERIS_REFERENCE (ERIS_PERMANENT + 1)
-
+/* Mirrors enum AresType in VM/src/ares.cpp. These are wire values and are
+ * assigned explicitly there - do not derive them from Luau's lua_Type. */
 typedef enum <uint8_t> {
-    ET_NIL = LUA_TNIL,
-    ET_BOOLEAN = LUA_TBOOLEAN,
-    ET_LIGHTUSERDATA = LUA_TLIGHTUSERDATA,
-    ET_NUMBER = LUA_TNUMBER,
-    ET_VECTOR = LUA_TVECTOR,
-    ET_STRING = LUA_TSTRING,
-    ET_TABLE = LUA_TTABLE,
-    ET_FUNCTION = LUA_TFUNCTION,
-    ET_USERDATA = LUA_TUSERDATA,
-    ET_THREAD = LUA_TTHREAD,
-    ET_BUFFER = LUA_TBUFFER,
-    ET_PROTO = LUA_TPROTO,
-    ET_UPVAL = LUA_TUPVAL,
-    ET_TDEADKEY = LUA_TDEADKEY,
-    ET_PERMANENT = ERIS_PERMANENT,
-    ET_REFERENCE = ERIS_REFERENCE,
-} ErisType;
+    ARES_T_NIL = 0,
+    ARES_T_BOOLEAN = 1,
+    ARES_T_LIGHTUSERDATA = 2,
+    ARES_T_NUMBER = 3,
+    ARES_T_INTEGER = 4,
+    ARES_T_VECTOR = 5,
 
-// thread status; 0 is OK
+    ARES_T_STRING = 16,
+    ARES_T_TABLE = 17,
+    ARES_T_FUNCTION = 18,
+    ARES_T_USERDATA = 19,
+    ARES_T_THREAD = 20,
+    ARES_T_BUFFER = 21,
+    ARES_T_CLASS = 22,
+    ARES_T_OBJECT = 23,
+    ARES_T_VECTORD = 24,
+
+    ARES_T_DEADKEY = 40,
+    ARES_T_PROTO = 41,
+    ARES_T_UPVAL = 42,
+
+    ARES_T_PERMANENT = 64,
+    ARES_T_REFERENCE = 65,
+} AresType;
+
+/* Mirrors enum AresStatus in VM/src/ares.cpp. Like the type tags these are
+ * wire values, not Luau's lua_Status. */
 typedef enum <uint8_t>
 {
-    LUA_OK = 0,
-    LUA_YIELD,
-    LUA_ERRRUN,
-    LUA_ERRSYNTAX,
-    LUA_ERRMEM,
-    LUA_ERRERR,
-    LUA_BREAK, // yielded for a debug breakpoint
-} lua_Status;
+    ARES_S_OK = 0,
+    ARES_S_YIELD = 1,
+    ARES_S_ERRRUN = 2,
+    ARES_S_ERRSYNTAX = 3,
+    ARES_S_ERRMEM = 4,
+    ARES_S_ERRERR = 5,
+    ARES_S_BREAK = 6, // yielded for a debug breakpoint
+    ARES_S_ERRKILL = 7, // uncatchable script termination error
+} AresStatus;
 
 typedef enum <uint8_t> eris_CIKind {
     ERIS_CI_KIND_NONE = 0,
@@ -103,15 +87,6 @@ typedef enum <uint8_t> eris_CIKind {
 #define LUA_CALLINFO_RETURN (1 << 0) // should the interpreter return after returning from this callinfo? first frame must have this set
 #define LUA_CALLINFO_HANDLE (1 << 1) // should the error thrown during execution get handled by continuation from this callinfo? func must be C
 #define LUA_CALLINFO_NATIVE (1 << 2) // should this function be executed using execution callback for native code
-
-/* thread status */
-#define LUA_OK		0
-#define LUA_YIELD	1
-#define LUA_ERRRUN	2
-#define LUA_ERRSYNTAX	3
-#define LUA_ERRMEM	4
-#define LUA_ERRGCMM	5
-#define LUA_ERRERR	6
 
 struct Header;
 struct Object;
@@ -529,6 +504,9 @@ typedef struct {
     char sig[4] <bgcolor=0x33aaff>;   /* Header signature for rudimentary validation */
     Assert(sig == "ARES");
     uint32_t version;
+    /* Version 4 moved the type tags off of lua_Type and onto AresType, so
+     * older blobs cannot be parsed with this template. */
+    Assert(version >= 4);
     uint8_t sizeof_number;  /* sizeof(lua_Number) to check type compatibility */
     lua_Number test;    /* -1.234567890 to check representation compatibility */
     uint8_t sizeof_int; /* sizeof(int) in persisted data */
@@ -542,11 +520,17 @@ typedef struct {
 // Define this up here so structs can reference the version
 Header header;      /* The header used for basic validation. */
 
+// GC object header with memcat.
+// Declarations leak into the calling struct.
+void ParseGCHeader() {
+    uint8_t memcat <bgcolor=cLtYellow>;
+}
+
 string ReadObject(Object &o) {
     // ref should be non-zero if present
     if (o.ourRef) {
-        // ET_REFERENCE refNums are references _to_ something
-        if (o.type == ET_REFERENCE) {
+        // ARES_T_REFERENCE refNums are references _to_ something
+        if (o.type == ARES_T_REFERENCE) {
             return Str("%s -> #%d @%d", EnumToString(o.type), o.ourRef, refPositions[o.ourRef]);
         }
         return Str("%s #%d", EnumToString(o.type), o.ourRef);
@@ -558,58 +542,66 @@ typedef struct {
     // What the logical reference number of this object will be, note that this is
     // implicit and based on parse order of `Object`s!
     local int ourRef = 0;
-    ErisType type <bgcolor=cLtBlue>;
+    AresType type <bgcolor=cLtBlue>;
     switch(type) {
         // some kinds of things don't need reference to them stored, though
         // storing references would be a waste because they're so small.
-        case ET_NIL:
-        case ET_BOOLEAN:
-        case ET_LIGHTUSERDATA:
-        case ET_NUMBER:
-        case ET_VECTOR:
+        case ARES_T_NIL:
+        case ARES_T_BOOLEAN:
+        case ARES_T_LIGHTUSERDATA:
+        case ARES_T_NUMBER:
+        case ARES_T_INTEGER:
+        case ARES_T_VECTOR:
         // storing a reference to a reference? no.
-        case ET_REFERENCE:
+        case ARES_T_REFERENCE:
         // permanent never writes to the ref table, what would be the point?
-        case ET_PERMANENT:
+        case ARES_T_PERMANENT:
             break;
         default: {
             ourRef = ++refNum;
             // track where we saw this so we can show the address of what's
-            // being referenced in ET_REFERENCEs
+            // being referenced in ARES_T_REFERENCEs
             refPositions[refNum] = startof(this);
         }
     }
 
     switch(type) {
-        case ET_NIL:
+        case ARES_T_NIL:
             break;
-        case ET_BOOLEAN:
+        case ARES_T_BOOLEAN:
             int32_t val; break;
-        case ET_LIGHTUSERDATA:
+        case ARES_T_LIGHTUSERDATA:
             LightUserdata val; break;
-        case ET_NUMBER:
+        case ARES_T_NUMBER:
             Number val; break;
-        case ET_VECTOR:
+        case ARES_T_INTEGER:
+            int64_t val; break;
+        case ARES_T_VECTOR:
             float val[3]; break;
-        case ET_STRING:
+        /* Reserved but never emitted; p_vector refuses to write f64 vectors
+         * until they go through the GC object path. */
+        case ARES_T_VECTORD:
+            ParseGCHeader();
+            double val[3]; break;
+        case ARES_T_STRING:
             String val; break;
-        case ET_TABLE:
+        case ARES_T_TABLE:
             Table val; break;
-        case ET_FUNCTION:
+        case ARES_T_FUNCTION:
             Closure val; break;
-        case ET_USERDATA:
+        case ARES_T_USERDATA:
             Userdata val; break;
-        case ET_THREAD:
+        case ARES_T_THREAD:
             Thread val; break;
-        case ET_BUFFER:
+        case ARES_T_BUFFER:
             Buffer val; break;
-        case ET_PROTO:
+        case ARES_T_PROTO:
             Proto val; break;
-        case ET_UPVAL:
+        case ARES_T_UPVAL:
             UpVal val; break;
-        case ET_PERMANENT:
+        case ARES_T_PERMANENT:
             PermKey val; break;
-        case ET_REFERENCE:
+        case ARES_T_REFERENCE:
             /* If the object is not primitive (see list above) we remember it and
              * increment the reference counter, and point any future occurrences of
              * it to this one via a reference (see above, Reference r). */
@@ -623,14 +615,6 @@ typedef struct {
             Assert(0);
     }
 } Object<optimize=false, bgcolor=cLtPurple, read=ReadObject>;
-
-// GC object header with memcat (version >= 2).
-// Declarations leak into the calling struct.
-void ParseGCHeader() {
-    if (header.version >= 2) {
-        uint8_t memcat <bgcolor=cLtYellow>;
-    }
-}
 
 typedef struct {
     ParseGCHeader();
@@ -803,12 +787,10 @@ struct Thread {
     size_t top;         /* top = L->top - L->stack; */
     Object stack[top];    /* All stack values, bottom up */
 
-    lua_Status status;     /* current thread status (ok, yield) */
-    // version >= 2 writes activememcat
-    if (header.version >= 2) {
-        uint8_t activememcat <bgcolor=cLtYellow>;
-    }
+    AresStatus status;     /* current thread status (ok, yield) */
+    uint8_t activememcat <bgcolor=cLtYellow>;
     size_t errfunc;     /* NOT USED current error handling function (stack index) */
+    Object namecall;    /* The pending namecall string, nil for none */
 
     int32_t num_cis;        /* number of callinfo frames */
     /* The CallInfo stack, starting with base_ci */
@@ -835,7 +817,7 @@ struct Thread {
         }
     } ci[num_cis] <bgcolor=cLtAqua, optimize=false>;
 
-    if (status == LUA_YIELD) {
+    if (status == ARES_S_YIELD) {
         // size_t extra;   /* value of thread->ci->extra, which is the original
         //                 * value of thread->ci->func */
     }
@@ -852,7 +834,7 @@ struct Thread {
 };
 
 struct PermKey {
-    ErisType type;   /* The actual LUA_TXXX of the original value. */
+    AresType type;   /* The actual tag of the original value. */
     Object key;     /* The value to use as a key when unpersisting. */
     /* Note that we store the type of the original value (replaced by the
      * permanent table value used as a key when unpersisting) to ensure the
