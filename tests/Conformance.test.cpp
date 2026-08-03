@@ -1663,6 +1663,8 @@ static thread_local std::string _serializedEris = "";
 
 TEST_CASE("Eris Conformance Tests")
 {
+    ScopedFastFlag luauXpcallFixMessageYieldPath{FFlag::LuauXpcallFixMessageYieldPath, true};
+
     std::string serializedOutput;
     runConformance(
         "eris_persist.lua",

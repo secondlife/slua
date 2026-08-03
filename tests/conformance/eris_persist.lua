@@ -289,6 +289,47 @@ coroutine.resume(xprotthr)
 rootobj.testxprotthr = xprotthr
 
 -------------------------------------------------------------------------------
+-- Yield across xpcall, then exhaust the C stack once resumed. The handler runs
+-- from resume_handle() here, and must see the same spent C call budget it would
+-- have on the non-yielded path. Resuming a fresh coroutine probes that budget.
+
+if not limitedstack then
+  local function csonoop() end
+
+  local csotbl = setmetatable({}, {
+    __index = function(self, i)
+      return self[i]
+    end,
+  })
+
+  local function csoprotf()
+    coroutine.yield()
+    return csotbl[1]
+  end
+
+  local function csohandler(msg)
+    local resumed = coroutine.resume(coroutine.create(csonoop))
+    if not string.find(msg, "C stack overflow") then
+      return "wrong error"
+    elseif resumed then
+      return "budget reset"
+    else
+      return "budget spent"
+    end
+  end
+
+  local function csothreadfunc()
+    local res, err = xpcall(csoprotf, csohandler)
+    return err
+  end
+
+  local csothr = coroutine.create(csothreadfunc)
+  coroutine.resume(csothr)
+
+  rootobj.testcsothr = csothr
+end
+
+-------------------------------------------------------------------------------
 -- Yield out of metafunction.
 -- Luau doesn't support this!
 -- Instead we use this to test deserializing dead threads!
@@ -505,7 +546,9 @@ perms = {
   [permtable] = 2,
   [pcall] = 3,
   [xpcall] = 4,
-  [coroutine.resume] = 5
+  [coroutine.resume] = 5,
+  [coroutine.create] = 6,
+  [string.find] = 7
 }
 
 -- yield this to the runner

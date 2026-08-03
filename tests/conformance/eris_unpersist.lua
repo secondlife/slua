@@ -64,6 +64,12 @@ function test(rootobj)
   dotest("Yielded pcall          ", pok, pval, "test")
   local xok, xval = coroutine.resume(rootobj.testxprotthr)
   dotest("Yielded xpcall         ", xok, xval, "handler:test")
+  -- "budget reset" means the resume path handed the handler a fresh C call
+  -- budget, which is what LuauXpcallFixMessageYieldPath fixes.
+  if not limitedstack then
+    local cok, cval = coroutine.resume(rootobj.testcsothr)
+    dotest("Yielded xpcall C budget", cok, cval, "budget spent")
+  end
   -- Luau doesn't support yielding in metafunctions!
   -- local yok, yval = coroutine.resume(rootobj.testymtthr)
   -- dotest("Yielded metafunc       ", yok, yval, true)
@@ -91,6 +97,8 @@ uperms = {
   [3] = pcall,
   [4] = xpcall,
   [5] = coroutine.resume,
+  [6] = coroutine.create,
+  [7] = string.find,
 }
 
 -- `buf` must be set by the runner
