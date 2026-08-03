@@ -716,10 +716,25 @@ Vertex* lua_vertex_get(lua_State* L, int idx)
     luaL_typeerror(L, idx, "vertex");
 }
 
+// ServerLua: Strictly to help us retain a stable pointer to stack-allocated vectors.
+// TODO: Maybe this should be a helper? I can imagine this getting used elsewhere.
+static std::array<LUA_VECTOR_TYPE, LUA_VECTOR_SIZE> vector_as_array(lua_State* L, const int narg)
+{
+    std::array<LUA_VECTOR_TYPE, LUA_VECTOR_SIZE> array_val{0.0f};
+    const LUA_VECTOR_TYPE* vec_val = luaL_checkvector(L, narg);
+    for (int i = 0; i < LUA_VECTOR_SIZE; i++)
+    {
+        array_val[i] = vec_val[i];
+    }
+    return array_val;
+}
+
 static int lua_vertex(lua_State* L)
 {
-    const LUA_VECTOR_TYPE* pos = luaL_checkvector(L, 1);
-    const LUA_VECTOR_TYPE* normal = luaL_checkvector(L, 2);
+    // ServerLua: This is unsafe under hardstacktests if using non-GC'd vector
+    //  since it lives on the (potentially re-allocated) stack.
+    const auto pos = vector_as_array(L, 1);
+    const auto normal = vector_as_array(L, 2);
     Vec2* uv = lua_vec2_get(L, 3);
 
     Vertex* data = lua_vertex_push(L);
