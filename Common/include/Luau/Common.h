@@ -193,6 +193,41 @@ struct FValueVersionSetter
     static_assert((version) != 0, "LUAU_FLAGVERSION version cannot be 0"); \
     static Luau::FValueVersionSetter flag##_VersionSetter(#flag, version);
 
+// ServerLua: upstream FFlags SL's semantics depend on. Set by name so this needs
+// no link dependency on the modules that define them.
+#define SLUA_REQUIRED_FFLAGS(X) \
+    X("LuauIntegerType2") \
+    X("LuauIntegerLibrary") \
+    X("LuauYieldIter2") \
+    X("LuauXpcallFixMessageYieldPath")
+
+namespace Luau
+{
+
+inline FValue<bool>* findFastFlag(const char* name)
+{
+    for (FValue<bool>* flag = FValue<bool>::list; flag; flag = flag->next)
+        if (strcmp(flag->name, name) == 0)
+            return flag;
+
+    return nullptr;
+}
+
+// Call once at startup. Asserts if a sync retired a flag we still list.
+inline void setRequiredSLuaFlags()
+{
+#define SLUA_SET_FFLAG(name) \
+    if (FValue<bool>* flag = findFastFlag(name)) \
+        flag->value = true; \
+    else \
+        LUAU_ASSERT(!"SLUA_REQUIRED_FFLAGS names a flag that no longer exists");
+
+    SLUA_REQUIRED_FFLAGS(SLUA_SET_FFLAG)
+#undef SLUA_SET_FFLAG
+}
+
+} // namespace Luau
+
 #if defined(__GNUC__)
 #define LUAU_PRINTF_ATTR(fmt, arg) __attribute__((format(printf, fmt, arg)))
 #else

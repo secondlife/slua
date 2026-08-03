@@ -50,3 +50,20 @@ public:
 
 using ScopedFastFlag = ScopedFValue<bool>;
 using ScopedFastInt = ScopedFValue<int>;
+
+// Applies SLUA_REQUIRED_FFLAGS for the enclosing scope, so SL cases don't leak
+// the set into unrelated tests in the same binary.
+struct [[nodiscard]] ScopedSLuaFlags
+{
+    std::vector<ScopedFastFlag> flags;
+
+    ScopedSLuaFlags()
+    {
+#define SLUA_SCOPE_FFLAG(name) \
+    if (Luau::FValue<bool>* flag = Luau::findFastFlag(name)) \
+        flags.emplace_back(*flag, true);
+
+        SLUA_REQUIRED_FFLAGS(SLUA_SCOPE_FFLAG)
+#undef SLUA_SCOPE_FFLAG
+    }
+};

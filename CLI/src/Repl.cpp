@@ -991,6 +991,8 @@ int replMain(int argc, char** argv)
     program_argc = argc - program_args;
     program_argv = &argv[program_args];
 
+    if (lsl || sl)
+        Luau::setRequiredSLuaFlags();
 
 #if !defined(LUAU_ENABLE_TIME_TRACE)
     if (FFlag::DebugLuauTimeTracing)
