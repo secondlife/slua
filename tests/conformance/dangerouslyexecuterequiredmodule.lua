@@ -93,7 +93,9 @@ end)
 assert(call_result == 42, "Should support function calls within sandboxed code")
 
 -- Upvalues should be rejected
-local outer = {value = 100}
+-- value must come from a runtime call so constant folding
+-- (LuauCompilePropagateTableProps) can't eliminate the capture
+local outer = {value = math.random(100)}
 local upvalue_success, upvalue_err = pcall(function()
     dangerouslyexecuterequiredmodule(function()
         return outer.value + 23

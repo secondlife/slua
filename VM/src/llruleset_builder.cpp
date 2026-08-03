@@ -72,7 +72,7 @@ namespace
                 const TValue* elem = luaH_getnum(t, j);
                 if (ttisnil(elem))
                     continue;
-                luaA_pushobject(L, elem);
+                luaA_pushvalue(L, elem);
                 if (slua_ruleset_to_string(L))
                 {
                     size_t len = 0;
@@ -129,7 +129,7 @@ namespace
             const TValue* val = luaH_getstr(t, luaS_new(L, key.c_str()));
             if (ttisnil(val))
                 continue;
-            luaA_pushobject(L, val);
+            luaA_pushvalue(L, val);
             if (!slua_ruleset_to_string(L))
                 continue;
             lua_pushinteger(L, desc.tag);
@@ -155,7 +155,7 @@ namespace
             const TValue* elem = luaH_getnum(t, j);
             if (ttisnil(elem))
                 continue;
-            luaA_pushobject(L, elem);
+            luaA_pushvalue(L, elem);
             if (slua_ruleset_to_string(L))
             {
                 lua_pushinteger(L, desc.tag);
@@ -257,7 +257,7 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
         {
             if (!has_raw || !ttistable(val))
                 continue;
-            luaA_pushobject(L, val);
+            luaA_pushvalue(L, val);
             idx = slua_ruleset_serialize_string_csv(L, list, idx, desc);
             continue;
         }
@@ -268,7 +268,7 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
         {
             if (!has_raw || !ttistable(val))
                 continue;
-            luaA_pushobject(L, val);
+            luaA_pushvalue(L, val);
             idx = slua_ruleset_serialize_string_map(L, list, idx, desc);
             continue;
         }
@@ -279,7 +279,7 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
         {
             if (!has_raw || !ttistable(val))
                 continue;
-            luaA_pushobject(L, val);
+            luaA_pushvalue(L, val);
             idx = slua_ruleset_serialize_string_multi(L, list, idx, desc);
             continue;
         }
@@ -294,7 +294,7 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
         if (desc.semantic == 'b' && ttisboolean(val))
             lua_pushinteger(L, bvalue(val));
         else
-            luaA_pushobject(L, val);
+            luaA_pushvalue(L, val);
         lua_rawseti(L, list, ++idx);
     }
 }

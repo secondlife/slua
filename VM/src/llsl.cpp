@@ -204,11 +204,9 @@ uint8_t lua_lsl_type(const TValue *val)
     case LUA_TNUMBER:
         return (uint8_t)LSLIType::LST_FLOATINGPOINT;
     case LUA_TLIGHTUSERDATA:
-    {
-        if (val->extra[0] == LU_TAG_LSL_INTEGER)
-            return (uint8_t)LSLIType::LST_INTEGER;
         return (uint8_t)LSLIType::LST_ERROR;
-    }
+    case LUA_TINTEGER:
+        return (uint8_t)LSLIType::LST_INTEGER;
     case LUA_TSTRING:
         return (uint8_t)LSLIType::LST_STRING;
     case LUA_TVECTOR:
@@ -369,7 +367,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
 
                     if (num == 3)
                     {
-                        setvvalue(&new_tv, vec[0], vec[1], vec[2], 0.0f);
+                        setvvalue(L, &new_tv, vec[0], vec[1], vec[2], 0.0f);
                     }
                     else if(nil_as_default)
                     {
@@ -377,7 +375,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
                     }
                     else
                     {
-                        setvvalue(&new_tv, 0.0f, 0.0f, 0.0f, 0.0f);
+                        setvvalue(L, &new_tv, 0.0f, 0.0f, 0.0f, 0.0f);
                     }
                     break;
                 }
@@ -517,12 +515,12 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
                 if (ttisstring(&table_val->array[idx]))
                 {
                     // Don't need to cast strings, just push.
-                    luaA_pushobject(L, &table_val->array[idx]);
+                    luaA_pushvalue(L, &table_val->array[idx]);
                 }
                 else
                 {
                     lua_pushcfunction(L, &lsl_cast_list_elem, "cast_list");
-                    luaA_pushobject(L, &table_val->array[idx]);
+                    luaA_pushvalue(L, &table_val->array[idx]);
                     luaSL_pushinteger(L, LSLIType::LST_STRING);
                     lua_call(L, 2, 1);
                 }
@@ -541,7 +539,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
             return 0;
         }
     }
-    luaA_pushobject(L, &new_tv);
+    luaA_pushvalue(L, &new_tv);
     return 1;
 }
 
@@ -1109,7 +1107,7 @@ static int lsl_tostring_uuid(lua_State *L)
     {
         TValue tv;
         setsvalue(L, &tv, a->str);
-        luaA_pushobject(L, &tv);
+        luaA_pushvalue(L, &tv);
     }
     return 1;
 }
@@ -1137,7 +1135,7 @@ static int lsl_index_uuid(lua_State *L)
         {
             setnilvalue(&tv);
         }
-        luaA_pushobject(L, &tv);
+        luaA_pushvalue(L, &tv);
         return 1;
     }
     else
@@ -1361,6 +1359,12 @@ YieldableStatus luaSL_may_interrupt(lua_State *L)
             --real_pc;
             out_of_bounds = (real_pc >= upper_pc_bound || real_pc < proto->code);
             if (!out_of_bounds && LUAU_INSN_OP(*real_pc) == LOP_CALL)
+                return YieldableStatus::OK;
+            // LOP_CALLFB carries an extra feedback word between the op and the
+            // return pc, so the op is one further back still.
+            --real_pc;
+            out_of_bounds = (real_pc >= upper_pc_bound || real_pc < proto->code);
+            if (!out_of_bounds && LUAU_INSN_OP(*real_pc) == LOP_CALLFB)
                 return YieldableStatus::OK;
         }
         LUAU_ASSERT(!"Can't preempt instruction");
@@ -1873,9 +1877,6 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
         luaSL_setup_llprim_module(L);
         LUAU_ASSERT(lua_gettop(L) == top);
     }
-
-    // return "integer" when we call type() on an int
-    lua_setlightuserdataname(L, LU_TAG_LSL_INTEGER, "integer");
 
     LUAU_ASSERT(lua_gettop(L) == top);
     return 1;

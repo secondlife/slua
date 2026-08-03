@@ -35,6 +35,7 @@ extern int optimizationLevel;
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_DYNAMIC_FASTFLAG(LuauCodegenTrackingMultilocationFix)
 LUAU_FASTFLAG(LuauCodegenDetailedCompilationResult)
+LUAU_FASTFLAG(LuauIntegerType2)
 
 
 static int yielding_print(lua_State* L)
@@ -334,7 +335,7 @@ TEST_CASE("Boolean And Or")
 {
     auto state = runConformance("boolean_and_or.lsl", [](lua_State *L)
         {
-            CHECK_EQ(lua_type(L, 1), LUA_TLIGHTUSERDATA);
+            CHECK_EQ(lua_type(L, 1), LUA_TINTEGER);
             int32_t actual = luaL_checkinteger(L, 1);
             int32_t expected = 0;
             switch(YIELD_NUM(L))
@@ -417,7 +418,7 @@ TEST_CASE("Comparison Operators")
 {
     auto state = runConformance("comparison.lsl", [](lua_State *L)
         {
-            CHECK_EQ(lua_type(L, 1), LUA_TLIGHTUSERDATA);
+            CHECK_EQ(lua_type(L, 1), LUA_TINTEGER);
             int32_t actual = luaL_checkinteger(L, 1);
             int32_t expected = 0;
             switch(YIELD_NUM(L))
@@ -467,7 +468,7 @@ TEST_CASE("For statement")
 {
     auto state = runConformance("for.lsl", [](lua_State *L)
         {
-            CHECK_EQ(lua_type(L, 1), LUA_TLIGHTUSERDATA);
+            CHECK_EQ(lua_type(L, 1), LUA_TINTEGER);
             int32_t actual = luaL_checkinteger(L, 1);
             int32_t expected = 0;
             switch(YIELD_NUM(L))

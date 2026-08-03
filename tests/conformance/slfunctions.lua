@@ -1,19 +1,18 @@
-local foo = integer(5)
-local bar = integer(5)
-local baz = integer(6)
+-- In Lua mode `integer` is the standard integer library, the cast function
+-- only exists in LSL mode.
+local foo = integer.create(5)
+local bar = integer.create(5)
+local baz = integer.create(6)
 local vec = vector(1, 2, 3)
 
 assert(foo == bar)
 assert(foo ~= baz)
-assert(foo + integer(1) == baz)
+assert(integer.add(foo, integer.create(1)) == baz)
 assert(foo ~= 5)
 assert(tonumber(foo) == 5)
 assert(tostring(foo) == "5")
-assert(integer("5") == foo)
-assert(typeof(integer("5")) == "integer")
-assert(integer(true) == integer(1))
-assert(integer(false) == integer(0))
-assert(integer(false, "nonsense") == integer(0))
+assert(integer.fromstring("5") == foo)
+assert(typeof(integer.fromstring("5")) == "integer")
 
 assert(tovector("<1,2,3>") == vector(1, 2, 3))
 assert(tovector("<1,2,4>") ~= vector(1, 2, 3))
@@ -64,7 +63,7 @@ assert(touuid(ZERO_ROTATION) == nil)
 
 assert(not pcall(function() tovector() end))
 assert(not pcall(function() toquaternion() end))
-assert(not pcall(function() integer() end))
+assert(not pcall(function() integer.create() end))
 
 -- Vector / quaternion operations should still be supported as in LSL
 assert(vec * quaternion(0, 0, 0, 1) == vec)

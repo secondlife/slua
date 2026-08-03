@@ -173,7 +173,7 @@ static int _list_accessor_helper(lua_State *L, LSLIType type)
     if (idx < len && idx >= 0)
     {
         lua_pushcfunction(L, lsl_cast_list_elem, "lsl_cast_list_elem");
-        luaA_pushobject(L, &h->array[idx]);
+        luaA_pushvalue(L, &h->array[idx]);
         luaSL_pushinteger(L, type);
         lua_call(L, 2, 1);
         // If cast failed, get rid of the value and return the default.
@@ -267,7 +267,7 @@ static int ll_list2vector(lua_State *L)
         auto *tv = &h->array[idx];
         if (lua_lsl_type(tv) == (uint8_t)LSLIType::LST_VECTOR)
         {
-            luaA_pushobject(L, tv);
+            luaA_pushvalue(L, tv);
             return 1;
         }
     }
@@ -290,7 +290,7 @@ static int ll_list2rot(lua_State *L)
         auto *tv = &h->array[idx];
         if (lua_lsl_type(tv) == (uint8_t)LSLIType::LST_QUATERNION)
         {
-            luaA_pushobject(L, tv);
+            luaA_pushvalue(L, tv);
             return 1;
         }
     }
@@ -348,7 +348,7 @@ static int ll_list2list(lua_State *L)
         // Cloning is important in case lists are ever mutable
         TValue new_tv;
         sethvalue(L, &new_tv, luaH_clone(L, h));
-        luaA_pushobject(L, &new_tv);
+        luaA_pushvalue(L, &new_tv);
         return 1;
     }
 
@@ -417,7 +417,7 @@ static int ll_dumplist2string(lua_State *L)
 
         // Unlike (string)list_val, this doesn't keep negative zero.
         lua_pushcfunction(L, lsl_cast_list_elem_poszero, "lsl_cast_list_elem_poszero");
-        luaA_pushobject(L, &h->array[i]);
+        luaA_pushvalue(L, &h->array[i]);
         luaSL_pushinteger(L, LSLIType::LST_STRING);
         lua_call(L, 2, 1);
         // But we might have a type we don't understand in the list
@@ -459,7 +459,7 @@ static int ll_deletesublist(lua_State *L)
         // Cloning is important in case lists are ever mutable
         TValue new_tv;
         sethvalue(L, &new_tv, luaH_clone(L, h));
-        luaA_pushobject(L, &new_tv);
+        luaA_pushvalue(L, &new_tv);
         return 1;
     }
 
@@ -542,7 +542,7 @@ static int ll_listinsertlist(lua_State *L)
     if (cloned_h != nullptr)
     {
         sethvalue(L, &new_tv, cloned_h);
-        luaA_pushobject(L, &new_tv);
+        luaA_pushvalue(L, &new_tv);
         return 1;
     }
 
@@ -620,7 +620,7 @@ static int ll_listreplacelist(lua_State *L)
     if (cloned_h)
     {
         sethvalue(L, &new_tv, cloned_h);
-        luaA_pushobject(L, &new_tv);
+        luaA_pushvalue(L, &new_tv);
         return 1;
     }
 

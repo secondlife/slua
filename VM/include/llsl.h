@@ -86,7 +86,8 @@ LUA_API int luaSL_createtimermanager(lua_State *L);
 LUA_API const char *luaSL_checkuuid(lua_State *L, int num_arg, bool * compressed);
 LUA_API const float *luaSL_checkquaternion(lua_State *L, int num_arg);
 #define luaSL_pushfloat(L, d) lua_pushnumber((L), (float)(d))
-#define luaSL_pushinteger(L, v) lua_pushlightuserdatatagged((L), (void *)((size_t)(v)), LU_TAG_LSL_INTEGER)
+// Truncates to 32-bit space like setintvalue(), LSL integers are 32-bit.
+#define luaSL_pushinteger(L, v) lua_pushinteger64((L), (int32_t)(v))
 /// push whatever is the native type for this VM
 LUA_API int luaSL_pushnativeinteger(lua_State *L, int val);
 LUA_API void luaSL_pushindexlike(lua_State *L, int index);

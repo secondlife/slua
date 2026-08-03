@@ -7,6 +7,7 @@
 #include "Luau/Variant.h"
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeIds.h"
+#include "Luau/VisitType.h"
 
 #include <string>
 #include <memory>
@@ -50,9 +51,9 @@ struct GeneralizationConstraint
     TypeId generalizedType;
     TypeId sourceType;
 
-    std::vector<TypeId> interiorTypes;
-    bool hasDeprecatedAttribute = false;
-    AstAttr::DeprecatedInfo deprecatedInfo;
+    /// Potentially null pointer to a deprecated attribute. Used to attach
+    /// deprecation info to the generalized function type.
+    AstAttr* maybeDeprecatedAttr;
 
     /// If true, never introduce generics.  Always replace free types by their
     /// bounds or unknown. Presently used only to generalize the whole module.
@@ -102,6 +103,8 @@ struct FunctionCallConstraint
     std::vector<TypeId> typeArguments;
     std::vector<TypePackId> typePackArguments;
 
+    DenseHashMap<const AstExpr*, TypeId>* astTypes = nullptr;
+
     // When we dispatch this constraint, we update the key at this map to record
     // the overload that we selected.
     DenseHashMap<const AstNode*, TypeId>* astOverloadResolvedTypes = nullptr;
@@ -136,7 +139,9 @@ struct FunctionCheckConstraint
 // then FreeType is replaced by its lower bound
 //
 // else FreeType is replaced by PrimitiveType
-struct PrimitiveTypeConstraint
+//
+// Clip with LuauRemovePrimitiveTypeConstraint
+struct DEPRECATED_PrimitiveTypeConstraint
 {
     TypeId freeType;
 
@@ -323,7 +328,7 @@ using ConstraintV = Variant<
     TypeAliasExpansionConstraint,
     FunctionCallConstraint,
     FunctionCheckConstraint,
-    PrimitiveTypeConstraint,
+    DEPRECATED_PrimitiveTypeConstraint,
     HasPropConstraint,
     HasIndexerConstraint,
     AssignPropConstraint,
@@ -340,6 +345,7 @@ using ConstraintV = Variant<
 struct Constraint
 {
     Constraint(NotNull<Scope> scope, const Location& location, ConstraintV&& c);
+    Constraint(NotNull<Scope> scope, const Location& location, ConstraintV&& c, std::shared_ptr<ModuleName> moduleName);
 
     Constraint(const Constraint&) = delete;
     Constraint& operator=(const Constraint&) = delete;
@@ -347,14 +353,18 @@ struct Constraint
     NotNull<Scope> scope;
     Location location;
     ConstraintV c;
+    std::shared_ptr<ModuleName> moduleName;
 
-    std::vector<NotNull<Constraint>> dependencies;
-
-    TypeIds getMaybeMutatedFreeTypes() const;
+    /**
+     * Return the types and type packs that may be mutated by this constraint.
+     * Currently we do not do anything with type packs.
+     */
+    std::pair<TypeIds, TypePackIds> getMaybeMutatedTypes() const;
 };
 
 using ConstraintPtr = std::unique_ptr<Constraint>;
 
+bool isReferenceCountedType(TypePackId tp);
 bool isReferenceCountedType(const TypeId typ);
 
 inline Constraint& asMutable(const Constraint& c)
@@ -373,5 +383,29 @@ const T* get(const Constraint& c)
 {
     return getMutable<T>(asMutable(c));
 }
+
+struct ReferenceCountInitializer : TypeOnceVisitor
+{
+    NotNull<TypeIds> mutatedTypes;
+    TypePackIds* mutatedTypePacks;
+    bool traverseIntoTypeFunctions = true;
+
+    explicit ReferenceCountInitializer(NotNull<TypeIds> mutatedTypes, NotNull<TypePackIds> mutatedTypePacks);
+
+    bool visit(TypeId ty, const FreeType&) override;
+
+    bool visit(TypeId ty, const BlockedType&) override;
+
+    bool visit(TypeId ty, const PendingExpansionType&) override;
+
+    bool visit(TypeId ty, const TableType& tt) override;
+
+    bool visit(TypeId ty, const ExternType&) override;
+
+    bool visit(TypeId, const TypeFunctionInstanceType& tfit) override;
+
+    bool visit(TypePackId tp, const BlockedTypePack&) override;
+    bool visit(TypePackId tp, const FreeTypePack&) override;
+};
 
 } // namespace Luau

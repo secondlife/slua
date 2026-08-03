@@ -227,5 +227,29 @@ assert(ares.unpersist(ares.persist(userdata)) ~= nil)
 
 assert_round_trips(vector(1, 2, 3))
 
+-- Integer values survive round-trips at full 64-bit width.
+-- The integer library is only registered when the integer fflags are enabled,
+-- and this file must still parse without them, so no integer literals here.
+if integer ~= nil then
+    local int_vals = {
+        integer.create(0),
+        integer.create(1),
+        integer.minsigned,
+        integer.maxsigned,
+        integer.sub(integer.maxsigned, integer.create(1)),
+    }
+    for _, v in int_vals do
+        local rt = round_trip(v)
+        assert(type(rt) == "integer")
+        assert(rt == v)
+    end
+
+    -- as table values and keys, too
+    local int_tab = round_trip({integer.create(1), key = integer.create(2^40), [integer.create(3)] = "three"})
+    assert(int_tab[1] == integer.create(1))
+    assert(int_tab.key == integer.create(2^40))
+    assert(int_tab[integer.create(3)] == "three")
+end
+
 print('OK')
 return 'OK'

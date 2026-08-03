@@ -418,3 +418,27 @@ int luai_formatfloat(char* buf, size_t bufsize, const char* format, float value)
         return snprintf(buf, bufsize, format, value);
     }
 }
+
+char* luai_int2str(char* buf, int64_t l)
+{
+    uint64_t val = (l < 0) ? ~(uint64_t)l + 1 : (uint64_t)l;
+
+    int numDigits = 1;
+    for (uint64_t cap = 10; (numDigits < 19) && (cap <= val); cap *= 10)
+        numDigits++;
+
+    int pos = (l < 0) ? numDigits : (numDigits - 1);
+    buf[pos + 1] = 0;
+    do
+    {
+        buf[pos--] = '0' + (val % 10);
+        val /= 10;
+    } while (val != 0);
+
+    if (l < 0)
+        buf[pos--] = '-';
+
+    LUAU_ASSERT(pos == -1);
+
+    return &buf[(l < 0) ? (numDigits + 1) : numDigits];
+}

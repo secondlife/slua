@@ -7,6 +7,7 @@
 
 #include <string.h>
 
+LUAU_FASTFLAG(LuauCodegenSharedLog)
 
 using namespace Luau::CodeGen;
 using namespace Luau::CodeGen::A64;
@@ -36,7 +37,7 @@ class AssemblyBuilderA64Fixture
 public:
     bool check(void (*f)(AssemblyBuilderA64& build), std::vector<uint32_t> code, std::vector<uint8_t> data = {}, unsigned int features = 0)
     {
-        AssemblyBuilderA64 build(/* logText= */ false, features);
+        AssemblyBuilderA64 build(/* logger= */ nullptr, false, features);
 
         f(build);
 
@@ -118,6 +119,22 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "BinaryExtended")
     // reg, reg
     SINGLE_COMPARE(add(x0, x1, w2, 3), 0x8B224C20);
     SINGLE_COMPARE(sub(x0, x1, w2, 3), 0xCB224C20);
+}
+
+TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "Ternary")
+{
+    SINGLE_COMPARE(msub(x0, x1, x2, x3), 0x9B028C20);
+    SINGLE_COMPARE(msub(w0, w1, w2, w3), 0x1B028C20);
+}
+
+TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "MulDiv")
+{
+    SINGLE_COMPARE(mul(x0, x1, x2), 0x9B027C20);
+    SINGLE_COMPARE(mul(w0, w1, w2), 0x1B027C20);
+    SINGLE_COMPARE(sdiv(x0, x1, x2), 0x9AC20C20);
+    SINGLE_COMPARE(sdiv(w0, w1, w2), 0x1AC20C20);
+    SINGLE_COMPARE(udiv(x0, x1, x2), 0x9AC20820);
+    SINGLE_COMPARE(udiv(w0, w1, w2), 0x1AC20820);
 }
 
 TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "BinaryImm")
@@ -575,7 +592,9 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "SIMDMath")
 
 TEST_CASE("LogTest")
 {
-    AssemblyBuilderA64 build(/* logText= */ true);
+    AssemblyOptions options;
+    LogBuilder logger(options);
+    AssemblyBuilderA64 build(/* logger= */ &logger, true, /* features= */ 0);
 
     build.add(sp, sp, uint16_t(4));
     build.add(w0, w1, w2);
@@ -679,7 +698,53 @@ TEST_CASE("LogTest")
  ret
 )";
 
-    CHECK("\n" + build.text == expected);
+    CHECK("\n" + (FFlag::LuauCodegenSharedLog ? logger.text : build.text) == expected);
+}
+
+TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "Nop")
+{
+    // 0 bytes: no instructions emitted
+    CHECK(check(
+        [](AssemblyBuilderA64& build)
+        {
+            build.nop(0);
+        },
+        {}
+    ));
+
+    // Non-multiple of 4: rounds down to nearest multiple (7 -> 1 NOP = 4 bytes)
+    CHECK(check(
+        [](AssemblyBuilderA64& build)
+        {
+            build.nop(7);
+        },
+        {0xD503201F}
+    ));
+
+    // Exact multiples: 4 -> 1 NOP, 8 -> 2 NOPs, 12 -> 3 NOPs
+    CHECK(check(
+        [](AssemblyBuilderA64& build)
+        {
+            build.nop(4);
+        },
+        {0xD503201F}
+    ));
+
+    CHECK(check(
+        [](AssemblyBuilderA64& build)
+        {
+            build.nop(8);
+        },
+        {0xD503201F, 0xD503201F}
+    ));
+
+    CHECK(check(
+        [](AssemblyBuilderA64& build)
+        {
+            build.nop(12);
+        },
+        {0xD503201F, 0xD503201F, 0xD503201F}
+    ));
 }
 
 TEST_SUITE_END();

@@ -2,11 +2,14 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "ltm.h"
 
+#include "lfunc.h"
 #include "lstate.h"
 #include "lstring.h"
+#include "lua.h"
 #include "ludata.h"
 #include "ltable.h"
 #include "lgc.h"
+#include "lclass.h"
 
 #include <string.h>
 
@@ -18,7 +21,11 @@ const char* const luaT_typenames[] = {
 
     "userdata",
     "number",
+    "integer",
+
+#if LUA_VECTOR_DOUBLE == 0
     "vector",
+#endif
 
     "string",
 
@@ -27,10 +34,15 @@ const char* const luaT_typenames[] = {
     "userdata",
     "thread",
     "buffer",
+    "class",
+    "object",
+#if LUA_VECTOR_DOUBLE == 1
+    "vector",
+#endif
     // ServerLua: These are mainly for debugging, but surely they should be in here anyway?
+    "deadkey",
     "proto",
-    "upval",
-    "deadkey"
+    "upval"
 };
 
 const char* const luaT_eventname[] = {
@@ -63,7 +75,7 @@ const char* const luaT_eventname[] = {
 // clang-format on
 
 // ServerLua: We extended this to include more type names.
-static_assert(sizeof(luaT_typenames) / sizeof(luaT_typenames[0]) == LUA_TDEADKEY + 1, "luaT_typenames size mismatch");
+static_assert(sizeof(luaT_typenames) / sizeof(luaT_typenames[0]) == LUA_TUPVAL + 1, "luaT_typenames size mismatch");
 static_assert(sizeof(luaT_eventname) / sizeof(luaT_eventname[0]) == TM_N, "luaT_eventname size mismatch");
 static_assert(TM_EQ < 8, "fasttm optimization stores a bitfield with metamethods in a byte");
 
@@ -113,6 +125,16 @@ const TValue* luaT_gettmbyobj(lua_State* L, const TValue* o, TMS event)
         break;
     case LUA_TUSERDATA:
         mt = uvalue(o)->metatable;
+        break;
+    case LUA_TCLASS:
+    {
+        // We store a metatable for class objects on the
+        // class object itself, use that.
+        mt = classvalue(o)->metatable;
+        break;
+    }
+    case LUA_TOBJECT:
+        mt = objectvalue(o)->lclass->instancemetatable;
         break;
     default:
         mt = L->global->mt[ttype(o)];

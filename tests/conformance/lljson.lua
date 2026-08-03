@@ -10,7 +10,7 @@ assert(lljson.encode(setmetatable({}, lljson.array_mt)) == "[]")
 assert(lljson.encode(lljson.empty_array) == "[]")
 assert(lljson.encode(lljson.empty_object) == "{}")
 assert(lljson.encode({1}) == "[1]")
-assert(lljson.encode({integer(1)}) == "[1]")
+assert(lljson.encode({integer.create(1)}) == "[1]")
 assert(lljson.encode(true) == "true")
 assert(lljson.encode({"foo"}) == '["foo"]')
 -- UUIDs are basically just strings, encode them as such.

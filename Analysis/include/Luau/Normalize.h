@@ -18,25 +18,9 @@ namespace Luau
 struct InternalErrorReporter;
 struct Module;
 struct Scope;
+struct TypeFunctionRuntime;
 
 using ModulePtr = std::shared_ptr<Module>;
-
-bool isSubtype(
-    TypeId subTy,
-    TypeId superTy,
-    NotNull<Scope> scope,
-    NotNull<BuiltinTypes> builtinTypes,
-    InternalErrorReporter& ice,
-    SolverMode solverMode
-);
-bool isSubtype(
-    TypePackId subPack,
-    TypePackId superPack,
-    NotNull<Scope> scope,
-    NotNull<BuiltinTypes> builtinTypes,
-    InternalErrorReporter& ice,
-    SolverMode solverMode
-);
 
 } // namespace Luau
 
@@ -230,6 +214,10 @@ struct NormalizedType
     // This type is either never or number.
     TypeId numbers;
 
+    // The integer part of the type.
+    // This type is either never or integer.
+    TypeId integers;
+
     // The string part of the type.
     // This may be the `string` type, or a union of singletons.
     NormalizedStringType strings;
@@ -296,6 +284,7 @@ struct NormalizedType
     bool hasErrors() const;
     bool hasNils() const;
     bool hasNumbers() const;
+    bool hasIntegers() const;
     bool hasStrings() const;
     bool hasThreads() const;
     bool hasBuffers() const;
@@ -446,5 +435,17 @@ private:
 
     friend struct FuelInitializer;
 };
+
+bool isSubtype(
+    TypeId subTy,
+    TypeId superTy,
+    NotNull<TypeArena> arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    NotNull<Scope> scope,
+    NotNull<Normalizer> normalizer,
+    NotNull<TypeFunctionRuntime> typeFunctionRuntime,
+    NotNull<InternalErrorReporter> reporter
+);
+
 
 } // namespace Luau

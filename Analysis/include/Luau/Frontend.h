@@ -3,6 +3,7 @@
 
 #include "Luau/Config.h"
 #include "Luau/ConfigResolver.h"
+#include "Luau/DenseHash2.h"
 #include "Luau/GlobalTypes.h"
 #include "Luau/Module.h"
 #include "Luau/ModuleResolver.h"
@@ -44,6 +45,13 @@ struct LoadDefinitionFileResult
 
 std::optional<Mode> parseMode(const std::vector<HotComment>& hotcomments);
 
+struct ModuleSCC
+{
+    std::vector<ModuleName> members;
+    std::shared_ptr<TypeArena> sharedArena;
+};
+using ModuleSCCPtr = std::shared_ptr<ModuleSCC>;
+
 struct SourceNode
 {
     bool hasDirtySourceModule() const
@@ -71,6 +79,7 @@ struct SourceNode
 
     ModuleName name;
     std::string humanReadableName;
+    std::weak_ptr<ModuleSCC> scc;
     DenseHashSet<ModuleName> requireSet{{}};
     std::vector<std::pair<ModuleName, Location>> requireLocations;
     Set<ModuleName> dependents{{}};
@@ -140,6 +149,7 @@ struct FrontendModuleResolver : ModuleResolver
     std::string getHumanReadableModuleName(const ModuleName& moduleName) const override;
 
     bool setModule(const ModuleName& moduleName, ModulePtr module);
+    void eraseModule(const ModuleName& moduleName);
     void clearModules();
 
 
@@ -174,13 +184,13 @@ struct Frontend
 
         size_t dynamicConstraintsCreated = 0;
     };
-
+    Frontend(SolverMode mode, FileResolver* fileResolver, ConfigResolver* configResolver, FrontendOptions options = {});
     Frontend(FileResolver* fileResolver, ConfigResolver* configResolver, const FrontendOptions& options = {});
 
     void setLuauSolverMode(SolverMode mode);
     SolverMode getLuauSolverMode() const;
     // The default value assuming there is no workspace setup yet
-    std::atomic<SolverMode> useNewLuauSolver{FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old};
+    std::atomic<SolverMode> useNewLuauSolver;
     // Parse module graph and prepare SourceNode/SourceModule data, including required dependencies without running typechecking
     void parse(const ModuleName& name);
     void parseModules(const std::vector<ModuleName>& name);
@@ -208,6 +218,7 @@ struct Frontend
 
     void clearStats();
     void clear();
+    void clearModules(const std::vector<ModuleName>& names);
     void clearBuiltinEnvironments();
 
     ScopePtr addEnvironment(const std::string& environmentName);
@@ -277,6 +288,8 @@ private:
         DenseHashSet<Luau::ModuleName>& seen,
         const FrontendOptions& frontendOptions
     );
+    void computeSCCs(const std::vector<ModuleName>& buildQueue);
+    void checkSCCBuildQueueItem(BuildQueueItem& item);
     void checkBuildQueueItem(BuildQueueItem& item);
     void checkBuildQueueItems(std::vector<BuildQueueItem>& items);
     void recordItemResult(const BuildQueueItem& item);
@@ -312,26 +325,12 @@ public:
     std::unordered_map<ModuleName, std::shared_ptr<SourceNode>> sourceNodes;
     std::unordered_map<ModuleName, std::shared_ptr<SourceModule>> sourceModules;
     std::unordered_map<ModuleName, RequireTraceResult> requireTrace;
+    DenseHashMap2<ModuleName, ModuleSCCPtr> sccs;
 
     Stats stats = {};
 
     std::vector<ModuleName> moduleQueue;
 };
-
-ModulePtr check(
-    const SourceModule& sourceModule,
-    Mode mode,
-    const std::vector<RequireCycle>& requireCycles,
-    NotNull<BuiltinTypes> builtinTypes,
-    NotNull<InternalErrorReporter> iceHandler,
-    NotNull<ModuleResolver> moduleResolver,
-    NotNull<FileResolver> fileResolver,
-    const ScopePtr& globalScope,
-    const ScopePtr& typeFunctionScope,
-    std::function<void(const ModuleName&, const ScopePtr&)> prepareModuleScope,
-    FrontendOptions options,
-    TypeCheckLimits limits
-);
 
 ModulePtr check(
     const SourceModule& sourceModule,

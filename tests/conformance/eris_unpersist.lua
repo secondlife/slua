@@ -14,14 +14,16 @@ end
 function test(rootobj)
   local passed = 0
   local total = 0
-  local dotest = function(name, cond)
+  -- `actual` and `expected` are optional; when both are omitted they compare
+  -- equal and the test rests on `ok` alone.
+  local dotest = function(name, ok, actual, expected)
     total = total + 1
-    if cond then
+    if ok and actual == expected then
       print(name, " PASSED")
       passed = passed + 1
     else
-      print(name, "*FAILED")
-      assert(0)
+      print(name, "*FAILED", `expected {expected}, got {actual}`)
+      error(`{name} failed: expected {expected}, got {actual}`, 0)
     end
   end
 
@@ -50,14 +52,21 @@ function test(rootobj)
   dotest("Shared reference       ", rootobj.testsharedrefa.sharedref == rootobj.testsharedrefb.sharedref)
   dotest("Shared upvalues        ", testcounter(rootobj.testsharedupval))
   -- dotest("Debug info             ", (rootobj.testdebuginfo(2)) == "foo")
-  dotest("Thread start           ", coroutine.resume(rootobj.testnthread) == true, 4)
-  dotest("Thread resume          ", coroutine.resume(rootobj.testthread) == true, 14)
+  -- `coroutine.resume(co) == true` would truncate the multret and drop the
+  -- returned value, so capture both before handing them to dotest.
+  local nok, nval = coroutine.resume(rootobj.testnthread)
+  dotest("Thread start           ", nok, nval, 4)
+  local rok, rval = coroutine.resume(rootobj.testthread)
+  dotest("Thread resume          ", rok, rval, 14)
   dotest("Thread dead            ", coroutine.resume(rootobj.testdthread) == false)
   dotest("Open upvalues          ", testuvinthread(rootobj.testuvinthread))
-  dotest("Yielded pcall          ", coroutine.resume(rootobj.testprotthr) == true, "test")
-  dotest("Yielded xpcall         ", coroutine.resume(rootobj.testxprotthr) == true, "handler:test")
+  local pok, pval = coroutine.resume(rootobj.testprotthr)
+  dotest("Yielded pcall          ", pok, pval, "test")
+  local xok, xval = coroutine.resume(rootobj.testxprotthr)
+  dotest("Yielded xpcall         ", xok, xval, "handler:test")
   -- Luau doesn't support yielding in metafunctions!
-  -- dotest("Yielded metafunc       ", coroutine.resume(rootobj.testymtthr) == true, true)
+  -- local yok, yval = coroutine.resume(rootobj.testymtthr)
+  -- dotest("Yielded metafunc       ", yok, yval, true)
   dotest("Dead thread            ", coroutine.status(rootobj.testymtthr) == 'dead')
   dotest("Deep callstack         ", rootobj.testdeep() == 100)
   dotest("Tail call              ", rootobj.testtail() == 100)

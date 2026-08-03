@@ -354,6 +354,9 @@ assert(math.round(-3.5) == -4)
 assert(math.round(math.huge) == math.huge)
 assert(math.round(0.49999999999999994) == 0)
 assert(math.round(-0.49999999999999994) == 0)
+assert(1 / math.round(-0.0) == -math.huge)
+assert(1 / math.round(-0.4) == -math.huge)
+assert(1 / math.round(0.0) == math.huge)
 
 assert(math.round(noinline(0)) == 0)
 assert(math.round(noinline(0.4)) == 0)
@@ -365,6 +368,9 @@ assert(math.round(noinline(-3.5)) == -4)
 assert(math.round(noinline(math.huge)) == math.huge)
 assert(math.round(noinline(0.49999999999999994)) == 0)
 assert(math.round(noinline(-0.49999999999999994)) == 0)
+assert(1 / math.round(noinline(-0.0)) == -math.huge)
+assert(1 / math.round(noinline(-0.4)) == -math.huge)
+assert(1 / math.round(noinline(0.0)) == math.huge)
 
 -- fmod
 assert(math.fmod(3, 2) == 1)
@@ -420,6 +426,14 @@ assert(math.lerp(-sq3, sq2, 1) <= math.sqrt(2)) -- bounded (fails for a + t*(b-a
 assert(math.lerp(sq2, sq2, sq2 / 2) == sq2) -- consistent (fails for a*t + b*(1-t))
 
 assert(tostring(math.pow(-2, 0.5)) == "nan")
+
+-- math constants
+assert(math.pi * 2 == math.tau)
+assert(math.sqrt(2) == math.sqrt2)
+assert(math.exp(1) == math.e)
+assert(((1 + math.sqrt(5)) / 2) == math.phi)
+assert(math.nan ~= math.nan)
+assert(math.isnan(math.nan))
 
 -- isnan, isinf, isfinite
 assert(math.isnan(0/0))

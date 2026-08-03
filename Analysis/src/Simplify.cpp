@@ -16,12 +16,9 @@
 
 #include <algorithm>
 
-LUAU_FASTINT(LuauTypeReductionRecursionLimit)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauSimplificationComplexityLimit, 8)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauTypeSimplificationIterationLimit, 128)
-LUAU_FASTFLAGVARIABLE(LuauUnionOfTablesPreservesReadWrite)
-LUAU_FASTFLAGVARIABLE(LuauRelateHandlesCoincidentTables)
 
 namespace Luau
 {
@@ -149,92 +146,6 @@ Relation flip(Relation rel)
     }
 }
 
-// FIXME: I'm not completely certain that this function is theoretically reasonable.
-Relation combine(Relation a, Relation b)
-{
-    switch (a)
-    {
-    case Relation::Disjoint:
-        switch (b)
-        {
-        case Relation::Disjoint:
-            return Relation::Disjoint;
-        case Relation::Coincident:
-            return Relation::Superset;
-        case Relation::Intersects:
-            return Relation::Intersects;
-        case Relation::Subset:
-            return Relation::Intersects;
-        case Relation::Superset:
-            return Relation::Intersects;
-        }
-        break;
-    case Relation::Coincident:
-        switch (b)
-        {
-        case Relation::Disjoint:
-            return Relation::Coincident;
-        case Relation::Coincident:
-            return Relation::Coincident;
-        case Relation::Intersects:
-            return Relation::Superset;
-        case Relation::Subset:
-            return Relation::Coincident;
-        case Relation::Superset:
-            return Relation::Intersects;
-        }
-        break;
-    case Relation::Superset:
-        switch (b)
-        {
-        case Relation::Disjoint:
-            return Relation::Superset;
-        case Relation::Coincident:
-            return Relation::Superset;
-        case Relation::Intersects:
-            return Relation::Intersects;
-        case Relation::Subset:
-            return Relation::Intersects;
-        case Relation::Superset:
-            return Relation::Superset;
-        }
-        break;
-    case Relation::Subset:
-        switch (b)
-        {
-        case Relation::Disjoint:
-            return Relation::Subset;
-        case Relation::Coincident:
-            return Relation::Coincident;
-        case Relation::Intersects:
-            return Relation::Intersects;
-        case Relation::Subset:
-            return Relation::Subset;
-        case Relation::Superset:
-            return Relation::Intersects;
-        }
-        break;
-    case Relation::Intersects:
-        switch (b)
-        {
-        case Relation::Disjoint:
-            return Relation::Intersects;
-        case Relation::Coincident:
-            return Relation::Superset;
-        case Relation::Intersects:
-            return Relation::Intersects;
-        case Relation::Subset:
-            return Relation::Intersects;
-        case Relation::Superset:
-            return Relation::Intersects;
-        }
-        break;
-    }
-
-    LUAU_UNREACHABLE();
-    return Relation::Intersects;
-}
-
 // Given A & B, what is A & ~B?
 Relation invert(Relation r)
 {
@@ -252,7 +163,7 @@ Relation invert(Relation r)
         return Relation::Intersects;
     }
 
-    LUAU_UNREACHABLE();
+    LUAU_ASSERT(false);
     return Relation::Intersects;
 }
 
@@ -414,7 +325,6 @@ Relation relateTableToProp(const TableType* leftTable, const std::string& propNa
         // And for good measure, default to intersection.
         return Relation::Intersects;
     }
-
 }
 
 Relation relateTables(const TableType* leftTable, const TableType* rightTable, SimplifierSeenSet& seen)
@@ -491,59 +401,6 @@ Relation relateTables(const TableType* leftTable, const TableType* rightTable, S
         return Relation::Intersects;
 
     return hasSubset ? Relation::Subset : Relation::Coincident;
-
-}
-
-Relation relateTables_DEPRECATED(TypeId left, TypeId right, SimplifierSeenSet& seen)
-{
-    NotNull<const TableType> leftTable{get<TableType>(left)};
-    NotNull<const TableType> rightTable{get<TableType>(right)};
-    LUAU_ASSERT(1 == rightTable->props.size());
-    // Disjoint props have nothing in common
-    // t1 with props p1's cannot appear in t2 and t2 with props p2's cannot appear in t1
-    bool foundPropFromLeftInRight = std::any_of(
-        begin(leftTable->props),
-        end(leftTable->props),
-        [&](auto prop)
-        {
-            return rightTable->props.count(prop.first) > 0;
-        }
-    );
-    bool foundPropFromRightInLeft = std::any_of(
-        begin(rightTable->props),
-        end(rightTable->props),
-        [&](auto prop)
-        {
-            return leftTable->props.count(prop.first) > 0;
-        }
-    );
-
-    if (!foundPropFromLeftInRight && !foundPropFromRightInLeft && leftTable->props.size() >= 1 && rightTable->props.size() >= 1)
-        return Relation::Intersects;
-
-    const auto [propName, rightProp] = *begin(rightTable->props);
-
-    auto it = leftTable->props.find(propName);
-    if (it == leftTable->props.end())
-    {
-        // Every table lacking a property is a supertype of a table having that
-        // property but the reverse is not true.
-        return Relation::Superset;
-    }
-
-    const Property leftProp = it->second;
-
-    if (!leftProp.isShared() || !rightProp.isShared())
-        return Relation::Intersects;
-
-    Relation r = relate(*leftProp.readTy, *rightProp.readTy, seen);
-    if (r == Relation::Coincident && 1 != leftTable->props.size())
-    {
-        // eg {tag: "cat", prop: string} & {tag: "cat"}
-        return Relation::Subset;
-    }
-    else
-        return r;
 }
 
 // A cheap and approximate subtype test
@@ -790,39 +647,7 @@ Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen)
 
         if (auto rt = get<TableType>(right))
         {
-            if (FFlag::LuauRelateHandlesCoincidentTables)
-            {
-                return relateTables(lt, rt, seen);
-            }
-            else
-            {
-                // TODO PROBABLY indexers and metatables.
-                if (1 == rt->props.size())
-                {
-                    Relation r = relateTables_DEPRECATED(left, right, seen);
-                    /*
-                     * A reduction of these intersections is certainly possible, but
-                     * it would require minting new table types. Also, I don't think
-                     * it's super likely for this to arise from a refinement.
-                     *
-                     * Time will tell!
-                     *
-                     * ex we simplify this
-                     *     {tag: string} & {tag: "cat"}
-                     * but not this
-                     *     {tag: string, prop: number} & {tag: "cat"}
-                     */
-                    if (lt->props.size() > 1 && r == Relation::Superset)
-                        return Relation::Intersects;
-
-                    return r;
-                }
-
-                if (1 == lt->props.size())
-                    return flip(relate(right, left, seen));
-
-                return Relation::Intersects;
-            }
+            return relateTables(lt, rt, seen);
         }
 
         if (auto re = get<ExternType>(right))
@@ -1778,83 +1603,55 @@ TypeId TypeSimplifier::union_(TypeId left, TypeId right)
             if (rightPropName != propName)
                 return arena->addType(UnionType{{left, right}});
 
-            if (FFlag::LuauUnionOfTablesPreservesReadWrite)
+            // Consider:
+            //
+            //  { prop: number? } | { prop: string? }
+            //
+            // Even though these two tables share a property, we cannot
+            // simplify this type any further, otherwise we can, say,
+            // launder a `{ prop: number? }` into a `{ prop: string? }`
+            // and then write a string to it.
+            //
+            // We also elect to not simplify unsealed tables.
+            if (!leftProp.isReadOnly() || !rightProp.isReadOnly() || lt->state != TableState::Sealed || rt->state != TableState::Sealed)
+                return arena->addType(UnionType{{left, right}});
+
+            // At this point, we have two read-only singleton tables, e.g.:
+            //
+            //  { read prop: number? } | { read prop: string? }
+            //
+            // We can relate these two properties and produce a simplified
+            // version, with some special cases.
+
+            switch (relate(*leftProp.readTy, *rightProp.readTy))
             {
-                // Consider:
+            case Relation::Coincident:
+            case Relation::Superset:
+                // The left property is a superset (or coincident) of the
+                // right, for example:
                 //
-                //  { prop: number? } | { prop: string? }
+                //  { read prop: number? } | { read prop: number }
                 //
-                // Even though these two tables share a property, we cannot
-                // simplify this type any further, otherwise we can, say,
-                // launder a `{ prop: number? }` into a `{ prop: string? }`
-                // and then write a string to it.
+                return left;
+            case Relation::Subset:
+                // The left property is a subset of the right, for example:
                 //
-                // We also elect to not simplify unsealed tables.
-                if (!leftProp.isReadOnly() || !rightProp.isReadOnly() || lt->state != TableState::Sealed || rt->state != TableState::Sealed)
-                    return arena->addType(UnionType{{left, right}});
-
-                // At this point, we have two read-only singleton tables, e.g.:
+                //  { read prop: nil } | { read prop: false? }
                 //
-                //  { read prop: number? } | { read prop: string? }
+                return right;
+            case Relation::Disjoint:
+            case Relation::Intersects:
+                // If we are disjoint *or* there's some overlap, then
+                // we can create a new read-only singleton table with
+                // a single property.
                 //
-                // We can relate these two properties and produce a simplified
-                // version, with some special cases.
-
-                switch (relate(*leftProp.readTy, *rightProp.readTy))
-                {
-                case Relation::Coincident:
-                case Relation::Superset:
-                    // The left property is a superset (or coincident) of the
-                    // right, for example:
-                    //
-                    //  { read prop: number? } | { read prop: number }
-                    //
-                    return left;
-                case Relation::Subset:
-                    // The left property is a subset of the right, for example:
-                    //
-                    //  { read prop: nil } | { read prop: false? }
-                    //
-                    return right;
-                case Relation::Disjoint:
-                case Relation::Intersects:
-                    // If we are disjoint *or* there's some overlap, then
-                    // we can create a new read-only singleton table with
-                    // a single property.
-                    //
-                    // We probably could do something quicker here for disjoint,
-                    // given that the union should just mint a new union type
-                    // anyhow.
-                    TableType result;
-                    result.state = TableState::Sealed;
-                    result.props[propName] = Property::readonly(union_(*leftProp.readTy, *rightProp.readTy));
-                    return arena->addType(std::move(result));
-                }
-            }
-            else
-            {
-                if (leftProp.readTy && rightProp.readTy)
-                {
-                    Relation r = relate(*leftProp.readTy, *rightProp.readTy);
-
-                    switch (r)
-                    {
-                    case Relation::Disjoint:
-                    {
-                        TableType result;
-                        result.state = TableState::Sealed;
-                        result.props[propName] = union_(*leftProp.readTy, *rightProp.readTy);
-                        return arena->addType(result);
-                    }
-                    case Relation::Superset:
-                    case Relation::Coincident:
-                        return left;
-                    case Relation::Subset:
-                        return right;
-                    default:
-                        break;
-                    }
-                }
+                // We probably could do something quicker here for disjoint,
+                // given that the union should just mint a new union type
+                // anyhow.
+                TableType result;
+                result.state = TableState::Sealed;
+                result.props[propName] = Property::readonly(union_(*leftProp.readTy, *rightProp.readTy));
+                return arena->addType(std::move(result));
             }
         }
     }

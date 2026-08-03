@@ -1,4 +1,5 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+#include "Luau/CodeGenOptions.h"
 #include "lua.h"
 #include "lualib.h"
 
@@ -55,6 +56,11 @@ struct GlobalOptions
     const char* vectorLib = nullptr;
     const char* vectorCtor = nullptr;
     const char* vectorType = nullptr;
+
+    bool onlyParse = false;
+    bool parseCst = false;
+
+    bool dumpRegSpills = false;
 } globalOptions;
 
 static Luau::CompileOptions copts()
@@ -80,8 +86,6 @@ static std::optional<CompileFormat> getCompileFormat(const char* name)
         return CompileFormat::Text;
     else if (strcmp(name, "binary") == 0)
         return CompileFormat::Binary;
-    else if (strcmp(name, "text") == 0)
-        return CompileFormat::Text;
     else if (strcmp(name, "remarks") == 0)
         return CompileFormat::Remarks;
     else if (strcmp(name, "codegen") == 0)
@@ -301,7 +305,13 @@ static double recordDeltaTime(double& timer)
     return delta;
 }
 
-static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::AssemblyOptions::Target assemblyTarget, CompileStats& stats)
+static bool compileFile(
+    const char* name,
+    CompileFormat format,
+    Luau::CodeGen::AssemblyOptions::Target assemblyTarget,
+    CompileStats& stats,
+    bool dumpConstants
+)
 {
     double currts = Luau::TimeTrace::getClock();
     std::string sName = name;
@@ -323,6 +333,7 @@ static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::A
         Luau::BytecodeBuilder bcb;
 
         Luau::CodeGen::AssemblyOptions options;
+        options.compilationOptions.flags = Luau::CodeGen::CodeGen_ColdFunctions;
         options.target = assemblyTarget;
         options.outputBinary = format == CompileFormat::CodegenNull;
 
@@ -330,8 +341,10 @@ static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::A
         {
             options.includeAssembly = format != CompileFormat::CodegenIr;
             options.includeIr = format != CompileFormat::CodegenAsm;
+
             options.includeIrTypes = format != CompileFormat::CodegenAsm;
             options.includeOutlinedCode = format == CompileFormat::CodegenVerbose;
+            options.includeRegSpills = globalOptions.dumpRegSpills;
         }
 
         options.annotator = annotateInstruction;
@@ -339,10 +352,11 @@ static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::A
 
         if (format == CompileFormat::Text)
         {
-            bcb.setDumpFlags(
-                Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Locals |
-                Luau::BytecodeBuilder::Dump_Remarks | Luau::BytecodeBuilder::Dump_Types
-            );
+            uint32_t flags = Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Locals |
+                             Luau::BytecodeBuilder::Dump_Remarks | Luau::BytecodeBuilder::Dump_Types;
+            if (dumpConstants)
+                flags |= Luau::BytecodeBuilder::Dump_Constants;
+            bcb.setDumpFlags(flags);
             bcb.setDumpSource(*source);
         }
         else if (format == CompileFormat::Remarks)
@@ -376,7 +390,9 @@ static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::A
         {
             Luau::Allocator allocator;
             Luau::AstNameTable names(allocator);
-            Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator);
+            Luau::ParseOptions parseOptions;
+            parseOptions.storeCstData = globalOptions.parseCst;
+            Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator, parseOptions);
 
             if (!result.errors.empty())
                 throw Luau::ParseErrors(result.errors);
@@ -384,8 +400,12 @@ static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::A
             stats.lines += result.lines;
             stats.parseTime += recordDeltaTime(currts);
 
+            if (globalOptions.onlyParse)
+                return true;
+
             Luau::compileOrThrow(bcb, result, names, copts());
         }
+
         stats.bytecode += bcb.getBytecode().size();
         stats.bytecodeInstructionCount = bcb.getTotalInstructionCount();
         stats.compileTime += recordDeltaTime(currts);
@@ -435,20 +455,26 @@ static void displayHelp(const char* argv0)
     printf("Usage: %s [--mode] [options] [file list]\n", argv0);
     printf("\n");
     printf("Available modes:\n");
-    printf("   binary, text, remarks, codegen\n");
+    printf("   binary, text, remarks, codegen, codegenir, codegenasm, codegenverbose, codegennull, null\n");
     printf("\n");
     printf("Available options:\n");
     printf("  -h, --help: Display this usage message.\n");
     printf("  -O<n>: compile with optimization level n (default 1, n should be between 0 and 2).\n");
     printf("  -g<n>: compile with debug level n (default 1, n should be between 0 and 2).\n");
+    printf("  -t<n>: compile with type information level n (default 0, n should be between 0 and 1).\n");
     printf("  --target=<target>: compile code for specific architecture (a64, x64, a64_nf, x64_ms).\n");
     printf("  --timetrace: record compiler time tracing information into trace.json\n");
     printf("  --record-stats=<granularity>: granularity of compilation stats (total, file, function).\n");
     printf("  --bytecode-summary: Compute bytecode operation distribution.\n");
+    printf("  --dump-constants: Dump constant table for each function (text mode only).\n");
+    printf("  --dump-regspills: include register spill events in codegen output.\n");
     printf("  --stats-file=<filename>: file in which compilation stats will be recored (default 'stats.json').\n");
     printf("  --vector-lib=<name>: name of the library providing vector type operations.\n");
     printf("  --vector-ctor=<name>: name of the function constructing a vector value.\n");
     printf("  --vector-type=<name>: name of the vector type.\n");
+    printf("  --only-parse: Only parse the input.\n");
+    printf("  --parse-cst: Whether parser should parse CST in addition to AST.\n");
+    printf("  --fflags=<flags>: comma-separated list of fast flags to enable/disable (--fflags=true,false,LuauFlag1=true,LuauFlag2=false).\n");
 }
 
 static int assertionHandler(const char* expr, const char* file, int line, const char* function)
@@ -492,6 +518,7 @@ int main(int argc, char** argv)
     RecordStats recordStats = RecordStats::None;
     std::string statsFile("stats.json");
     bool bytecodeSummary = false;
+    bool dumpConstants = false;
 
     for (int i = 1; i < argc; i++)
     {
@@ -572,6 +599,14 @@ int main(int argc, char** argv)
         {
             bytecodeSummary = true;
         }
+        else if (strcmp(argv[i], "--dump-constants") == 0)
+        {
+            dumpConstants = true;
+        }
+        else if (strcmp(argv[i], "--dump-regspills") == 0)
+        {
+            globalOptions.dumpRegSpills = true;
+        }
         else if (strncmp(argv[i], "--stats-file=", 13) == 0)
         {
             statsFile = argv[i] + 13;
@@ -602,6 +637,14 @@ int main(int argc, char** argv)
         {
             luauSL_init_global_builtins(argv[i] + 14);
             globalOptions.slLibraries = 1;
+        }
+        else if (strncmp(argv[i], "--parse-cst", 11) == 0)
+        {
+            globalOptions.parseCst = true;
+        }
+        else if (strncmp(argv[i], "--only-parse", 12) == 0)
+        {
+            globalOptions.onlyParse = true;
         }
         else if (argv[i][0] == '-' && argv[i][1] == '-' && getCompileFormat(argv[i] + 2))
         {
@@ -650,7 +693,7 @@ int main(int argc, char** argv)
     {
         CompileStats fileStat = {};
         fileStat.lowerStats.functionStatsFlags = functionStats;
-        failed += !compileFile(path.c_str(), compileFormat, assemblyTarget, fileStat);
+        failed += !compileFile(path.c_str(), compileFormat, assemblyTarget, fileStat, dumpConstants);
         stats += fileStat;
         if (recordStats == RecordStats::File || recordStats == RecordStats::Function)
             fileStats.push_back(fileStat);

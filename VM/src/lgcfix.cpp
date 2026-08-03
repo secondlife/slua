@@ -221,6 +221,39 @@ FixState FixingPass::classify(GCObject *obj)
         break;
     }
 
+    case LUA_TCLASS:
+    {
+        LuauClass *lco = gco2class(obj);
+        // A class object is never fixable itself: `NEWCLASSMEMBER` writes to
+        // its static members and instance metatable after creation, and a
+        // fixed object may not point at a white one. Its children are still
+        // worth scanning - they get their own shot at fixability.
+        self_unfixable = true;
+
+        track_dep(obj2gco(lco->name), &has_unfixable, &deps);
+        track_dep(obj2gco(lco->memberstooffset), &has_unfixable, &deps);
+        for (uint32_t i = 0; i < lco->numberofallmembers; ++i)
+            track_dep(obj2gco(lco->offsettomember[i]), &has_unfixable, &deps);
+        for (uint32_t i = 0; i < lco->numberofallmembers - lco->numberofinstancemembers; ++i)
+            track_dep(&lco->staticmembers[i], &has_unfixable, &deps);
+        track_dep(obj2gco(lco->metatable), &has_unfixable, &deps);
+        if (lco->instancemetatable)
+            track_dep(obj2gco(lco->instancemetatable), &has_unfixable, &deps);
+        break;
+    }
+
+    case LUA_TOBJECT:
+    {
+        LuauObject *inst = gco2object(obj);
+        // Instance members are freely assignable, so an instance can never be fixed.
+        self_unfixable = true;
+
+        track_dep(obj2gco(inst->lclass), &has_unfixable, &deps);
+        for (uint32_t i = 0; i < inst->numberofmembers; ++i)
+            track_dep(&inst->members[i], &has_unfixable, &deps);
+        break;
+    }
+
     default:
         // Anything else we treat as unfixable.
         self_unfixable = true;

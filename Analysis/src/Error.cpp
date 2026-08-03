@@ -17,9 +17,8 @@
 #include <unordered_set>
 
 LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
-
-LUAU_FASTFLAGVARIABLE(LuauBetterTypeMismatchErrors)
-LUAU_FASTFLAG(LuauTypeCheckerUdtfRenameClassToExtern)
+LUAU_FASTINTVARIABLE(LuauCyclicSccWarningDisplayLimit, 10)
+LUAU_FASTINT(LuauCyclicSccWarningThreshold)
 
 static std::string wrongNumberOfArgsString(
     size_t expectedCount,
@@ -116,32 +115,23 @@ struct ErrorConverter
             std::string given = givenModule ? quote(givenType) + " from " + quote(*givenModule) : quote(givenType);
             std::string wanted = wantedModule ? quote(wantedType) + " from " + quote(*wantedModule) : quote(wantedType);
             size_t luauIndentTypeMismatchMaxTypeLength = size_t(FInt::LuauIndentTypeMismatchMaxTypeLength);
-            if (FFlag::LuauBetterTypeMismatchErrors)
+            if (get<NeverType>(follow(tm.wantedType)))
             {
-                if (get<NeverType>(follow(tm.wantedType)))
-                {
-                    if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                        return "Expected this to be unreachable, but got " + given;
-                    return "Expected this to be unreachable, but got\n\t" + given;
-                }
-
-                if (tm.context == TypeMismatch::InvariantContext)
-                {
-                    if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                        return "Expected this to be exactly " + wanted + ", but got " + given;
-                    return "Expected this to be exactly\n\t" + wanted + "\nbut got\n\t" + given;
-                }
-
-                if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                    return "Expected this to be " + wanted + ", but got " + given;
-                return "Expected this to be\n\t" + wanted + "\nbut got\n\t" + given;
+                if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                    return "Expected this to be unreachable, but got " + given;
+                return "Expected this to be unreachable, but got\n\t" + given;
             }
-            else
+
+            if (tm.context == TypeMismatch::InvariantContext)
             {
                 if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
-                    return "Type " + given + " could not be converted into " + wanted;
-                return "Type\n\t" + given + "\ncould not be converted into\n\t" + wanted;
+                    return "Expected this to be exactly " + wanted + ", but got " + given;
+                return "Expected this to be exactly\n\t" + wanted + "\nbut got\n\t" + given;
             }
+
+            if (givenType.length() <= luauIndentTypeMismatchMaxTypeLength || wantedType.length() <= luauIndentTypeMismatchMaxTypeLength)
+                return "Expected this to be " + wanted + ", but got " + given;
+            return "Expected this to be\n\t" + wanted + "\nbut got\n\t" + given;
         };
 
         if (givenTypeName == wantedTypeName)
@@ -181,10 +171,6 @@ struct ErrorConverter
         {
             result += "; " + tm.reason;
         }
-        else if (!FFlag::LuauBetterTypeMismatchErrors && tm.context == TypeMismatch::InvariantContext)
-        {
-            result += " in an invariant context";
-        }
 
         return result;
     }
@@ -209,12 +195,7 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-        {
-            if (FFlag::LuauTypeCheckerUdtfRenameClassToExtern)
-                return "Key '" + e.key + "' not found in external type '" + Luau::toString(t) + "'";
-            else
-                return "Key '" + e.key + "' not found in class '" + Luau::toString(t) + "'";
-        }
+            return "Key '" + e.key + "' not found in external type '" + Luau::toString(t) + "'";
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -386,12 +367,7 @@ struct ErrorConverter
 
         TypeId t = follow(e.table);
         if (get<ExternType>(t))
-        {
-            if (FFlag::LuauTypeCheckerUdtfRenameClassToExtern)
-                s += "external type";
-            else
-                s += "class";
-        }
+            s += "external type";
         else
             s += "table";
 
@@ -505,6 +481,29 @@ struct ErrorConverter
             else
                 s += name;
         }
+
+        return s;
+    }
+
+    std::string operator()(const Luau::CyclicModuleGraphTooLarge& e) const
+    {
+        std::string s = "This module is part of a cycle of " + std::to_string(e.moduleCount) + " modules that require each other. Consider reducing the number of cyclic dependencies: ";
+
+        size_t cyclicModuleDisplayLimit = std::min(e.moduleCount, static_cast<size_t>(FInt::LuauCyclicSccWarningDisplayLimit));
+
+        for (size_t i = 0; i < cyclicModuleDisplayLimit; i++)
+        {
+            if (i > 0)
+                s += ", ";
+
+            if (fileResolver != nullptr)
+                s += fileResolver->getHumanReadableModuleName(e.members[i]);
+            else
+                s += e.members[i];
+        }
+
+        if (cyclicModuleDisplayLimit < e.members.size())
+            s += ", ...";
 
         return s;
     }
@@ -627,9 +626,7 @@ struct ErrorConverter
 
     std::string operator()(const TypePackMismatch& e) const
     {
-        std::string ss = FFlag::LuauBetterTypeMismatchErrors
-                             ? "Expected this to be '" + toString(e.wantedTp) + "', but got '" + toString(e.givenTp) + "'"
-                             : "Type pack '" + toString(e.givenTp) + "' could not be converted into '" + toString(e.wantedTp) + "'";
+        std::string ss = "Expected this to be '" + toString(e.wantedTp) + "', but got '" + toString(e.givenTp) + "'";
 
         if (!e.reason.empty())
             ss += "; " + e.reason;
@@ -803,12 +800,14 @@ struct ErrorConverter
     std::string operator()(const PropertyAccessViolation& e) const
     {
         const std::string stringKey = isIdentifier(e.key) ? e.key : "\"" + e.key + "\"";
+        const std::string kind = getTableType(e.table) ? "table" : "type";
+
         switch (e.context)
         {
         case PropertyAccessViolation::CannotRead:
-            return "Property " + stringKey + " of table '" + toString(e.table) + "' is write-only";
+            return "Property " + stringKey + " of " + kind + " '" + toString(e.table) + "' is write-only";
         case PropertyAccessViolation::CannotWrite:
-            return "Property " + stringKey + " of table '" + toString(e.table) + "' is read-only";
+            return "Property " + stringKey + " of " + kind + " '" + toString(e.table) + "' is read-only";
         }
 
         LUAU_UNREACHABLE();
@@ -835,6 +834,11 @@ struct ErrorConverter
     std::string operator()(const UserDefinedTypeFunctionError& e) const
     {
         return e.message;
+    }
+
+    std::string operator()(const BuiltInTypeFunctionError& e) const
+    {
+        return toString(e.error);
     }
 
     std::string operator()(const ReservedIdentifier& e) const
@@ -1261,6 +1265,11 @@ bool ModuleHasCyclicDependency::operator==(const ModuleHasCyclicDependency& rhs)
     return cycle.size() == rhs.cycle.size() && std::equal(cycle.begin(), cycle.end(), rhs.cycle.begin());
 }
 
+bool CyclicModuleGraphTooLarge::operator==(const CyclicModuleGraphTooLarge& rhs) const
+{
+    return moduleCount == rhs.moduleCount;
+}
+
 bool IllegalRequire::operator==(const IllegalRequire& rhs) const
 {
     return moduleName == rhs.moduleName && reason == rhs.reason;
@@ -1376,6 +1385,11 @@ bool UnexpectedTypePackInSubtyping::operator==(const UnexpectedTypePackInSubtypi
 bool UserDefinedTypeFunctionError::operator==(const UserDefinedTypeFunctionError& rhs) const
 {
     return message == rhs.message;
+}
+
+bool BuiltInTypeFunctionError::operator==(const BuiltInTypeFunctionError& rhs) const
+{
+    return error == rhs.error;
 }
 
 bool ReservedIdentifier::operator==(const ReservedIdentifier& rhs) const
@@ -1567,6 +1581,9 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, ModuleHasCyclicDependency>)
     {
     }
+    else if constexpr (std::is_same_v<T, CyclicModuleGraphTooLarge>)
+    {
+    }
     else if constexpr (std::is_same_v<T, IllegalRequire>)
     {
     }
@@ -1647,6 +1664,9 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, UnexpectedTypePackInSubtyping>)
         e.tp = clone(e.tp);
     else if constexpr (std::is_same_v<T, UserDefinedTypeFunctionError>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, BuiltInTypeFunctionError>)
     {
     }
     else if constexpr (std::is_same_v<T, CannotAssignToNever>)

@@ -38,6 +38,9 @@ extern int optimizationLevel;
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_DYNAMIC_FASTFLAG(LuauCodegenTrackingMultilocationFix)
 LUAU_FASTFLAG(LuauCodegenDetailedCompilationResult)
+LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(LuauIntegerLibrary)
+LUAU_FASTFLAG(LuauYieldIter2)
 
 
 using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
@@ -154,14 +157,6 @@ static int lua_collectgarbage(lua_State* L)
     }
 }
 
-static int test_integer_call(lua_State *L)
-{
-    luaL_checkany(L, 1);
-    lua_settop(L, 1);
-    lua_pushunsigned(L, (unsigned int)LSLIType::LST_INTEGER);
-    return lsl_cast(L);
-}
-
 // Returns (array_size, hash_size) for a table - for testing table sizing behavior
 static int lua_table_sizes(lua_State* L)
 {
@@ -205,6 +200,10 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
 static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = nullptr, void (*setup)(lua_State* L) = nullptr,
     lua_State* initialLuaState = nullptr, lua_CompileOptions* options = nullptr, bool setupConstants = true)
 {
+    ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag luauIntegerLib{FFlag::LuauIntegerLibrary, true};
+    ScopedFastFlag luauYieldIter2{FFlag::LuauYieldIter2, true};
+
     luauSL_init_global_builtins(nullptr);
 
     std::string path = getSourceFilePath(name);
@@ -242,7 +241,6 @@ static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = n
     // Register a few global functions for conformance tests
     std::vector<luaL_Reg> funcs = {
         {"collectgarbage", lua_collectgarbage},
-        {"integer", test_integer_call},
     };
 
     // "null" terminate the list of functions to register

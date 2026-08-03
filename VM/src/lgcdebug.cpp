@@ -16,6 +16,8 @@
 #include <stdio.h>
 
 #include <unordered_set>
+LUAU_FASTFLAG(LuauCIProto)
+LUAU_FASTFLAG(LuauManagedDebugNames)
 
 static void validateobjref(global_State* g, GCObject* f, GCObject* t)
 {
@@ -174,6 +176,30 @@ static void validateproto(global_State* g, Proto* f)
             validateobjref(g, obj2gco(f), obj2gco(f->locvars[i].varname));
 }
 
+static void validateclass(global_State* g, LuauClass* lco)
+{
+    GCObject* obj = obj2gco(lco);
+    validateobjref(g, obj, obj2gco(lco->name));
+    validateobjref(g, obj, obj2gco(lco->memberstooffset));
+    for (uint32_t i = 0; i < lco->numberofallmembers; i++)
+    {
+        validateobjref(g, obj, obj2gco(lco->offsettomember[i]));
+        if (i >= lco->numberofinstancemembers)
+            validateref(g, obj, &lco->staticmembers[i - lco->numberofinstancemembers]);
+    }
+    validateobjref(g, obj, obj2gco(lco->metatable));
+    if (lco->instancemetatable)
+        validateobjref(g, obj, obj2gco(lco->instancemetatable));
+}
+
+static void validateobject(global_State* g, LuauObject* inst)
+{
+    GCObject* obj = obj2gco(inst);
+    validateobjref(g, obj, obj2gco(inst->lclass));
+    for (uint32_t i = 0; i < inst->numberofmembers; i++)
+        validateref(g, obj, &inst->members[i]);
+}
+
 static void validateobj(global_State* g, GCObject* o)
 {
     // dead objects can only occur during sweep
@@ -205,6 +231,9 @@ static void validateobj(global_State* g, GCObject* o)
         validatestack(g, gco2th(o));
         break;
 
+    case LUA_TVECTOR:
+        break;
+
     case LUA_TBUFFER:
         break;
 
@@ -214,6 +243,14 @@ static void validateobj(global_State* g, GCObject* o)
 
     case LUA_TUPVAL:
         validateref(g, o, gco2uv(o)->v);
+        break;
+
+    case LUA_TCLASS:
+        validateclass(g, gco2class(o));
+        break;
+
+    case LUA_TOBJECT:
+        validateobject(g, gco2object(o));
         break;
 
     default:
@@ -243,6 +280,12 @@ static void validategraylist(global_State* g, GCObject* o)
         case LUA_TTHREAD:
             o = gco2th(o)->gclist;
             break;
+        case LUA_TCLASS:
+            o = gco2class(o)->gclist;
+            break;
+        case LUA_TOBJECT:
+            o = gco2object(o)->gclist;
+            break;
         case LUA_TPROTO:
             o = gco2p(o)->gclist;
             break;
@@ -270,8 +313,26 @@ void luaC_validate(lua_State* L)
     checkliveness(g, &g->registry);
 
     for (int i = 0; i < LUA_T_COUNT; ++i)
+    {
         if (g->mt[i])
             LUAU_ASSERT(!isdead(g, obj2gco(g->mt[i])));
+    }
+
+    for (int i = 0; i < LUA_UTAG_LIMIT; i++)
+    {
+        if (g->udatamt[i])
+            LUAU_ASSERT(!isdead(g, obj2gco(g->udatamt[i])));
+    }
+
+    for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
+    {
+        checkliveness(g, &g->udatadirect[i].indextm);
+        checkliveness(g, &g->udatadirect[i].newindextm);
+        checkliveness(g, &g->udatadirect[i].namecalltm);
+
+        if (g->udatadirectfields[i])
+            LUAU_ASSERT(!isdead(g, obj2gco(g->udatadirectfields[i])));
+    }
 
     validategraylist(g, g->weak);
     validategraylist(g, g->gray);
@@ -393,8 +454,16 @@ static void dumpclosure(FILE* f, Closure* cl)
 
     if (cl->isC)
     {
-        if (cl->c.debugname)
-            fprintf(f, ",\"name\":\"%s\"", cl->c.debugname + 0);
+        if (FFlag::LuauManagedDebugNames)
+        {
+            if (TString* str = cl->c.debugname)
+                fprintf(f, ",\"name\":\"%s\"", getstr(str));
+        }
+        else
+        {
+            if (cl->c.debugname_DEPRECATED)
+                fprintf(f, ",\"name\":\"%s\"", cl->c.debugname_DEPRECATED + 0);
+        }
 
         if (cl->nupvalues)
         {
@@ -442,18 +511,21 @@ static void dumpthread(FILE* f, lua_State* th)
     dumpref(f, obj2gco(th->gt));
 
     Closure* tcl = 0;
+    Proto* cip = nullptr;
     for (CallInfo* ci = th->base_ci; ci <= th->ci; ++ci)
     {
         if (ttisfunction(ci->func))
         {
             tcl = clvalue(ci->func);
+            if (FFlag::LuauCIProto)
+                cip = ci->p;
             break;
         }
     }
 
-    if (tcl && !tcl->isC && tcl->l.p->source)
+    if (FFlag::LuauCIProto ? (cip != nullptr && cip->source) : (tcl && !tcl->isC && tcl->l.p->source))
     {
-        Proto* p = tcl->l.p;
+        Proto* p = FFlag::LuauCIProto ? cip : tcl->l.p;
 
         fprintf(f, ",\"source\":\"");
         dumpstringdata(f, p->source->data, p->source->len);
@@ -488,11 +560,14 @@ static void dumpthread(FILE* f, lua_State* th)
 
                 if (cl->isC)
                 {
-                    fprintf(f, "\"frame:%s\"", cl->c.debugname ? cl->c.debugname : "[C]");
+                    if (FFlag::LuauManagedDebugNames)
+                        fprintf(f, "\"frame:%s\"", cl->c.debugname ? getstr(cl->c.debugname) : "[C]");
+                    else
+                        fprintf(f, "\"frame:%s\"", cl->c.debugname_DEPRECATED ? cl->c.debugname_DEPRECATED : "[C]");
                 }
                 else
                 {
-                    Proto* p = cl->l.p;
+                    Proto* p = FFlag::LuauCIProto ? ci->p : cl->l.p;
                     fprintf(f, "\"frame:");
                     if (p->source)
                         dumpstringdata(f, p->source->data, p->source->len);
@@ -501,7 +576,7 @@ static void dumpthread(FILE* f, lua_State* th)
             }
             else if (isLua(ci))
             {
-                Proto* p = ci_func(ci)->l.p;
+                Proto* p = FFlag::LuauCIProto ? ci->p : ci_func(ci)->l.p;
                 int pc = pcRel(ci->savedpc, p);
                 const LocVar* var = luaF_findlocal(p, int(v - ci->base), pc);
 
@@ -572,6 +647,42 @@ static void dumpupval(FILE* f, UpVal* uv)
     fprintf(f, "}");
 }
 
+static void dumpclass(FILE* f, LuauClass* lco)
+{
+    fprintf(f, R"({"type":"class","cat":%d,"size":%d)", lco->memcat, int(sizeof(LuauClass)));
+    fprintf(f, R"(,"name":)");
+    dumpstringdata(f, lco->name->data, lco->name->len);
+    fprintf(f, R"(,"membernames":[)");
+    for (uint32_t i = 0; i < lco->numberofallmembers; i++)
+    {
+        if (i != 0)
+            fputc(',', f);
+        dumpref(f, (GCObject*)lco->offsettomember[i]);
+    }
+    fprintf(f, R"(],"staticmembers":[)");
+    dumprefs(f, lco->staticmembers, lco->numberofallmembers - lco->numberofinstancemembers);
+    fprintf(f, R"(],"metatable":)");
+    dumpref(f, obj2gco(lco->metatable));
+    fprintf(f, R"(,"instancemetatable":)");
+    if (lco->instancemetatable)
+        dumpref(f, obj2gco(lco->instancemetatable));
+    else
+        fprintf(f, "null");
+    fprintf(f, R"(,"memberstooffset":)");
+    dumpref(f, obj2gco(lco->memberstooffset));
+    fprintf(f, "}");
+}
+
+static void dumpobject(FILE* f, LuauObject* inst)
+{
+    fprintf(f, R"({"type":"object","cat":%d,"size":%d)", inst->memcat, int(sizeof(LuauObject)));
+    fprintf(f, R"(,"class":)");
+    dumpref(f, obj2gco(inst->lclass));
+    fprintf(f, R"(,"members":[)");
+    dumprefs(f, inst->members, inst->numberofmembers);
+    fprintf(f, "]}");
+}
+
 static void dumpsynthesized(FILE* f, GCObject *gco)
 {
     fprintf(f, "{\"type\":\"buffer\",\"cat\":%d,\"size\":%d}", gco->gch.memcat, 0);
@@ -588,6 +699,8 @@ static void dumpobj(FILE* f, GCObject* o, bool include_size)
         case LUA_TUSERDATA:
         case LUA_TTHREAD:
         case LUA_TBUFFER:
+        case LUA_TCLASS:
+        case LUA_TOBJECT:
         case LUA_TPROTO:
         case LUA_TUPVAL:
             dumpsynthesized(f, o);
@@ -615,8 +728,17 @@ static void dumpobj(FILE* f, GCObject* o, bool include_size)
     case LUA_TTHREAD:
         return dumpthread(f, gco2th(o));
 
+    case LUA_TVECTOR:
+        return; // vector data is outlined, but is a constant cost of a vector
+
     case LUA_TBUFFER:
         return dumpbuffer(f, gco2buf(o));
+
+    case LUA_TCLASS:
+        return dumpclass(f, gco2class(o));
+
+    case LUA_TOBJECT:
+        return dumpobject(f, gco2object(o));
 
     case LUA_TPROTO:
         return dumpproto(f, gco2p(o));
@@ -828,7 +950,10 @@ static void enumclosure(EnumContext* ctx, Closure* cl)
 {
     if (cl->isC)
     {
-        enumnode(ctx, obj2gco(cl), sizeCclosure(cl->nupvalues), cl->c.debugname);
+        if (FFlag::LuauManagedDebugNames)
+            enumnode(ctx, obj2gco(cl), sizeCclosure(cl->nupvalues), cl->c.debugname ? getstr(cl->c.debugname) : nullptr);
+        else
+            enumnode(ctx, obj2gco(cl), sizeCclosure(cl->nupvalues), cl->c.debugname_DEPRECATED);
     }
     else
     {
@@ -899,18 +1024,21 @@ static void enumthread(EnumContext* ctx, lua_State* th)
     size_t size = sizeof(lua_State) + sizeof(TValue) * th->stacksize + sizeof(CallInfo) * th->size_ci;
 
     Closure* tcl = NULL;
+    Proto* cip = NULL;
     for (CallInfo* ci = th->base_ci; ci <= th->ci; ++ci)
     {
         if (ttisfunction(ci->func))
         {
             tcl = clvalue(ci->func);
+            if (FFlag::LuauCIProto)
+                cip = ci->p;
             break;
         }
     }
 
-    if (tcl && !tcl->isC && tcl->l.p->source)
+    if (FFlag::LuauCIProto ? (cip && cip->source) : (tcl && !tcl->isC && tcl->l.p->source))
     {
-        Proto* p = tcl->l.p;
+        Proto* p = (FFlag::LuauCIProto ? cip : tcl->l.p);
 
         char buf[LUA_IDSIZE];
 
@@ -974,6 +1102,59 @@ static void enumupval(EnumContext* ctx, UpVal* uv)
         enumedge(ctx, obj2gco(uv), gcvalue(uv->v), "value");
 }
 
+static void enumclass(EnumContext* ctx, LuauClass* lco)
+{
+    char buf[LUA_IDSIZE];
+    GCObject* obj = obj2gco(lco);
+    snprintf(buf, sizeof(buf), "class object %s", getstr(lco->name));
+    // ServerLua: charge the side arrays too, matching the accounting in `propagatemark`
+    enumnode(ctx, obj, luaC_calclogicalgcosize(obj), buf);
+    enumedge(ctx, obj, obj2gco(lco->name), "classname");
+    enumedge(ctx, obj, obj2gco(lco->memberstooffset), "classoffsets");
+    uint32_t numberofstaticmembers = lco->numberofallmembers - lco->numberofinstancemembers;
+    for (uint32_t i = 0; i < numberofstaticmembers; i++)
+    {
+        // It's a bit strange that if we have a non-collectable static member,
+        // we'll just not note it as an edge.
+        if (!iscollectable(&lco->staticmembers[i]))
+            continue;
+
+        char membername[32];
+        snprintf(membername, sizeof(membername), "%s", getstr(lco->offsettomember[i + lco->numberofinstancemembers]));
+        enumedge(ctx, obj, gcvalue(&lco->staticmembers[i]), membername);
+    }
+    for (uint32_t i = 0; i < lco->numberofallmembers; i++)
+        enumedge(ctx, obj, obj2gco(lco->offsettomember[i]), "membername");
+    enumedge(ctx, obj, obj2gco(lco->metatable), "metatable");
+    // ServerLua: `traverseclass` marks this, so the graph has to report it
+    if (lco->instancemetatable)
+        enumedge(ctx, obj, obj2gco(lco->instancemetatable), "instancemetatable");
+}
+
+static void enumobject(EnumContext* ctx, LuauObject* inst)
+{
+    char buf[LUA_IDSIZE];
+    GCObject* obj = obj2gco(inst);
+    snprintf(buf, sizeof(buf), "object %s", getstr(inst->lclass->name));
+    enumnode(ctx, obj, luaC_calclogicalgcosize(obj), buf);
+    // ServerLua: `traverseobject` marks the class, so the graph has to report it
+    enumedge(ctx, obj, obj2gco(inst->lclass), "class");
+    // ServerLua: the instance owns this array and its count, so use those
+    // rather than reaching through the class - same as `traverseobject`,
+    // `validateobject` and `luaR_freeobject`.
+    for (uint32_t i = 0; i < inst->numberofmembers; i++)
+    {
+        // It's a bit strange that if we have a non-collectable static member,
+        // we'll just not note it as an edge.
+        if (!iscollectable(&inst->members[i]))
+            continue;
+
+        char membername[32];
+        snprintf(membername, sizeof(membername), "%s", getstr(inst->lclass->offsettomember[i]));
+        enumedge(ctx, obj, gcvalue(&inst->members[i]), membername);
+    }
+}
+
 static void enumobj(EnumContext* ctx, GCObject* o)
 {
     switch (o->gch.tt)
@@ -993,8 +1174,17 @@ static void enumobj(EnumContext* ctx, GCObject* o)
     case LUA_TTHREAD:
         return enumthread(ctx, gco2th(o));
 
+    case LUA_TVECTOR:
+        return enumnode(ctx, o, sizeof(LuauVector), NULL);
+
     case LUA_TBUFFER:
         return enumbuffer(ctx, gco2buf(o));
+
+    case LUA_TCLASS:
+        return enumclass(ctx, gco2class(o));
+
+    case LUA_TOBJECT:
+        return enumobject(ctx, gco2object(o));
 
     case LUA_TPROTO:
         return enumproto(ctx, gco2p(o));
