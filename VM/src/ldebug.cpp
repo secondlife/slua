@@ -60,12 +60,18 @@ int lua_getargument(lua_State* L, int level, int n)
         if (n <= fp->numparams)
         {
             luaC_threadbarrier(L);
+            // ServerLua: Needed for FFLag::LuauAutoStack, need to reserve before we deref stack elem!
+            lua_rawcheckstack(L, 1);
+
             luaA_pushvalue(L, ci->base + (n - 1));
             res = 1;
         }
         else if (fp->is_vararg && n < ci->base - ci->func)
         {
             luaC_threadbarrier(L);
+            // ServerLua: reserve before taking a stack pointer, as above
+            lua_rawcheckstack(L, 1);
+
             luaA_pushvalue(L, ci->func + n);
             res = 1;
         }
@@ -89,6 +95,9 @@ const char* lua_getlocal(lua_State* L, int level, int n)
     if (var)
     {
         luaC_threadbarrier(L);
+        // ServerLua: Needed for FFLag::LuauAutoStack, need to reserve before we deref!
+        lua_rawcheckstack(L, 1);
+
         luaA_pushvalue(L, ci->base + var->reg);
     }
     const char* name = var ? getstr(var->varname) : NULL;
