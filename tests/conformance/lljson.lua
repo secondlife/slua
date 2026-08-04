@@ -156,6 +156,9 @@ assert(lljson.slencode("!") == '"!!"')
 -- Normal strings are unchanged
 assert(lljson.slencode("normal") == '"normal"')
 
+assert(lljson.slencode(1i) == '"!i1"')
+assert(lljson.slencode({[1i]=1i}) == '{"!i1":"!i1"}')
+
 -- Tagged decoding of values
 assert(lljson.sldecode('"!v<1,2,3>"') == vector(1, 2, 3))
 assert(lljson.sldecode('"!q<1,2,3,4>"') == quaternion(1, 2, 3, 4))
@@ -599,6 +602,9 @@ assert(
     lljson.encode({[uuid("12345678-1234-1234-1234-123456789abc")]="hello" }) ==
     '{"12345678-1234-1234-1234-123456789abc":"hello"}'
 )
+
+-- Not allowed to use integers as table keys in untagged mode.
+assert(not pcall(lljson.encode, {[1i]=1}))
 
 -- Enable interrupt-driven yields for remaining tests.
 enable_check_interrupt()

@@ -327,6 +327,7 @@ static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
     switch(type) {
         case LUA_TNUMBER:
         case LUA_TSTRING:
+        case LUA_TINTEGER:
             str = lua_tolstring(l, lindex, &len);
             break;
         case LUA_TLIGHTUSERDATA:
@@ -602,6 +603,7 @@ static void json_append_coordinate_component(lua_State *l, strbuf_t *json, float
 // ZERO_VECTOR in tight mode -> "!v"
 static void json_append_tagged_vector(lua_State *l, strbuf_t *json, const float *a, bool tight = false) {
     strbuf_append_string(json, tight ? "\"!v" : "\"!v<");
+    // Note: even though this is smelly, it's intentional so we don't mishandle -0 and friends.
     if (tight && memcmp(a, DEFAULT_VECTOR, sizeof(DEFAULT_VECTOR)) == 0) {
         strbuf_append_char(json, '"');
         return;
@@ -747,6 +749,28 @@ static void json_append_tagged_float(lua_State *l, strbuf_t *json, double num, i
     strbuf_append_char(json, '"');
 }
 
+static void json_append_tagged_integer(lua_State *l, strbuf_t *json, int64_t num) {
+    strbuf_append_string(json, "\"!i");
+    char s[LUAI_MAXINT2STR];
+    char* e = luai_int2str(s, num);
+    strbuf_append_mem(json, s, e - s);
+    strbuf_append_char(json, '"');
+}
+
+static void json_append_integer(lua_State *l, json_config_t *cfg, strbuf_t *json, int lindex)
+{
+    int64_t val = luaL_checkinteger(l, lindex);
+    if (cfg->sl_tagged_types)
+        json_append_tagged_integer(l, json, val);
+    else
+    {
+        // Meh. We're not retaining type identity, so just push it out as a number.
+        char s[LUAI_MAXINT2STR];
+        char* e = luai_int2str(s, val);
+        strbuf_append_mem(json, s, e - s);
+    }
+}
+
 // Helper to append a string that may need ! escaping for SL tagged mode
 static void json_append_string_sl(lua_State *l, strbuf_t *json, int lindex) {
     size_t len;
@@ -859,6 +883,9 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
                     break;
                 case LUA_TNUMBER:
                     json_append_tagged_float(l, json, lua_tonumber(l, -2), JSON_NUMBER_PRECISION);
+                    break;
+                case LUA_TINTEGER:
+                    json_append_tagged_integer(l, json, luaL_checkinteger64(l, -2));
                     break;
                 case LUA_TVECTOR: {
                     const float* a = lua_tovector(l, -2);
@@ -989,9 +1016,10 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
             json_append_string(l, json, -1);
         break;
     case LUA_TNUMBER:
-    // TODO: make integer distinct.
-    case LUA_TINTEGER:
         json_append_number(l, cfg, json, -1);
+        break;
+    case LUA_TINTEGER:
+        json_append_integer(l, cfg, json, -1);
         break;
     case LUA_TBOOLEAN:
         if (lua_toboolean(l, -1))
@@ -1532,6 +1560,16 @@ static bool json_parse_tagged_string(lua_State *l, const char *str, size_t len)
         if (end == payload || *skip_ws(end) != '\0')
             luaL_error(l, "malformed tagged float: %s", str);
         lua_pushnumber(l, num);
+        return true;
+    }
+
+    case 'i': {
+        // Integer: !i0, !i-1, etc. 0xf00d is also okay.
+        int64_t result = 0;
+
+        if (!luaO_str2l(payload, &result))
+            luaL_error(l, "malformed tagged integer: %s", str);
+        lua_pushinteger64(l, result);
         return true;
     }
 
