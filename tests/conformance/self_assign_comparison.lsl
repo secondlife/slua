@@ -46,5 +46,15 @@ default {
         integer s = 0;
         s = 1 > s;
         checkTruth("local self-assign > (rhs)", s == 1);
+
+        // A list constructor builds the new list in the destination's own storage, so the
+        // destination must not be clobbered before the elements are evaluated.
+        list integers = [1,2,3];
+        integers = [llList2Integer(integers, 0)];
+        checkTruth("local list self-assign", llList2Integer(integers, 0) == 1);
+
+        list compared = ["test"];
+        compared = [compared != []];
+        checkTruth("local list self-assign !=", llList2Integer(compared, 0) == 1);
     }
 }

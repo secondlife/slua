@@ -307,6 +307,27 @@ bool LuauLValueMutationVisitor::visit(Tailslide::LSLBinaryExpression* bin_expr)
 }
 
 
+class LuauSymbolUseVisitor : public ASTVisitor
+{
+public:
+    explicit LuauSymbolUseVisitor(LSLSymbol *sym): mSym(sym) {};
+    bool visit(Tailslide::LSLLValueExpression *lvalue) override;
+
+    LSLSymbol *mSym;
+    bool mSeen = false;
+};
+
+bool LuauSymbolUseVisitor::visit(Tailslide::LSLLValueExpression* lvalue)
+{
+    // Note that we don't care whether this was a read or a write, either one
+    // means the symbol's storage is still in use by the expression.
+    if (lvalue->getSymbol() == mSym)
+        mSeen = true;
+
+    return true;
+}
+
+
 // Copied from Compiler.cpp, used for keeping track of the virtual stack in registers
 struct RegScope
 {
@@ -1200,8 +1221,30 @@ bool LuauVisitor::visit(LSLBinaryExpression* bin_expr)
             else
             {
                 source_reg = _mSymbolMap[lval_sym].index;
-                TargetRegScope target_reg_scope(this, source_reg);
-                rhs->visit(this);
+
+                // A list expression emits its `NEWTABLE` into the target register before
+                // it evaluates its elements, so building straight into the destination
+                // would hand those elements an already-emptied list. Only lists do that,
+                // everything else writes its target after evaluating its operands.
+                bool self_referencing = false;
+                if (lval_sym->getIType() == LST_LIST)
+                {
+                    LuauSymbolUseVisitor use_visitor {lval_sym};
+                    rhs->visit(&use_visitor);
+                    self_referencing = use_visitor.mSeen;
+                }
+
+                if (self_referencing)
+                {
+                    // Build in a temporary and only store once the right-hand side has
+                    // been fully evaluated, the same order Mono uses.
+                    maybeMove((int16_t)source_reg, evalExprToSourceReg(rhs));
+                }
+                else
+                {
+                    TargetRegScope target_reg_scope(this, source_reg);
+                    rhs->visit(this);
+                }
             }
         }
 
