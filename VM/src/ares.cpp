@@ -2545,9 +2545,11 @@ p_thread(Info *info) {                                          /* ... thread */
     WRITE_VALUE(eris_savestackidx(thread, ci->func), ares_size_t);
     WRITE_VALUE(eris_savestackidx(thread, ci->top), ares_size_t);
     WRITE_VALUE(eris_savestackidx(thread, ci->base), ares_size_t);
-    /* CallInfo.nresults is only set for actual functions */
+    /* CallInfo.nresults and CallInfo.flags are only set for actual functions.
+     * base_ci[0] is never set up by luau_precall, so reading them there would
+     * put uninitialised bytes on the wire. */
     WRITE_VALUE(ttisfunction(ci->func) ? ci->nresults : 0, int);
-    WRITE_VALUE(ci->flags, uint8_t);
+    WRITE_VALUE(ttisfunction(ci->func) ? ci->flags : 0, uint8_t);
 
     if (eris_isLua(ci)) {
       WRITE_VALUE(ERIS_CI_KIND_LUA, uint8_t);
