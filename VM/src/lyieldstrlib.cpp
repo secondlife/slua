@@ -375,6 +375,14 @@ struct MatchStateWire
     ImatchFrame backtrack[WIRE_MAXBACKTRACK];
 };
 
+static MatchStateWire* new_matchstate_wire(lua_State* L)
+{
+    auto* wire = (MatchStateWire*)lua_newuserdatatagged(L, sizeof(MatchStateWire), UTAG_OPAQUE_BUFFER);
+    // Ares serializes the whole allocation, including the regions we never write.
+    memset(wire, 0, sizeof(MatchStateWire));
+    return wire;
+}
+
 // Max chars processed per inner-loop batch before yielding back to the
 // scheduler.  Balances yield frequency against per-yield overhead.
 static constexpr int YIELD_BATCH_SIZE = 256;
@@ -977,7 +985,7 @@ static int str_find_match_body(lua_State* L, bool is_init, MatchMode match_mode)
 
             // Truncate: keep source + pattern, then create wire buffer
             lua_settop(L, ARG_PATTERN);
-            lua_newuserdatatagged(L, sizeof(MatchStateWire), UTAG_OPAQUE_BUFFER);  // wire at STACK_WIRE
+            new_matchstate_wire(L);  // wire at STACK_WIRE
         }
     }
 
@@ -1174,7 +1182,7 @@ int yieldable_gmatch(lua_State* L)
     luaL_checkstring(L, 2);
     lua_settop(L, 2);
     lua_pushinteger(L, 0);
-    lua_newuserdatatagged(L, sizeof(MatchStateWire), UTAG_OPAQUE_BUFFER);
+    new_matchstate_wire(L);
     lua_pushcclosurek(L, yieldable_gmatch_aux_v0, "gmatch_aux", 4, yieldable_gmatch_aux_v0_k);
     return 1;
 }
@@ -1256,7 +1264,7 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
 
         // Push yield-safe string buffer, then wire buffer
         luaYB_push(L);
-        lua_newuserdatatagged(L, sizeof(MatchStateWire), UTAG_OPAQUE_BUFFER);  // wire at STACK_WIRE
+        new_matchstate_wire(L);  // wire at STACK_WIRE
     }
 
     // Re-read string data (fresh pointers after potential yield/resume)
