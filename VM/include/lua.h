@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <exception>
 #include <istream>
 #include <ostream>
 #include <unordered_set>
@@ -22,6 +23,12 @@
 #define LUA_SL_IDENTIFIER_MASK 0xFFff0000
 #define LUA_LSL_IDENTIFIER 0xd34df007
 
+// ServerLua: what subclasses a lua_SLRuntimeState. A VM's non-script threads
+// (base state, forkservers) carry a bare runtime state. consult this before
+// downcasting threaddata to anything richer.
+#define LUA_SLSTATE_BARE 0
+#define LUA_SLSTATE_SCRIPT 1
+
 struct lua_State;
 
 typedef bool (*lua_eventHandlerRegistrationCallback)(lua_State *L, const char *event_name, bool registered);
@@ -33,11 +40,11 @@ typedef double (*lua_clockProvider)(lua_State *L);
 // _secure_ random values.
 typedef bool (*lua_randomProvider)(lua_State *L, uint8_t* dst, size_t len);
 
-// This is meant to be shared between instances of the same script and should
-// NOT have any instance-specific data on it!
+// Shared by every thread in one script instance's thread tree.
 typedef struct lua_SLRuntimeState
 {
     unsigned int slIdentifier = LUA_LSL_IDENTIFIER;
+    unsigned char slStateKind = LUA_SLSTATE_BARE;
     int uuidWeakTab = -1;
     int uuidCompressedWeakTab = -1;
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
@@ -624,6 +631,58 @@ LUA_API int lua_unref(lua_State* L, int ref);
 
 #define lua_pushfstring(L, fmt, ...) lua_pushfstringL(L, fmt, ##__VA_ARGS__)
 
+// ServerLua: lua_exception is effectively part of the API
+//  surface since it can escape C API calls in exception builds.
+//  Wish this were not the case, but it is so. Thus, we've
+//  moved it here so it can be matched on by library consumers.
+class lua_exception : public std::exception
+{
+public:
+    lua_exception(lua_State* L, int status)
+        : L(L)
+        , status(status)
+    {
+    }
+
+    const char* what() const throw() override
+    {
+        // LUA_ERRRUN passes error object on the stack
+        // ServerLua: LUA_ERRKILL also passes error object on the stack
+        if (status == LUA_ERRRUN || status == LUA_ERRKILL)
+            if (const char* str = lua_tostring(L, -1))
+                return str;
+
+        switch (status)
+        {
+        case LUA_ERRRUN:
+            return "lua_exception: runtime error";
+        case LUA_ERRSYNTAX:
+            return "lua_exception: syntax error";
+        case LUA_ERRMEM:
+            return "lua_exception: not enough memory";
+        case LUA_ERRERR:
+            return "lua_exception: error in error handling";
+        case LUA_ERRKILL: // ServerLua: Uncatchable termination error
+            return "lua_exception: script terminated";
+        default:
+            return "lua_exception: unexpected exception status";
+        }
+    }
+
+    int getStatus() const
+    {
+        return status;
+    }
+
+    const lua_State* getThread() const
+    {
+        return L;
+    }
+
+private:
+    lua_State* L;
+    int status;
+};
 
 /*
 ** =======================================================================
@@ -724,7 +783,10 @@ static void populateperms(lua_State *L, bool forUnpersist)
 
 LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
 
-LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat);
+// `threaddata`, when set, is stamped as the threaddata of every thread in the
+// unpersisted tree as it is created. Threads the tree spawns later at runtime
+// inherit it through the userthread callback.
+LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat, void *threaddata = nullptr);
 LUA_API int eris_serialize_thread(lua_State *Lforker, lua_State *L);
 LUA_API void eris_set_compile_func(void (*compile_func)(lua_State*, int));
 LUA_API void eris_dump(lua_State* L, std::ostream *writer);

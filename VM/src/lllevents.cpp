@@ -261,7 +261,7 @@ static int llevents_on(lua_State *L)
     {
         lua_pop(L, 1);
         // Okay, this is something that didn't have handlers before
-        auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+        auto *sl_state = LUAU_GET_SL_VM_STATE(L);
         if (sl_state->eventHandlerRegistrationCb != nullptr && !sl_state->eventHandlerRegistrationCb(L, event_name, true))
         {
             // Event handler check failed, let the user know
@@ -293,7 +293,7 @@ static int llevents_on(lua_State *L)
 
 static int llevents_off(lua_State *L)
 {
-    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+    auto *sl_state = LUAU_GET_SL_VM_STATE(L);
 
     auto *llevents = (const lua_LLEvents *)lua_touserdatatagged(L, 1, UTAG_LLEVENTS);
     if (!llevents)

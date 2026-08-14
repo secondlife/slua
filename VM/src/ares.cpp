@@ -323,6 +323,10 @@ typedef struct UnpersistInfo {
   size_t vector_components;
   uint32_t version;
   std::streamoff stream_size; // -1 if unknown (non-seekable stream)
+  /* When set, stamped as the threaddata of every thread of the unpersisted
+   * tree; threads the tree spawns later inherit it through the userthread
+   * callback. */
+  void *threaddata;
 } UnpersistInfo;
 
 /* Info shared in persist and unpersist. */
@@ -2684,6 +2688,9 @@ u_thread(Info *info) {                                                 /* ... */
 
   eris_checkstack(info->L, 3);
   thread = lua_newthread(info->L);                              /* ... thread */
+  if (info->u.upi.threaddata != NULL) {
+    lua_setthreaddata(thread, info->u.upi.threaddata);
+  }
   registerobject(info);
 
   // The created thread's globals table is currently shared with info->L, which
@@ -3698,7 +3705,7 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
 }
 
 static void
-unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
+unchecked_unpersist(lua_State *L, std::istream *reader, void *threaddata) {/* perms str? */
   // pause GC for the duration of deserialization - some objects we're creating aren't rooted
   // Also prevents beforeallocate callbacks from being invoked during setup
   ScopedDisableGC _disable_gc(L);
@@ -3712,6 +3719,7 @@ unchecked_unpersist(lua_State *L, std::istream *reader) {/* perms str? */
   info.generatePath = kGeneratePath;
   info.persisting = false;
   info.u.upi.reader = reader;
+  info.u.upi.threaddata = threaddata;
 
   // Determine stream size for validation, -1 if non-seekable
   std::streampos cur = reader->tellg();
@@ -3837,9 +3845,15 @@ l_unpersist(lua_State *L) {                               /* perms? str? ...? */
   const char *buff = luaL_checklstring(L, 2, &buff_len);
   std::istringstream reader(std::string(buff, buff_len));
   reader.seekg(0);
+
+  /* Optional threaddata for the unpersisted thread tree, passed as a light
+   * userdata by eris_fork_thread; not reachable from scripts since the eris
+   * library is never exposed to them. Only an untagged light userdata is a
+   * pointer here (tagged ones are values, e.g. LSL-mode integers). */
+  void *threaddata = lua_tolightuserdatatagged(L, 3, 0);
   lua_settop(L, 2);                                              /* perms str */
 
-  unchecked_unpersist(L, &reader);                       /* perms str rootobj */
+  unchecked_unpersist(L, &reader, threaddata);           /* perms str rootobj */
 
   return 1;
 }
@@ -3940,7 +3954,7 @@ eris_undump(lua_State *L, std::istream *reader) {                   /* perms? */
     luaL_error(L, "too many arguments");
   }
   luaL_checktype(L, 1, LUA_TTABLE);                                  /* perms */
-  unchecked_unpersist(L, reader);                            /* perms rootobj */
+  unchecked_unpersist(L, reader, NULL);                      /* perms rootobj */
 }
 
 /** ======================================================================== */
@@ -3957,14 +3971,15 @@ eris_persist(lua_State *L, int perms, int value) {                    /* ...? */
 }
 
 LUA_API int
-eris_unpersist(lua_State *L, int perms, int value) {                   /* ... */
+eris_unpersist(lua_State *L, int perms, int value, void *threaddata) {  /* ... */
   perms = lua_absindex(L, perms);
   value = lua_absindex(L, value);
-  eris_checkstack(L, 3);
+  eris_checkstack(L, 4);
   lua_pushcfunction(L, l_unpersist, "l_unpersist");
   lua_pushvalue(L, perms);                           /* ... l_unpersist perms */
   lua_pushvalue(L, value);                       /* ... l_unpersist perms str */
-  return lua_pcall(L, 2, 1, 0);
+  lua_pushlightuserdata(L, threaddata); /* ... l_unpersist perms str threaddata */
+  return lua_pcall(L, 3, 1, 0);
 }
 
 LUA_API void
@@ -4115,7 +4130,7 @@ eris_make_forkserver(lua_State *L) {
 }
 
 LUA_API lua_State*
-eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat) {
+eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat, void *threaddata) {
                                                /* Lforker: state default_ser? */
   eris_assert(lua_getmemcat(Lforker) == 0);
   lua_State *GL = lua_mainthread(Lforker);
@@ -4136,7 +4151,9 @@ eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat) {
   // Make sure any objects we create during deserialization are created with the desired memcat
   lua_setmemcat(Lforker, memcat);
 
-  int status = eris_unpersist(Lforker, -1, -2); /* Lforker: state serialized uperms new_th */
+  // `threaddata` rides along on the unpersist info and is stamped onto every
+  // thread of the unpersisted tree as it is created (u_thread).
+  int status = eris_unpersist(Lforker, -1, -2, threaddata); /* Lforker: state serialized uperms new_th */
 
   // Done, set the memcat back to the main one.
   lua_setmemcat(Lforker, 0);

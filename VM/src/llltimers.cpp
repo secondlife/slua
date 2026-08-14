@@ -115,7 +115,7 @@ int luaSL_createtimermanager(lua_State *L)
 
 static int lltimers_on(lua_State *L)
 {
-    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+    auto *sl_state = LUAU_GET_SL_VM_STATE(L);
 
     auto *lltimers = (lua_LLTimers *)lua_touserdatatagged(L, 1, UTAG_LLTIMERS);
     if (!lltimers)
@@ -171,7 +171,7 @@ static int lltimers_on(lua_State *L)
 
 static int lltimers_once(lua_State *L)
 {
-    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+    auto *sl_state = LUAU_GET_SL_VM_STATE(L);
 
     auto *lltimers = (lua_LLTimers *)lua_touserdatatagged(L, 1, UTAG_LLTIMERS);
     if (!lltimers)
@@ -382,7 +382,7 @@ static void unregister_timer_wrapper(lua_State *L, lua_LLTimers *lltimers)
 // Accepts LLTimers userdata as parameter and manages its own stack
 static void schedule_next_tick(lua_State *L, lua_LLTimers *lltimers)
 {
-    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+    auto *sl_state = LUAU_GET_SL_VM_STATE(L);
 
     if (!sl_state->setTimerEventCb)
         return; // No callback set, can't schedule
@@ -509,7 +509,7 @@ DEFINE_YIELDABLE(lltimers_tick, 0)
         LUAU_ASSERT(lua_gettop(L) == HANDLER_FUNC);
     }
 
-    auto *sl_state = LUAU_GET_SL_VM_STATE(lua_mainthread(L));
+    auto *sl_state = LUAU_GET_SL_VM_STATE(L);
     lua_checkstack(L, 10);
 
     YIELD_DISPATCH_BEGIN(phase, slots);

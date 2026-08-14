@@ -52,6 +52,11 @@ CJSON_OBJECTS=$(CJSON_SOURCES:%=$(BUILD)/%.o)
 APR_SOURCES=$(wildcard VM/src/apr/*.cpp)
 APR_OBJECTS=$(APR_SOURCES:%=$(BUILD)/%.o)
 
+# ServerLua: per-script execution engine
+EXECUTOR_SOURCES=$(wildcard Executor/src/*.cpp)
+EXECUTOR_OBJECTS=$(EXECUTOR_SOURCES:%=$(BUILD)/%.o)
+EXECUTOR_TARGET=$(BUILD)/libluauexecutor.a
+
 REQUIRE_SOURCES=$(wildcard Require/src/*.cpp)
 REQUIRE_OBJECTS=$(REQUIRE_SOURCES:%=$(BUILD)/%.o)
 REQUIRE_TARGET=$(BUILD)/libluaurequire.a
@@ -101,7 +106,7 @@ ifneq ($(opt),)
 	TESTS_ARGS+=-O$(opt)
 endif
 
-OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
+OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(EXECUTOR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
 EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-tests
 
 # `LUAU_CONFORMANCE_SOURCE_DIR` is configured at build time
@@ -184,11 +189,12 @@ $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IBytecode/include -ICompiler/include -IVM/include
 $(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -IVM/include -IVM/src # Code generation needs VM internals
 $(VM_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -Istage/packages/include -I VM/cjson
+$(EXECUTOR_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IExecutor/include -IVM/include -IVM/src
 $(APR_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include
 $(CJSON_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IRequire/include -ICLI/include -Iextern -ILSLBuiltins/include -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IExecutor/include -IRequire/include -ICLI/include -Iextern -ILSLBuiltins/include -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
 $(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include -ILSLBuiltins/include -Istage/packages/include
 $(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include -I$(BUILD)
@@ -278,7 +284,7 @@ slua-tests: $(TESTS_TARGET) $(TEST_LINK_VM_TARGET) $(TEST_LINK_CODEGEN_TARGET)
 	ln -fs $(TESTS_TARGET) $@
 
 # executable targets
-$(TESTS_TARGET): $(TESTS_OBJECTS) $(ANALYSIS_TARGET) $(COMPILER_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
+$(TESTS_TARGET): $(TESTS_OBJECTS) $(ANALYSIS_TARGET) $(COMPILER_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(EXECUTOR_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
 $(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(COMMON_TARGET)
 $(ANALYZE_CLI_TARGET): $(ANALYZE_CLI_OBJECTS) $(ANALYSIS_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(COMMON_TARGET)
 $(COMPILE_CLI_TARGET): $(COMPILE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
@@ -314,10 +320,11 @@ $(CONFIG_TARGET): $(CONFIG_OBJECTS)
 $(ANALYSIS_TARGET): $(ANALYSIS_OBJECTS)
 $(CODEGEN_TARGET): $(CODEGEN_OBJECTS)
 $(VM_TARGET): $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
+$(EXECUTOR_TARGET): $(EXECUTOR_OBJECTS)
 $(REQUIRE_TARGET): $(REQUIRE_OBJECTS)
 $(ISOCLINE_TARGET): $(ISOCLINE_OBJECTS)
 
-$(COMMON_TARGET) $(AST_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
+$(COMMON_TARGET) $(AST_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(EXECUTOR_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
 	ar rcs $@ $^
 
 # generated header for embedded builtins

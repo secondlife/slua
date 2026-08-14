@@ -74,54 +74,7 @@ l_noret luaD_throw(lua_State* L, int errcode)
     abort();
 }
 #else
-class lua_exception : public std::exception
-{
-public:
-    lua_exception(lua_State* L, int status)
-        : L(L)
-        , status(status)
-    {
-    }
-
-    const char* what() const throw() override
-    {
-        // LUA_ERRRUN passes error object on the stack
-        // ServerLua: LUA_ERRKILL also passes error object on the stack
-        if (status == LUA_ERRRUN || status == LUA_ERRKILL)
-            if (const char* str = lua_tostring(L, -1))
-                return str;
-
-        switch (status)
-        {
-        case LUA_ERRRUN:
-            return "lua_exception: runtime error";
-        case LUA_ERRSYNTAX:
-            return "lua_exception: syntax error";
-        case LUA_ERRMEM:
-            return "lua_exception: " LUA_MEMERRMSG;
-        case LUA_ERRERR:
-            return "lua_exception: " LUA_ERRERRMSG;
-        case LUA_ERRKILL: // ServerLua: Uncatchable termination error
-            return "lua_exception: script terminated";
-        default:
-            return "lua_exception: unexpected exception status";
-        }
-    }
-
-    int getStatus() const
-    {
-        return status;
-    }
-
-    const lua_State* getThread() const
-    {
-        return L;
-    }
-
-private:
-    lua_State* L;
-    int status;
-};
+// ServerLua: lua_exception is declared in lua.h. See note there.
 
 int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 {
