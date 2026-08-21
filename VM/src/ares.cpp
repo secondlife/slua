@@ -370,9 +370,9 @@ static char const kHeader[] = { 'A', 'R', 'E', 'S' };
 static const lua_Number kHeaderNumber = (lua_Number)-1.234567890;
 
 /* Version number for the file format. */
-static const uint32_t kCurrentVersion = 4;
+static const uint32_t kCurrentVersion = 5;
 /* Oldest version we can still read. */
-static const uint32_t kMinSupportedVersion = 4;
+static const uint32_t kMinSupportedVersion = 5;
 
 
 // The wire-tag equivalent of iscollectable(). ARES_T_PROTO and ARES_T_UPVAL are
@@ -2542,6 +2542,11 @@ p_thread(Info *info) {                                          /* ... thread */
   // I'd like to use end_ci here but it looks like it's actually the end of the vector,
   // and not the ci just past the end of the last CI.
   int num_cis = (int)((thread->ci + 1) - thread->base_ci);
+  // Capacity first and then the used portion, mirroring how the stack is
+  // written above. The capacity has to survive the round trip on its own: the
+  // VM assumes it never drops below BASIC_CI_SIZE, and lua_resetthread shrinks
+  // to that rather than growing back up to it.
+  WRITE_VALUE(thread->size_ci, int);
   WRITE_VALUE(num_cis, int);
   for (int i=0; i < num_cis; ++i) {
     pushpath(info, "[%d]", level++);
@@ -2707,7 +2712,10 @@ u_thread(Info *info) {                                                 /* ... */
    * luaD_reallocstack expects the usable size (without EXTRA_STACK) and adds it back. */
   uint32_t stack_size = READ_VALUE(uint32_t);
   ares_size_t total = READ_VALUE(ares_size_t);
-  if (stack_size < LUA_MINSTACK + EXTRA_STACK || stack_size > kMaxStackSize) {
+  // lua_resetthread parks base_ci->top at LUA_MINSTACK past the bottom of the
+  // stack, so anything under a fresh thread's size would put it past
+  // stack_last. No live thread is ever smaller than this anyway.
+  if (stack_size < BASIC_STACK_SIZE + EXTRA_STACK || stack_size > kMaxStackSize) {
     eris_error(info, "malformed data: invalid stack size");
   }
   if (stack_size < total + EXTRA_STACK) {
@@ -2774,13 +2782,22 @@ u_thread(Info *info) {                                                 /* ... */
   pushpath(info, ".callinfo");
   UNLOCK(thread);
 
+  uint32_t size_ci = READ_VALUE(uint32_t);
   uint32_t num_cis = READ_VALUE(uint32_t);
   if (num_cis < 1 || num_cis > LUAI_MAXCALLS) {
     eris_error(info, "malformed data: invalid call info count");
   }
+  // luaD_growCI's hard limit is the largest capacity the VM can hand out, and
+  // nothing below BASIC_CI_SIZE is a shape a live thread can be in. This is
+  // also what bounds the allocation below, which VALIDATE_SIZE cannot cover
+  // because the capacity has no bytes of its own in the stream.
+  if (size_ci < num_cis || size_ci < BASIC_CI_SIZE ||
+      size_ci > (uint32_t)(LUAI_MAXCALLS + (LUAI_MAXCALLS >> 3))) {
+    eris_error(info, "malformed data: invalid call info capacity");
+  }
   // conservative: each CI needs at least a few bytes
   VALIDATE_SIZE(num_cis * 8);
-  luaD_reallocCI(thread, (int)num_cis);
+  luaD_reallocCI(thread, (int)size_ci);
   thread->ci = thread->base_ci;
   level = 0;
   for (uint32_t ci_idx=0; ci_idx<num_cis; ++ci_idx) {

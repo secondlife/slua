@@ -13,6 +13,10 @@
 #include "doctest.h"
 #include "ScopedFlags.h"
 
+// For the handler thread's stack and CallInfo capacities, which the API surface
+// has no reason to expose
+#include "../VM/src/lstate.h"
+
 #ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
 #endif
@@ -61,6 +65,9 @@ struct TestProvisioner : Provisioner<>
     {
         lua_pushcfunction(L, capture_print, "capture_print");
         lua_setglobal(L, "print");
+
+        lua_pushcfunction(L, lua_break, "preempt");
+        lua_setglobal(L, "preempt");
     }
 
     static double quanta_clock(lua_State* L)
@@ -305,6 +312,12 @@ static void tickTimers(TestScript& ts, double script_time)
         resumeToCompletion(ts.exec, 1.0);
     else
         REQUIRE(result.status == HandlerRunStatus::Ok);
+}
+
+// The persistent handler thread, which lives at position 1 on the instance
+static lua_State* handlerThread(Script& script)
+{
+    return lua_tothread(script.getInstanceState(), 1);
 }
 
 // Reads an integer global off a script's instance
@@ -1253,6 +1266,31 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor out of memory during event dispatch")
         CHECK(ts.host.printed.empty());
     }
 
+    SUBCASE("handler teardown after a restore with no memory left")
+    {
+        // Tearing the handler thread down resets it, and that reset runs
+        // between handlers with no protected frame around it. A restored
+        // thread must not need an allocation to get back to the reset state.
+        std::string bytecode = Luau::compile(R"(
+            held = buffer.create(1024 * 100)
+            LLEvents:on("touch_start", function() print("HANDLER RAN") end)
+        )");
+        TestScript first(bytecode);
+        first.start();
+
+        std::string payload = serialize(first.exec);
+
+        TestScript ts(bytecode);
+        restore(ts.exec, payload);
+        Script& exec = ts.exec;
+        REQUIRE(exec.getUsedMemory() > 1024 * 100);
+
+        exec.setMemoryLimitUnsafe(exec.getUsedMemory() + 128);
+        dispatch(exec, "touch_start", HandlerRunStatus::Fault);
+        CHECK(exec.getFaultKind() == FaultKind::OutOfMemory);
+        CHECK(ts.host.printed.empty());
+    }
+
     SUBCASE("oversized argument push faults gracefully")
     {
         TestScript ts(R"(
@@ -1449,6 +1487,76 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit survives a round trip")
     REQUIRE(second.exec.getMemoryLimit() == kDefaultMemoryLimit);
     restore(second.exec, payload);
     CHECK(second.exec.getMemoryLimit() == kLoweredLimit);
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round trip")
+{
+    // Make sure we don't muck up CallInfo arrays with our serialization.
+    std::string bytecode = Luau::compile(R"(
+        function LLEvents.moving_start()
+            local function deep(n)
+                if n > 0 then
+                    -- not a tail call, so the frame stays live underneath
+                    deep(n - 1)
+                end
+            end
+            -- Grow the CallInfo array well past BASIC_CI_SIZE, then unwind, so
+            -- the capacity outruns the used portion by a wide margin
+            deep(60)
+            preempt()
+        end
+    )");
+
+    SUBCASE("serialized idle between handlers")
+    {
+        TestScript first(bytecode);
+        first.start();
+
+        lua_State* donor = handlerThread(first.exec);
+        REQUIRE(lua_isthreadreset(donor));
+        REQUIRE(donor->size_ci == BASIC_CI_SIZE);
+        REQUIRE(donor->stacksize == BASIC_STACK_SIZE + EXTRA_STACK);
+
+        std::string payload = serialize(first.exec);
+
+        TestScript second(bytecode);
+        restore(second.exec, payload);
+
+        lua_State* restored = handlerThread(second.exec);
+        CHECK(restored->size_ci == BASIC_CI_SIZE);
+        CHECK(restored->stacksize == BASIC_STACK_SIZE + EXTRA_STACK);
+    }
+
+    SUBCASE("serialized while preempted mid-handler")
+    {
+        TestScript first(bytecode);
+        first.start();
+
+        dispatch(first.exec, "moving_start", HandlerRunStatus::Preempted);
+
+        lua_State* donor = handlerThread(first.exec);
+        const int size_ci = donor->size_ci;
+        const int stacksize = donor->stacksize;
+        const int used_ci = (int)(donor->ci - donor->base_ci) + 1;
+        CAPTURE(size_ci);
+        CAPTURE(used_ci);
+
+        // This should _always_ be true, we always need one CI slot free as well.
+        REQUIRE(size_ci > BASIC_CI_SIZE);
+        REQUIRE(size_ci > used_ci);
+
+        std::string payload = serialize(first.exec);
+
+        TestScript second(bytecode);
+        restore(second.exec, payload);
+
+        lua_State* restored = handlerThread(second.exec);
+        CHECK(restored->size_ci == size_ci);
+        CHECK(restored->stacksize == stacksize);
+
+        // ...and the restored handler still runs to completion
+        resumeToCompletion(second.exec, 1.0);
+    }
 }
 
 // A Script carrying durable state of its own, standing in for a host's
