@@ -85,9 +85,12 @@ LUA_API int eris_persist(lua_State* L, int perms, int value);
  * containing persisted data at the specified index 'value'. It will push the
  * resulting value onto the stack on success.
  *
+ * `threaddata`, when set, is stamped as the threaddata of every thread
+ * created while unpersisting.
+ *
  * [-0, +1, e]
  */
-LUA_API int eris_unpersist(lua_State* L, int perms, int value);
+LUA_API int eris_unpersist(lua_State* L, int perms, int value, void *threaddata = nullptr);
 
 /**
  * Pushes the current value of a setting onto the stack.
@@ -129,7 +132,7 @@ LUA_API void eris_set_setting(lua_State *L, const char *name, int value);
 
 LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
 
-LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat);
+LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat, void *threaddata);
 LUA_API int eris_serialize_thread(lua_State *Lforker, lua_State *L);
 LUA_API void eris_set_compile_func(void (*compile_func)(lua_State*, int));
 

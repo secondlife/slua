@@ -491,6 +491,17 @@ target_sources(Luau.VM PRIVATE
     VM/src/apr/apr_base64.h
 )
 
+# ServerLua: Luau.Executor Sources
+target_sources(Luau.Executor PRIVATE
+    Executor/include/Luau/ByteStream.h
+    Executor/include/Luau/Executor.h
+    Executor/include/Luau/Script.h
+
+    Executor/src/Executor.cpp
+    Executor/src/Logging.cpp
+    Executor/src/Script.cpp
+)
+
 target_sources(isocline PRIVATE
     extern/isocline/include/isocline.h
     extern/isocline/src/isocline.c
@@ -668,6 +679,7 @@ if(TARGET Luau.Conformance)
         tests/IrLowering.test.cpp
         tests/SharedCodeAllocator.test.cpp
         tests/SLConformance.test.cpp
+        tests/SLExecutor.test.cpp
         tests/main.cpp)
 
     if (LUAU_USE_TAILSLIDE)
