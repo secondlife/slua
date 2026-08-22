@@ -176,6 +176,12 @@ void lua_resetthread(lua_State* L)
     ci->top = ci->base + LUA_MINSTACK;
     setnilvalue(ci->func);
     L->ci = ci;
+    // ServerLua: Only hardstacktests (or an Ares payload written under it)
+    // can put a thread below the basic sizes.
+#if !defined(HARDSTACKTESTS) || !HARDSTACKTESTS
+    LUAU_ASSERT(L->size_ci >= BASIC_CI_SIZE);
+    LUAU_ASSERT(L->stacksize >= BASIC_STACK_SIZE + EXTRA_STACK);
+#endif
     // ServerLua: Shrink-only, growing memory usage isn't safe here.
     if (L->size_ci > BASIC_CI_SIZE)
         luaD_reallocCI(L, BASIC_CI_SIZE);
@@ -185,7 +191,8 @@ void lua_resetthread(lua_State* L)
     L->top = L->ci->base;
     L->nCcalls = L->baseCcalls = 0;
     // clear thread stack
-    if (L->stacksize != BASIC_STACK_SIZE + EXTRA_STACK)
+    // ServerLua: Shrink-only, growing memory usage isn't safe here.
+    if (L->stacksize > BASIC_STACK_SIZE + EXTRA_STACK)
         luaD_reallocstack(L, BASIC_STACK_SIZE, 0);
     for (int i = 0; i < L->stacksize; i++)
         setnilvalue(L->stack + i);

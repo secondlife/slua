@@ -2673,6 +2673,20 @@ p_thread(Info *info) {                                          /* ... thread */
     (stackpos) = thread->stack; \
     eris_error(info, ERIS_ERR_STACKBOUNDS); }
 
+/* Reads a serialized stack index and resolves it against `thread`'s stack,
+ * refusing anything outside [stack, inclmax] before the pointer arithmetic
+ * can overflow. Parks a safe value in `dest` first: eris_error unwinds
+ * mid-parse and the GC still walks the frame. */
+static void
+u_stackidx(Info *info, lua_State *thread, StkId *dest, StkId inclmax) {
+  *dest = thread->stack;
+  ares_size_t idx = READ_VALUE(ares_size_t);
+  if (idx > (ares_size_t)(inclmax - thread->stack)) {
+    eris_error(info, ERIS_ERR_STACKBOUNDS);
+  }
+  *dest = eris_restorestackidx(thread, (size_t)idx);
+}
+
 /* I had so hoped to get by without any 'hacks', but I surrender. We mark the
  * thread as incomplete to avoid the GC messing with it while we're building
  * it. Otherwise it may try to shrink its stack. We do this by setting its
@@ -2808,12 +2822,9 @@ u_thread(Info *info) {                                                 /* ... */
     if (ci_idx)
         incr_ci(thread);
 
-    thread->ci->func = eris_restorestackidx(thread, (size_t)READ_VALUE(ares_size_t));
-    validate(thread->ci->func, thread->top - 1);
-    thread->ci->top = eris_restorestackidx(thread, (size_t)READ_VALUE(ares_size_t));
-    validate(thread->ci->top, thread->stack_last);
-    thread->ci->base = eris_restorestackidx(thread, (size_t)READ_VALUE(ares_size_t));
-    validate(thread->ci->base, thread->top);
+    u_stackidx(info, thread, &thread->ci->func, thread->top - 1);
+    u_stackidx(info, thread, &thread->ci->top, thread->stack_last);
+    u_stackidx(info, thread, &thread->ci->base, thread->top);
     thread->ci->nresults = READ_VALUE(int32_t);
     thread->ci->flags = READ_VALUE(uint8_t);
     // We'll set these later if relevant for the CI type.
@@ -2878,8 +2889,11 @@ u_thread(Info *info) {                                                 /* ... */
       // resume_handle() resolves this as ci->base + (errfunc - 1).
       int errfunc = READ_VALUE(int32_t);
       if (errfunc != 0) {
+        // Bounds-check the index before the pointer arithmetic can overflow
+        if (errfunc < 1 || errfunc > (int)(thread->top - thread->ci->base) + 1) {
+          eris_error(info, ERIS_ERR_STACKBOUNDS);
+        }
         StkId ef = thread->ci->base + (errfunc - 1);
-        validate(ef, thread->top);
         if (!ttisfunction(ef)) {
           eris_error(info, ERIS_ERR_THREADERRF);
         }
@@ -2945,8 +2959,11 @@ u_thread(Info *info) {                                                 /* ... */
     LOCK(thread);
     pushpath(info, "[%d]", level);
     UNLOCK(thread);
+    // Bounds-check the index before the pointer arithmetic can overflow
+    if (offset > (size_t)(thread->top - thread->stack)) {
+      eris_error(info, ERIS_ERR_STACKBOUNDS);
+    }
     stk = eris_restorestackidx(thread, offset - 1);
-    validate(stk, thread->top - 1);
     LOCK(thread);
     unpersist(info);                                        /* ... thread tbl */
     UNLOCK(thread);
