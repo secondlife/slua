@@ -1334,6 +1334,10 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor unserializable global is refused with
     CHECK_FALSE(first.exec.serializeState(payload));
 }
 
+// Size of the payload a `counter = 1` script serializes to. Update it when the
+// wire format moves; a change nobody meant to make is the thing worth catching.
+constexpr size_t kExpectedDonorPayloadSize = 514;
+
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
 {
     std::string bytecode = Luau::compile(R"(
@@ -1346,6 +1350,12 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
     SUBCASE("corrupt payload is refused without exploding")
     {
         REQUIRE(payload.size() > 16);
+
+        // The offsets below only land on a field the reader parses against as
+        // long as the payload keeps its shape, so pin the size: a change - from
+        // the wire format moving, or from a build laying it out differently -
+        // shows up here as a number to update deliberately.
+        CHECK(payload.size() == kExpectedDonorPayloadSize);
 
         // Corrupt the Ares data inside an otherwise well-formed payload, so the
         // header parses and the failure comes out of the fork. The flavor stamp
