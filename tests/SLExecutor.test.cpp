@@ -1360,26 +1360,42 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
     {
         REQUIRE(payload.size() > 16);
 
-        // The offsets below only land on a field the reader parses against as
-        // long as the payload keeps its shape, so pin the size: a change - from
-        // the wire format moving, or from a build laying it out differently -
-        // shows up here as a number to update deliberately.
+        // Purely a canary: a size change means the wire format moved, or a
+        // build laid the payload out differently, and should show up as a
+        // number someone updates deliberately.
         CHECK(payload.size() == kExpectedDonorPayloadSize);
 
-        // Corrupt the Ares data inside an otherwise well-formed payload, so the
-        // header parses and the failure comes out of the fork. The flavor stamp
-        // is the last five bytes, so stay clear of it or the envelope rejects
-        // the payload before the fork is ever reached.
-        std::string corrupt_ares = payload;
-        corrupt_ares[corrupt_ares.size() - 6] ^= 0xFF;
-        corrupt_ares[corrupt_ares.size() / 2] ^= 0xFF;
+        // Flip every byte in turn. Which offsets get refused depends on the
+        // wire layout, but the invariants don't: corruption either restores to
+        // a state coherent enough to serialize, or is refused cleanly, leaving
+        // the script faulted with nothing to serialize.
+        size_t refused = 0;
+        auto scratch = std::make_unique<TestScript>(bytecode);
+        for (size_t offset = 0; offset < payload.size(); ++offset)
+        {
+            CAPTURE(offset);
+            std::string corrupt = payload;
+            corrupt[offset] ^= 0xFF;
 
-        CHECK_FALSE(second.exec.restoreState(corrupt_ares.data(), corrupt_ares.size()));
-        CHECK(second.exec.getFaultKind() != FaultKind::None);
+            std::string after;
+            if (scratch->exec.restoreState(corrupt.data(), corrupt.size()))
+            {
+                CHECK(scratch->exec.serializeState(after));
+                // A successful restore leaves a live instance, and restoring
+                // over one is refused, so start over
+                scratch = std::make_unique<TestScript>(bytecode);
+            }
+            else
+            {
+                ++refused;
+                CHECK(scratch->exec.getFaultKind() != FaultKind::None);
+                CHECK_FALSE(scratch->exec.serializeState(after));
+            }
+        }
 
-        // Serializing afterwards must not explode; it just reports failure
-        std::string after;
-        CHECK_FALSE(second.exec.serializeState(after));
+        // Most of a payload this small is structure rather than free-form
+        // data, so refusals shouldn't be rare
+        CHECK(refused > payload.size() / 4);
     }
 
     SUBCASE("malformed payloads are rejected before anything is torn down")

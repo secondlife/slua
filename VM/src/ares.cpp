@@ -345,7 +345,7 @@ typedef struct Info {
   } u;
 } Info;
 
-typedef enum eris_CIKind {
+typedef enum eris_CIKind : uint8_t {
     ERIS_CI_KIND_NONE = 0,
     ERIS_CI_KIND_LUA = 1,
     ERIS_CI_KIND_C = 2,
@@ -996,7 +996,12 @@ static ares_size_t
 read_ares_size_t(Info *info) {
   ares_size_t value;
   if (info->u.upi.sizeof_size_t <= sizeof(uint64_t)) {
-    return read_uint64_t(info);
+    value = read_uint64_t(info);
+    // Refuse to read sizes that would be truncated on 32-bit
+    if (value > (ares_size_t)SIZE_MAX) {
+      eris_error(info, "malformed data: size value out of range");
+    }
+    return value;
   }
   else {
     eris_error(info, ERIS_ERR_TYPE_SIZE);
