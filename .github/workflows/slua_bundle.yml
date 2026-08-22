@@ -1,0 +1,51 @@
+name: slua_bundle
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'tools/slua_bundle/**'
+      - '.github/workflows/slua_bundle.yml'
+  pull_request:
+    paths:
+      - 'tools/slua_bundle/**'
+      - '.github/workflows/slua_bundle.yml'
+
+defaults:
+  run:
+    working-directory: tools/slua_bundle
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip
+      - run: pip install . --group dev
+      - run: mypy slua_bundle
+
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python-version: ["3.7", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install . pytest
+      - run: pytest
