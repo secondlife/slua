@@ -320,6 +320,15 @@ static lua_State* handlerThread(Script& script)
     return lua_tothread(script.getInstanceState(), 1);
 }
 
+// hardstacktests builds resize a thread's stack and CallInfo arrays down to
+// exactly what is in use on every GC pass, so their capacities there are
+// whatever the last collection left behind rather than the VM's usual sizes.
+#if defined(HARDSTACKTESTS) && HARDSTACKTESTS
+constexpr bool kExactThreadSizing = true;
+#else
+constexpr bool kExactThreadSizing = false;
+#endif
+
 // Reads an integer global off a script's instance
 static int readIntGlobal(Script& script, const char* name)
 {
@@ -1524,8 +1533,16 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
 
         lua_State* donor = handlerThread(first.exec);
         REQUIRE(lua_isthreadreset(donor));
-        REQUIRE(donor->size_ci == BASIC_CI_SIZE);
-        REQUIRE(donor->stacksize == BASIC_STACK_SIZE + EXTRA_STACK);
+        const int size_ci = donor->size_ci;
+        const int stacksize = donor->stacksize;
+        CAPTURE(size_ci);
+
+        // A reset thread is back to the sizes stack_init hands out
+        if (!kExactThreadSizing)
+        {
+            REQUIRE(size_ci == BASIC_CI_SIZE);
+            REQUIRE(stacksize == BASIC_STACK_SIZE + EXTRA_STACK);
+        }
 
         std::string payload = serialize(first.exec);
 
@@ -1533,8 +1550,8 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
         restore(second.exec, payload);
 
         lua_State* restored = handlerThread(second.exec);
-        CHECK(restored->size_ci == BASIC_CI_SIZE);
-        CHECK(restored->stacksize == BASIC_STACK_SIZE + EXTRA_STACK);
+        CHECK(restored->size_ci == size_ci);
+        CHECK(restored->stacksize == stacksize);
     }
 
     SUBCASE("serialized while preempted mid-handler")
@@ -1551,9 +1568,14 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
         CAPTURE(size_ci);
         CAPTURE(used_ci);
 
-        // This should _always_ be true, we always need one CI slot free as well.
-        REQUIRE(size_ci > BASIC_CI_SIZE);
-        REQUIRE(size_ci > used_ci);
+        // The array only ever doubles, so it is past BASIC_CI_SIZE and has a
+        // slot to spare over the used portion. Not so under hardstacktests,
+        // where a GC pass resizes it to exactly ci_used + 1.
+        if (!kExactThreadSizing)
+        {
+            REQUIRE(size_ci > BASIC_CI_SIZE);
+            REQUIRE(size_ci > used_ci);
+        }
 
         std::string payload = serialize(first.exec);
 

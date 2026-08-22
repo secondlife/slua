@@ -177,7 +177,6 @@ void lua_resetthread(lua_State* L)
     setnilvalue(ci->func);
     L->ci = ci;
     // ServerLua: Shrink-only, growing memory usage isn't safe here.
-    LUAU_ASSERT(L->size_ci >= BASIC_CI_SIZE);
     if (L->size_ci > BASIC_CI_SIZE)
         luaD_reallocCI(L, BASIC_CI_SIZE);
     // clear thread state

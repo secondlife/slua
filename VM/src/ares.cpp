@@ -2712,10 +2712,7 @@ u_thread(Info *info) {                                                 /* ... */
    * luaD_reallocstack expects the usable size (without EXTRA_STACK) and adds it back. */
   uint32_t stack_size = READ_VALUE(uint32_t);
   ares_size_t total = READ_VALUE(ares_size_t);
-  // lua_resetthread parks base_ci->top at LUA_MINSTACK past the bottom of the
-  // stack, so anything under a fresh thread's size would put it past
-  // stack_last. No live thread is ever smaller than this anyway.
-  if (stack_size < BASIC_STACK_SIZE + EXTRA_STACK || stack_size > kMaxStackSize) {
+  if (stack_size < LUA_MINSTACK + EXTRA_STACK || stack_size > kMaxStackSize) {
     eris_error(info, "malformed data: invalid stack size");
   }
   if (stack_size < total + EXTRA_STACK) {
@@ -2787,11 +2784,12 @@ u_thread(Info *info) {                                                 /* ... */
   if (num_cis < 1 || num_cis > LUAI_MAXCALLS) {
     eris_error(info, "malformed data: invalid call info count");
   }
-  // luaD_growCI's hard limit is the largest capacity the VM can hand out, and
-  // nothing below BASIC_CI_SIZE is a shape a live thread can be in. This is
-  // also what bounds the allocation below, which VALIDATE_SIZE cannot cover
-  // because the capacity has no bytes of its own in the stream.
-  if (size_ci < num_cis || size_ci < BASIC_CI_SIZE ||
+  // The capacity has to cover the used portion, and can't exceed what
+  // luaD_growCI would ever hand out - that upper bound is also what caps the
+  // allocation below, which VALIDATE_SIZE can't do for a field that has no
+  // bytes of its own in the stream. There's no floor: hardstacktests builds
+  // shrink the array to exactly what's in use on every GC pass.
+  if (size_ci < num_cis ||
       size_ci > (uint32_t)(LUAI_MAXCALLS + (LUAI_MAXCALLS >> 3))) {
     eris_error(info, "malformed data: invalid call info capacity");
   }
