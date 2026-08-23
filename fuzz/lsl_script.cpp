@@ -45,7 +45,7 @@ static void interruptCallback(lua_State* L, int gc)
 // Track approximate memory usage, only recalc when approaching limit
 static size_t approxMemoryUsage = 0;
 
-// Memory limit callback - only recalc userthreadsize when needed
+// Memory limit callback - only recalc the user thread size when needed
 static int memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
 {
     if (osize >= nsize)
@@ -59,7 +59,7 @@ static int memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
         // This is fine, GL won't be included but it will descend to `L` eventually.
         // Naturally, this would be an issue if we _actually_ had multiple different
         // scripts within the VM.
-        approxMemoryUsage = lua_userthreadsize(lua_mainthread(L), nullptr);
+        approxMemoryUsage = lua_userthreadgc(lua_mainthread(L), nullptr);
 
         if (approxMemoryUsage + delta > kMemoryLimit)
             return 1; // Reject allocation

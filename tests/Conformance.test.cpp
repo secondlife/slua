@@ -1629,7 +1629,7 @@ TEST_CASE("ServerLua memory limits")
         // Re-calculate actual size if we haven't yet or if approximate would exceed limit
         if (actual_size == 0 || (approximate_size + net_gain > MAX_MEM))
         {
-            approximate_size = actual_size = lua_userthreadsize(L, &free_objects);
+            approximate_size = actual_size = lua_userthreadgc(L, &free_objects);
 
             if (actual_size + net_gain > MAX_MEM)
                 return 1;
@@ -1651,7 +1651,7 @@ TEST_CASE("ServerLua memory limits")
         CHECK(std::string(lua_tostring(Lchild, -1)) == "OK");
 
         // should still be some data owned by the current thread
-        CHECK((lua_userthreadsize(Lchild, &free_objects) != 0));
+        CHECK((lua_userthreadgc(Lchild, &free_objects) != 0));
     }
 
     extern void luaC_validate(lua_State * L); // internal function, declared in lgc.h - not exposed via lua.h

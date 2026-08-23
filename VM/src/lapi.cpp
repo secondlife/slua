@@ -2174,7 +2174,7 @@ int lua_totalmemoverhead(lua_State *L)
     return total_size;
 }
 
-size_t lua_userthreadsize(lua_State *L, const lua_OpaqueGCObjectSet* free_objects)
+size_t lua_userthreadgc(lua_State *L, const lua_OpaqueGCObjectSet* free_objects)
 {
     size_t total_size = 0;
     luaC_enumreachableuserallocs(

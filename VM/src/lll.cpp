@@ -999,7 +999,7 @@ static int ll_sleep(lua_State *)
 // implementation does, so only meaningful for diffing values within a test.
 static int ll_getusedmemory(lua_State* L)
 {
-    luaSL_pushnativeinteger(L, (int)lua_userthreadsize(L, nullptr));
+    luaSL_pushnativeinteger(L, (int)lua_userthreadgc(L, nullptr));
     return 1;
 }
 

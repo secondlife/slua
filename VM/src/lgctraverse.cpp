@@ -18,12 +18,26 @@
 
 #include <unordered_set>
 #include <queue>
+#include <vector>
+#include <utility>
+
+LUAU_FASTFLAGVARIABLE(SLuaEagerWeakClear)
+
+static constexpr uint8_t kWeakKey = 1 << 0;
+static constexpr uint8_t kWeakValue = 1 << 1;
 
 // Helper functions to traverse child objects for reachable user alloc traversal
 typedef struct ReachableContext
 {
     std::queue<GCObject*> queue;
     std::unordered_set<const void*> visited;
+    global_State* global = nullptr;
+    // Only the size/clear walk defers weak sides; the baseline free-object
+    // snapshot keeps fully-strong traversal so the exemption set is maximal.
+    bool defer_weak = false;
+    // Weak tables seen during the walk, with their weakness bits, for the
+    // post-walk clear pass.
+    std::vector<std::pair<LuaTable*, uint8_t>> weak_tables;
 } ReachableContext;
 
 static void enqueueobj(ReachableContext* ctx, GCObject* obj)
@@ -41,16 +55,41 @@ static void enqueueobj(ReachableContext* ctx, GCObject* obj)
     }
 }
 
+// Strings and UUIDs act as values in user weak tables (see isobjcleared in
+// lgc.cpp): they keep their entries alive and stay charged.
+static bool hasweakvaluesemantics(GCObject* o)
+{
+    return o->gch.tt == LUA_TSTRING || (o->gch.tt == LUA_TUSERDATA && gco2u(o)->tag == UTAG_UUID);
+}
+
 static void traversetable(ReachableContext* ctx, LuaTable* h)
 {
     // Traverse metatable
     if (h->metatable)
         enqueueobj(ctx, obj2gco(h->metatable));
 
+    // Weak sides of weak tables are deferred to the post-walk clear pass, so
+    // objects reachable only through them are neither charged nor kept.
+    // Fixed tables may be shared across forked instances and must never be
+    // mutated, so they keep fully-strong traversal.
+    uint8_t weakbits = 0;
+    if (ctx->defer_weak && !isfixed(obj2gco(h)))
+    {
+        if (const char* modev = luaC_gettablemode(ctx->global, h))
+        {
+            if (strchr(modev, 'k'))
+                weakbits |= kWeakKey;
+            if (strchr(modev, 'v'))
+                weakbits |= kWeakValue;
+            if (weakbits)
+                ctx->weak_tables.push_back({h, weakbits});
+        }
+    }
+
     // Traverse array elements
     for (int i = 0; i < h->sizearray; ++i)
     {
-        if (iscollectable(&h->array[i]))
+        if (iscollectable(&h->array[i]) && (!(weakbits & kWeakValue) || hasweakvaluesemantics(gcvalue(&h->array[i]))))
             enqueueobj(ctx, gcvalue(&h->array[i]));
     }
 
@@ -66,10 +105,10 @@ static void traversetable(ReachableContext* ctx, LuaTable* h)
             if (!ttisnil(&n.val))
             {
                 // Traverse key
-                if (iscollectable(&n.key))
+                if (iscollectable(&n.key) && (!(weakbits & kWeakKey) || hasweakvaluesemantics(gcvalue(&n.key))))
                     enqueueobj(ctx, gcvalue(&n.key));
                 // Traverse value
-                if (iscollectable(&n.val))
+                if (iscollectable(&n.val) && (!(weakbits & kWeakValue) || hasweakvaluesemantics(gcvalue(&n.val))))
                     enqueueobj(ctx, gcvalue(&n.val));
             }
         }
@@ -451,6 +490,60 @@ size_t luaC_calclogicalgcosize(GCObject *obj)
     }
 }
 
+// Mirrors isobjcleared in lgc.cpp, with "reached during the walk" standing in
+// for mark color. Objects the walker never traverses (system memcats, fixed
+// baseline objects) are conservatively live.
+static bool isweakobjdead(ReachableContext* ctx, GCObject* o)
+{
+    if (hasweakvaluesemantics(o))
+        return false;
+    if (isfixed(o) || o->gch.memcat < LUA_FIRST_USER_MEMCAT)
+        return false;
+    return ctx->visited.find(o) == ctx->visited.end();
+}
+
+#define isweakrefdead(ctx, o) (iscollectable(o) && isweakobjdead(ctx, gcvalue(o)))
+
+// Clears weak table entries whose referents the walk could not reach, the way
+// cleartable does at the real GC's atomic phase, minus shrinking. Writing
+// nil/DEADKEY never allocates or rehashes and only removes references, so
+// this is safe in any GC phase and never invalidates iterators.
+static void cleardeadweakrefs(ReachableContext* ctx)
+{
+    for (const auto& weak_entry : ctx->weak_tables)
+    {
+        LuaTable* h = weak_entry.first;
+        uint8_t weakbits = weak_entry.second;
+
+        if (weakbits & kWeakValue)
+        {
+            for (int i = 0; i < h->sizearray; ++i)
+            {
+                if (isweakrefdead(ctx, &h->array[i]))
+                    setnilvalue(&h->array[i]);
+            }
+        }
+
+        if (h->node == &luaH_dummynode)
+            continue;
+
+        int sizenode = 1 << h->lsizenode;
+        for (int i = 0; i < sizenode; ++i)
+        {
+            LuaNode* n = &h->node[i];
+            if (ttisnil(&n->val))
+                continue;
+            if (((weakbits & kWeakKey) && isweakrefdead(ctx, &n->key)) ||
+                ((weakbits & kWeakValue) && isweakrefdead(ctx, &n->val)))
+            {
+                setnilvalue(&n->val);
+                if (iscollectable(&n->key))
+                    setttype(&n->key, LUA_TDEADKEY);
+            }
+        }
+    }
+}
+
 void luaC_enumreachableuserallocs(
     lua_State* L,
     void* context,
@@ -459,6 +552,8 @@ void luaC_enumreachableuserallocs(
 )
 {
     ReachableContext ctx;
+    ctx.global = L->global;
+    ctx.defer_weak = FFlag::SLuaEagerWeakClear;
 
     // Pre-populate visited set with free objects if provided
     if (free_objects)
@@ -481,12 +576,16 @@ void luaC_enumreachableuserallocs(
         // Take any new references the current node has and add them to the queue
         traverseobj(&ctx, current);
     }
+
+    if (FFlag::SLuaEagerWeakClear)
+        cleardeadweakrefs(&ctx);
 }
 
 lua_OpaqueGCObjectSet luaC_collectfreeobjects(lua_State* L)
 {
     lua_OpaqueGCObjectSet free_objects;
     ReachableContext ctx;
+    ctx.global = L->global;
 
     const auto *gt_gco = obj2gco(L->gt);
 

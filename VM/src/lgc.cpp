@@ -362,6 +362,12 @@ static const char* gettablemode(global_State* g, LuaTable* h)
     return NULL;
 }
 
+// ServerLua: exposed for the user heap walker's weak table handling
+const char* luaC_gettablemode(global_State* g, LuaTable* h)
+{
+    return gettablemode(g, h);
+}
+
 static int traversetable(global_State* g, LuaTable* h)
 {
     int i;
@@ -384,6 +390,7 @@ static int traversetable(global_State* g, LuaTable* h)
 
     if (weakkey && weakvalue)
         return 1;
+
     if (!weakvalue)
     {
         i = h->sizearray;

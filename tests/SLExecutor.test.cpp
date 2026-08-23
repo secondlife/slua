@@ -29,6 +29,8 @@
 
 using namespace Luau::Executor;
 
+LUAU_FASTFLAG(SLuaEagerWeakClear)
+
 // Provisioner with deterministic fakes: a virtual clock that advances by
 // clock_step on every reading, plus capture of print output and dynamic
 // handler registrations.
@@ -100,7 +102,7 @@ struct TestProvisioner : Provisioner<>
     static TestProvisioner& of(lua_State* L)
     {
         Script* executor = Script::fromLuaState(L);
-        REQUIRE(executor != nullptr);
+        LUAU_ASSERT(executor != nullptr);
         return static_cast<TestProvisioner&>(executor->getProvisioner());
     }
 
@@ -836,6 +838,41 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor carries host context and the charged 
     CHECK(script->getUsedMemory() >= (int)(bytecode.size() + 4096));
 }
 
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor weak references die before OoM")
+{
+    ScopedFastFlag eager_weak_clear{FFlag::SLuaEagerWeakClear, true};
+
+    std::string bytecode = Luau::compile(R"(
+        local weak = setmetatable({}, { __mode = "kv" })
+        local tab1 = table.create(6000, 1)
+        weak[1] = tab1
+        tab1 = nil
+        local tab2 = table.create(6000, 2)
+        print(if weak[1] == nil then "cleared" else "stale")
+        print(#tab2)
+    )");
+
+    TestProvisioner host;
+    ScriptConfig script_config = makeScriptConfig();
+    // Two 6000-slot arrays (96000 logical bytes each) can never fit under the
+    // limit together; one plus the base state comfortably can.
+    script_config.memoryLimit = 150000;
+
+    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(bytecode), script_config);
+    REQUIRE(script != nullptr);
+    REQUIRE(script->loadDefaultState());
+
+    // Keep the real GC from completing a cycle on its own so any weak
+    // clearing is attributable to the memory limit callback's heap walk.
+    // Don't use LUA_GCSTOP, it disables the beforeallocate callback entirely.
+    lua_gc(script->getInstanceState(), LUA_GCSETGOAL, 100000);
+    lua_gc(script->getInstanceState(), LUA_GCCOLLECT, 0);
+
+    resume(*script);
+    CHECK(script->getFaultKind() == FaultKind::None);
+    checkCapture(host.printed, {"cleared", "6000"});
+}
+
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor SLua lifecycle")
 {
     TestScript ts(R"(
@@ -1097,7 +1134,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor engine pauses are not charged")
     SUBCASE("heap walk feeds the exclusion accumulator")
     {
         // Trigger a ton of allocations that would cause the
-        // lua_userthreadsize() check to kick in to get the
+        // lua_userthreadgc() check to kick in to get the
         // actual heap size. The cost of walking the script should be excluded.
         TestScript ts(R"(
             local parts = {}
@@ -1879,7 +1916,7 @@ struct StatefulProvisioner : Provisioner<StatefulScript>
     static double quanta_clock(lua_State* L)
     {
         Script* executor = Script::fromLuaState(L);
-        REQUIRE(executor != nullptr);
+        LUAU_ASSERT(executor != nullptr);
 
         auto& host = static_cast<StatefulProvisioner&>(executor->getProvisioner());
         host.clock += host.clock_step;

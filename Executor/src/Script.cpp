@@ -794,7 +794,7 @@ int Script::memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
         bool account_walk = execute->mHandlerState != nullptr;
         double walk_start = account_walk ? execute->mQuantaClockProvider(L) : 0.0;
 
-        size_t current_size = lua_userthreadsize(execute->mInstance.thread(), &execute->mImage->getFreeObjects()) + execute->mChargedBytecodeSize;
+        size_t current_size = lua_userthreadgc(execute->mInstance.thread(), &execute->mImage->getFreeObjects()) + execute->mChargedBytecodeSize;
 
         if (account_walk)
             execute->mExcludedTime += execute->mQuantaClockProvider(L) - walk_start;
@@ -915,7 +915,7 @@ int Script::getUsedMemory()
     if (!mExactSizeDirty && !mInExecution && mMaxPossibleSize == mExactSize)
         return mExactSize;
 
-    mExactSize = mMaxPossibleSize = (int)lua_userthreadsize(mInstance.thread(), &mImage->getFreeObjects()) + bc_size;
+    mExactSize = mMaxPossibleSize = (int)lua_userthreadgc(mInstance.thread(), &mImage->getFreeObjects()) + bc_size;
     mExactSizeDirty = false;
     return mExactSize;
 }

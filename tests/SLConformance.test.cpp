@@ -38,6 +38,7 @@ extern int optimizationLevel;
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_DYNAMIC_FASTFLAG(LuauCodegenTrackingMultilocationFix)
 LUAU_FASTFLAG(LuauCodegenDetailedCompilationResult)
+LUAU_FASTFLAG(SLuaEagerWeakClear)
 
 
 using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
@@ -183,7 +184,7 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
     // or the alloc would push us over the limit given the current approximate size.
     if (state->actual_size == 0 || (state->approximate_size + net_gain > state->max_mem))
     {
-        state->approximate_size = state->actual_size = lua_userthreadsize(L, &state->free_objects);
+        state->approximate_size = state->actual_size = lua_userthreadgc(L, &state->free_objects);
 
         if (state->actual_size + net_gain > state->max_mem)
             return 1;
@@ -997,6 +998,44 @@ TEST_CASE("Table Clone OoM")
     runConformance("table_clone_oom.lua", nullptr, [](lua_State *L) {
         RuntimeState* state = (RuntimeState*)L->userdata;
         state->max_mem = 200;
+
+        lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, luaL_checkinteger(L, 1)); return 0;}, "change_memcat");
+        lua_setglobal(L, "change_memcat");
+
+        lua_callbacks(L)->beforeallocate = memoryLimitCallback;
+    });
+}
+
+// Returns the walked heap size for the user thread; under SLuaEagerWeakClear
+// the walk also clears weak references to otherwise-unreachable objects.
+static int lua_used_memory(lua_State* L)
+{
+    lua_State* GL = lua_mainthread(L);
+    RuntimeState* state = (RuntimeState*)GL->userdata;
+    lua_pushinteger(L, (int)lua_userthreadgc(GL, &state->free_objects));
+    return 1;
+}
+
+TEST_CASE("Weak Table Clearing")
+{
+    ScopedFastFlag eager_weak_clear{FFlag::SLuaEagerWeakClear, true};
+
+    runConformance("weak_table_clear.lua", nullptr, [](lua_State *L) {
+        lua_pushcfunction(L, lua_used_memory, "used_memory");
+        lua_setglobal(L, "used_memory");
+
+        lua_pushcfunction(L, lua_table_sizes, "table_sizes");
+        lua_setglobal(L, "table_sizes");
+    });
+}
+
+TEST_CASE("Weak Table OoM")
+{
+    ScopedFastFlag eager_weak_clear{FFlag::SLuaEagerWeakClear, true};
+
+    runConformance("weak_table_oom.lua", nullptr, [](lua_State *L) {
+        RuntimeState* state = (RuntimeState*)L->userdata;
+        state->max_mem = 48000;
 
         lua_pushcfunction(L, [](lua_State *L) {lua_setmemcat(L, luaL_checkinteger(L, 1)); return 0;}, "change_memcat");
         lua_setglobal(L, "change_memcat");

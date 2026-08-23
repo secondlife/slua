@@ -567,9 +567,13 @@ LUA_API void lua_fixvalue(lua_State* L, int idx);
 LUA_API bool lua_iscollectable(lua_State *L, int idx);
 // Get how much "real" memory is used by pages.
 LUA_API int lua_totalmemoverhead(lua_State *L);
-// Gets the total size of all user-allocated objects reachable from a user thread.
-// If free_objects is provided, objects in that set will be excluded from the size calculation.
-LUA_API size_t lua_userthreadsize(lua_State *L, const lua_OpaqueGCObjectSet* free_objects);
+// Weak-reference mini-GC and size query for a user thread. Returns the total size of
+// all user-allocated objects reachable from the thread. If free_objects is provided,
+// objects in that set are excluded from the size calculation. Under SLuaEagerWeakClear,
+// objects reachable only through weak table entries are excluded from the size and
+// those entries are cleared before returning, as if the real GC had completed a cycle
+// at this point.
+LUA_API size_t lua_userthreadgc(lua_State *L, const lua_OpaqueGCObjectSet* free_objects);
 // Collects all user memcat (>= LUA_FIRST_USER_MEMCAT) objects reachable from a user thread into a set.
 // Intended to be called immediately after luau_load() to capture bytecode constants.
 LUA_API lua_OpaqueGCObjectSet lua_collectfreeobjects(lua_State *L);
