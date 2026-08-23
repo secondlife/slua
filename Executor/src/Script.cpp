@@ -188,6 +188,9 @@ bool Script::loadDefaultState()
     mExactSizeDirty = true;
     mYieldDue = false;
     mMandatoryYieldRaised = false;
+    mMandatoryDeadline = 0.0;
+    mExcludedTime = 0.0;
+    mGCStepInFlight = false;
     mSleep = 0.0f;
     // in LSL we treat the main function as complete, since it runs
     // while loading the image.
@@ -264,6 +267,9 @@ void Script::beginRunWindow(double quanta)
     LUAU_ASSERT(mInstance);
     mYieldDue = false;
     mMandatoryYieldRaised = false;
+    mMandatoryDeadline = 0.0;
+    mExcludedTime = 0.0;
+    mGCStepInFlight = false;
     mWindowStart = mQuantaClockProvider(mInstance.thread());
     mQuanta = quanta;
 }
@@ -695,27 +701,30 @@ bool Script::restoreState(const char* data, size_t len)
 // static
 void Script::interruptHandler(lua_State* L, int gc)
 {
-    // GC pauses aren't safe to yield on.
-    if (gc >= 0)
-    {
-        return;
-    }
-
     Script* execute = fromLuaState(L);
 
-    // Meh, not even running a script.
-    if (!execute || !execute->mInExecution)
+    // If it's not a Script object or we're not executing a handler state, we don't really care.
+    if (!execute || !execute->mInExecution || execute->mHandlerState == nullptr)
         return;
 
-    if (execute->mIsLSL && execute->mHandlerState == nullptr)
+    // Keep track of GC phases so we can discount their cost
+    if (gc >= 0)
     {
-        // Meh. We're in the startup phase. Don't try to yield, LSL never needs it.
+        if (!execute->mGCStepInFlight)
+        {
+            execute->mGCStepInFlight = true;
+            execute->mGCStepStart = execute->mQuantaClockProvider(L);
+        }
+        else
+        {
+            execute->mGCStepInFlight = false;
+            execute->mExcludedTime += execute->mQuantaClockProvider(L) - execute->mGCStepStart;
+        }
         return;
     }
 
-    LUAU_ASSERT(execute->mHandlerState);
-    // A handler thread that hasn't been resumed has no frame to yield from, so getting
-    // here means the host's event setup path reached the VM somehow.
+    // This particular handler had better be _active_, or we're somehow triggering
+    // interrupts through pushing handler arguments or something like that.
     LUAU_ASSERT(execute->mHandlerState->isactive);
 
     if (execute->mSleep > 0.0f || execute->mForceYield)
@@ -762,7 +771,6 @@ int Script::memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
     // This is a net shrink in memory, not relevant for our limiting logic. We can't assume that
     // memory being freed has anything to do with us, given that the GC can work on things unrelated
     // to the currently executing task.
-    // TODO: Perhaps this will no longer be the case once we're stricter about how / when GC runs?
     if (osize >= nsize)
         return 0;
 
@@ -781,7 +789,16 @@ int Script::memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
     {
         // Max possible size is now over the memory limit, or we didn't have a "actual"
         // base memory measurement before. Recalculate "actual" memory usage.
+
+        // But discount the cost of walking the script if we're actually executign a handler
+        bool account_walk = execute->mHandlerState != nullptr;
+        double walk_start = account_walk ? execute->mQuantaClockProvider(L) : 0.0;
+
         size_t current_size = lua_userthreadsize(execute->mInstance.thread(), &execute->mImage->getFreeObjects()) + execute->mChargedBytecodeSize;
+
+        if (account_walk)
+            execute->mExcludedTime += execute->mQuantaClockProvider(L) - walk_start;
+
         execute->mExactSize = execute->mMaxPossibleSize = (int)current_size;
         int new_size = execute->mExactSize + (int)net_gain;
         if (new_size > execute->mMemoryLimit)
@@ -806,23 +823,26 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
     // Some quantas are extremely small, so don't punish if they were overrun due to blocking code.
     // Use a higher threshold for punishment in those cases.
     double punish_quanta = std::max(mQuanta, 0.001);
+    // Discount time spent on work outside the script's control
+    double charged = std::max(elapsed - mExcludedTime, 0.0);
 
     if (interrupt_status == YieldableStatus::OK)
     {
         // Reaching a yieldable point means any catchable mandatory-yield error
         // was caught and the script handed control back, so it has earned
-        // another catchable attempt rather than the kill.
+        // a forced sleep instead.
         mMandatoryYieldRaised = false;
+        mMandatoryDeadline = 0.0;
 
         // If the script was really abusive we need to punish it.
         // NB: This is mostly a copy of the existing Mono logic, except we only apply
         //  the punishment when the script is actually able to yield, rather than continuously
         //  try to punish the script over and over.
-        if (elapsed > (punish_quanta * 3.0))
+        if (charged > (punish_quanta * 3.0))
         {
             if (!mYieldDue)
-                mSleep += calculate_slowness_punishment(punish_quanta, elapsed);
-            logInfo(logSource(), "Punishing abusive script that took %f on quanta of %f", elapsed, mQuanta);
+                mSleep += calculate_slowness_punishment(punish_quanta, charged);
+            logInfo(logSource(), "Punishing abusive script that took %f (charged %f) on quanta of %f", elapsed, charged, mQuanta);
         }
         // This will get us out of the host's `runQuanta()` loop
         mYieldDue = true;
@@ -831,12 +851,22 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
     else
     {
         // Okay, we couldn't yield, but might it be time for capital punishment?
-        if (elapsed > (punish_quanta * 3.5))
+        if (charged > (punish_quanta * 3.5))
         {
-            // It's very easy for people to intentionally write un-yieldable code. Punish them
-            // by killing their evil script. Yield is now mandatory.
-            logInfo(logSource(), "Making yield mandatory due to quanta overrun");
-            mandatory = true;
+            // They're over the time limit. Set a deadline. Don't kill immediately in case
+            // a temporary performance blip caused them to go over time.
+            double now = mQuantaClockProvider(L);
+            if (mMandatoryDeadline == 0.0)
+            {
+                mMandatoryDeadline = now + punish_quanta * 0.5;
+            }
+            else if (now >= mMandatoryDeadline)
+            {
+                // It's very easy for people to intentionally write un-yieldable code. Punish them
+                // by killing their evil script. Yield is now mandatory.
+                logInfo(logSource(), "Making yield mandatory due to quanta overrun (wall %f, charged %f)", elapsed, charged);
+                mandatory = true;
+            }
         }
 
         if (mandatory)
@@ -844,7 +874,7 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
             // Even if they eventually recover from the error, they'll have to eat
             // this cost eventually.
             if (!mYieldDue)
-                mSleep += calculate_slowness_punishment(punish_quanta, elapsed);
+                mSleep += calculate_slowness_punishment(punish_quanta, charged);
 
             // This will get us out of the host's `runQuanta()` loop
             mYieldDue = true;
@@ -864,7 +894,7 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
             const char* traceback = lua_debugtrace(L);
             if (traceback != nullptr)
             {
-                extended += "\n";
+                extended += '\n';
                 extended += traceback;
             }
             setFault(FaultKind::Timeout, "exceeded time limit", extended.c_str());

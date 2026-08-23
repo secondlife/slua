@@ -68,6 +68,12 @@ struct TestProvisioner : Provisioner<>
 
         lua_pushcfunction(L, lua_break, "preempt");
         lua_setglobal(L, "preempt");
+
+        lua_pushcfunction(L, simulate_gc_step, "simulate_gc_step");
+        lua_setglobal(L, "simulate_gc_step");
+
+        lua_pushcfunction(L, jump_clock, "jump_clock");
+        lua_setglobal(L, "jump_clock");
     }
 
     static double quanta_clock(lua_State* L)
@@ -96,6 +102,27 @@ struct TestProvisioner : Provisioner<>
         Script* executor = Script::fromLuaState(L);
         REQUIRE(executor != nullptr);
         return static_cast<TestProvisioner&>(executor->getProvisioner());
+    }
+
+    // Invoke the GC callbacks as if GC is happening, without actually triggering it.
+    static int simulate_gc_step(lua_State* L)
+    {
+        double cost = luaL_checknumber(L, 1);
+        int post_state = luaL_optinteger(L, 2, 0);
+        void (*interrupt)(lua_State*, int) = lua_callbacks(L)->interrupt;
+        REQUIRE((interrupt != nullptr));
+        interrupt(L, 0);
+        of(L).clock += cost;
+        interrupt(L, post_state);
+        return 0;
+    }
+
+    // An engine pause the executor has no bracket for: time passes with no
+    // exclusion banked, as if the host got descheduled mid-execution.
+    static int jump_clock(lua_State* L)
+    {
+        of(L).clock += luaL_checknumber(L, 1);
+        return 0;
     }
 
     static int capture_print(lua_State* L)
@@ -191,9 +218,13 @@ static RunResult resumeToCompletion(Script& exec, double quanta, HandlerRunStatu
 static void checkCapture(const std::vector<std::string>& actual, std::initializer_list<const char*> expected)
 {
     REQUIRE(actual.size() == expected.size());
+    // A failed REQUIRE can't unwind under DOCTEST_CONFIG_NO_EXCEPTIONS, so
+    // don't walk past what was actually captured when the counts mismatch.
     size_t index = 0;
     for (const char* want : expected)
     {
+        if (index >= actual.size())
+            break;
         CAPTURE(index);
         CHECK(actual[index] == want);
         ++index;
@@ -997,6 +1028,157 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor mandatory yield kill")
         CHECK(ts.exec.getFaultKind() == FaultKind::Timeout);
         CHECK(ts.exec.getFaultString() == "exceeded time limit");
         // The script never got to observe the kill
+        CHECK(ts.host.printed.empty());
+    }
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor engine pauses are not charged")
+{
+    SUBCASE("unyieldable region survives a GC-inflated window")
+    {
+        // A long GC step lands while execution is inside a metamethod frame,
+        // where a yield can't be injected. GC isn't the executing code's fault,
+        // necessarily, so we discount it against their runtime.
+        TestScript ts(R"(
+            local mt = {}
+            mt.__index = function(t, k)
+                simulate_gc_step(10, 2)
+                local total = 0
+                for i = 1, 20 do
+                    total += i
+                end
+                return total
+            end
+            local obj = setmetatable({}, mt)
+            print(obj.missing)
+        )");
+        ts.loadDefaultState();
+        Script& exec = ts.exec;
+
+        // Charged time only accrues one clock step per interrupt reading, so
+        // it stays far below the punishment thresholds against a 5ms quanta.
+        ts.host.clock_step = 0.0001;
+        resumeToCompletion(exec, 0.005, HandlerRunStatus::Ok);
+        CHECK(exec.getFaultKind() == FaultKind::None);
+        CHECK(exec.getSleep() == 0.0f);
+        checkCapture(ts.host.printed, {"210"});
+    }
+
+    SUBCASE("GC-inflated time is not punished, preemption stays on wall time")
+    {
+        TestScript ts(R"(
+            simulate_gc_step(10)
+            local total = 0
+            for i = 1, 100 do
+                total += i
+            end
+            print("finished")
+        )");
+        ts.loadDefaultState();
+        Script& exec = ts.exec;
+
+        // Wall elapsed is ~10s against a 50ms quanta, so the first yieldable
+        // interrupt still preempts, but the charged handful of clock steps
+        // stays under the 3x threshold, so no sleep punishment lands.
+        ts.host.clock_step = 0.001;
+        resume(exec, 0.05, HandlerRunStatus::Preempted);
+        CHECK(exec.isYieldDue());
+        CHECK(exec.getSleep() == 0.0f);
+        // The banked exclusion is readable until the next window resets it
+        CHECK(exec.getExcludedTime() >= 10.0);
+
+        // Zero out the sleep so we don't deadlock the suite if the earlier
+        // getSleep() == 0.0f check didn't hold.
+        exec.setSleep(0.0f);
+        resumeToCompletion(exec, 0.05);
+        checkCapture(ts.host.printed, {"finished"});
+    }
+
+    SUBCASE("heap walk feeds the exclusion accumulator")
+    {
+        // Trigger a ton of allocations that would cause the
+        // lua_userthreadsize() check to kick in to get the
+        // actual heap size. The cost of walking the script should be excluded.
+        TestScript ts(R"(
+            local parts = {}
+            for i = 1, 50 do
+                parts[i] = string.rep("x", i+100)
+            end
+            print("done")
+        )");
+        ts.loadDefaultState();
+        lua_State* script = ts.exec.getInstanceState();
+        // Set GC goal very high so it doesn't kick in during resume().
+        // Totally stopping the GC has the side-effect of also disabling
+        // our own heap walking, so don't use LUA_GCSTOP :)
+        lua_gc(script, LUA_GCSETGOAL, 100000);
+        lua_gc(script, LUA_GCCOLLECT, 0);
+
+        ts.host.clock_step = 0.001;
+        resume(ts.exec, 1.0);
+        // Verify that we actually did something excludable
+        CHECK(ts.exec.getExcludedTime() > 0.0);
+        CHECK(ts.exec.getSleep() == 0.0f);
+        checkCapture(ts.host.printed, {"done"});
+    }
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor mandatory yield grace")
+{
+    SUBCASE("an unattributed pause inside an unyieldable stretch is survivable")
+    {
+        // Cause a pause that can't be attributed to either GC or heap walking
+        // in the middle of an unyieldable area. Our grace period mechanic should
+        // allow a small amount of time to get out of the unyieldable area before
+        // we start trying to kill the script.
+        TestScript ts(R"(
+            local mt = {}
+            mt.__index = function(t, k)
+                jump_clock(10)
+                local total = 0
+                for i = 1, 20 do
+                    total += i
+                end
+                return total
+            end
+            local obj = setmetatable({}, mt)
+            print(obj.missing)
+        )");
+        ts.loadDefaultState();
+        Script& exec = ts.exec;
+
+        // Take tiny tiny steps so `jump_clock()` dominates the runtime.
+        ts.host.clock_step = 0.000001;
+        resume(exec, 0.005, HandlerRunStatus::Preempted);
+        CHECK(exec.getFaultKind() == FaultKind::None);
+        // We won't beat up the script, but we will make it sleep!
+        CHECK(exec.getSleep() > 0.0f);
+
+        exec.setSleep(0.0f);
+        resumeToCompletion(exec, 0.005);
+        checkCapture(ts.host.printed, {"210"});
+    }
+
+    SUBCASE("a stretch that outlasts the grace still dies")
+    {
+        TestScript ts(R"(
+            local mt = {}
+            mt.__index = function(t, k)
+                jump_clock(10)
+                local i = 0
+                while true do
+                    i += 1
+                end
+            end
+            local obj = setmetatable({}, mt)
+            print(obj.missing)
+        )");
+        ts.loadDefaultState();
+
+        ts.host.clock_step = 0.000001;
+        resumeToCompletion(ts.exec, 0.005, HandlerRunStatus::Fault);
+        CHECK(ts.exec.getFaultKind() == FaultKind::Timeout);
+        CHECK(ts.exec.getFaultString() == "exceeded time limit");
         CHECK(ts.host.printed.empty());
     }
 }

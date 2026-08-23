@@ -156,6 +156,9 @@ public:
     float getSleep() const { return mSleep; }
     void setSleep(float sleep) { mSleep = sleep; }
 
+    // Wall time excluded from punishment accounting in the current window
+    double getExcludedTime() const { return mExcludedTime; }
+
 protected:
     // Written at the head of every payload this class produces, and required to
     // match on restore. Subclasses return their own so a payload meant for
@@ -218,11 +221,20 @@ private:
     double mWindowStart = 0.0;
     // How long are we supposed to run?
     double mQuanta = 0.0;
+    // Wall time this window spent inside GC steps and reachability walks.
+    double mExcludedTime = 0.0;
+    // Quanta clock reading at the opening bracket of the GC step in flight.
+    double mGCStepStart = 0.0;
+    // We've planned a script kill for this time, the script will be killed if
+    // it doesn't finish before the deadline.
+    double mMandatoryDeadline = 0.0;
     float mSleep = 0.0f;
     // The engine has decided that the run window is over.
     bool mYieldDue = false;
     // We already threw a catchable error trying to force a yield.
     bool mMandatoryYieldRaised = false;
+    // Between the paired pre and post interrupts of one GC step.
+    bool mGCStepInFlight = false;
     bool mInExecution = false;
     bool mMainFunctionComplete = false;
     // The host has indicated that a yield should happen at the next interrupt.
