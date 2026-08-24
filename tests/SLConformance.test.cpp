@@ -393,9 +393,9 @@ REQUIRE_EQ(get_num_table_keys(L, (start_idx) + 1), (num_compressed)); \
 // Helper function to create a weak table
 // mode: "k" for weak keys, "v" for weak values, "kv" for both
 // Returns the stack index of the created table
-static int create_weak_table(lua_State *L, const char* mode)
+static int create_weak_table(lua_State *L, const char* mode, int narr = 0)
 {
-    lua_newtable(L);
+    lua_createtable(L, narr, 0);
     int table_idx = lua_gettop(L);
 
     // Create weak metatable
@@ -579,6 +579,57 @@ TEST_CASE("UUID interning")
     const char* str = luaL_tolstring(L, -1, &len);
     REQUIRE_EQ(std::string(str), "bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
     lua_pop(L, 2); // pop string and UUID
+
+    // The GC's traversal never scans the entries of a both-weak table and never
+    // scans the array part of a weak-value table, so value-semantics UUIDs whose
+    // only references live in those slots must still stay interned and keep their
+    // underlying TString alive across collections.
+
+    // UUID held only by a node entry in a "kv" table
+    int user_kv_table_idx = create_weak_table(L, "kv");
+    lua_pushstring(L, "kv_key");
+    luaSL_pushuuidstring(L, "cccccccc-dddd-eeee-ffff-000000000001");
+    GCObject* kv_uuid_ptr = luaA_toobject(L, -1)->value.gc;
+    lua_settable(L, user_kv_table_idx);
+
+    // UUID held only by an array slot in a "v" table
+    int user_weak_array_idx = create_weak_table(L, "v", 1);
+    luaSL_pushuuidstring(L, "cccccccc-dddd-eeee-ffff-000000000002");
+    GCObject* arr_uuid_ptr = luaA_toobject(L, -1)->value.gc;
+    lua_rawseti(L, user_weak_array_idx, 1);
+
+    // Two full cycles: the first can evict the interning entries while the UUIDs
+    // are unmarked, the second then sweeps the orphaned TStrings.
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+
+    // The weak entries themselves must survive (value semantics)
+    REQUIRE_EQ(get_num_table_keys(L, user_kv_table_idx), 1);
+    lua_rawgeti(L, user_weak_array_idx, 1);
+    REQUIRE(lua_isuserdata(L, -1));
+    lua_pop(L, 1);
+
+    // The interning entries must survive too: 3 from above plus these 2
+    require_weak_uuid_counts(L, weak_idx, 0, 5);
+
+    // The underlying TStrings must be intact (ASAN flags a swept TString here)
+    lua_pushstring(L, "kv_key");
+    lua_gettable(L, user_kv_table_idx);
+    str = luaL_tolstring(L, -1, &len);
+    REQUIRE_EQ(std::string(str), "cccccccc-dddd-eeee-ffff-000000000001");
+    lua_pop(L, 2);
+
+    lua_rawgeti(L, user_weak_array_idx, 1);
+    str = luaL_tolstring(L, -1, &len);
+    REQUIRE_EQ(std::string(str), "cccccccc-dddd-eeee-ffff-000000000002");
+    lua_pop(L, 2);
+
+    // Pushing the same UUIDs again must yield the same interned instances
+    luaSL_pushuuidstring(L, "cccccccc-dddd-eeee-ffff-000000000001");
+    REQUIRE_EQ(luaA_toobject(L, -1)->value.gc, kv_uuid_ptr);
+    luaSL_pushuuidstring(L, "cccccccc-dddd-eeee-ffff-000000000002");
+    REQUIRE_EQ(luaA_toobject(L, -1)->value.gc, arr_uuid_ptr);
+    lua_pop(L, 2);
 }
 
 TEST_CASE("UUID interning (GC Fixed)")

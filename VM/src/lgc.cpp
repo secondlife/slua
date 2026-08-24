@@ -388,7 +388,11 @@ static int traversetable(global_State* g, LuaTable* h)
         }
     }
 
-    if (weakkey && weakvalue)
+    // ServerLua: user weak tables can hold UUIDs with value semantics in fully-weak
+    //  slots... those still need marking below so their interning entries survive
+    //  clearing, which is what keeps a UUID's TString alive. Only system tables
+    //  may skip the scan.
+    if (weakkey && weakvalue && h->memcat < LUA_FIRST_USER_MEMCAT)
         return 1;
 
     if (!weakvalue)
@@ -396,6 +400,20 @@ static int traversetable(global_State* g, LuaTable* h)
         i = h->sizearray;
         while (i--)
             markvalue(g, &h->array[i]);
+    }
+    // ServerLua: Mark UUIDs in user weak tables during traversal (value semantics)
+    else if (h->memcat >= LUA_FIRST_USER_MEMCAT)
+    {
+        i = h->sizearray;
+        while (i--)
+        {
+            if (ttisuserdata(&h->array[i]))
+            {
+                GCObject* val = gcvalue(&h->array[i]);
+                if (gco2u(val)->tag == UTAG_UUID)
+                    markobject(g, &val->gch);
+            }
+        }
     }
     i = sizenode(h);
     while (i--)
