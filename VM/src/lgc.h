@@ -59,6 +59,12 @@
 #define FIXEDBIT 3
 #define WHITEBITS bit2mask(WHITE0BIT, WHITE1BIT)
 
+// ServerLua: transient mark used only by the user reachability walk
+//  (luaC_enumreachableuserallocs). Set during a walk and cleared before it
+//  returns, actual GC should never see this.
+//  Thank you Luau team for leaving some bits free :)
+#define WALKBIT 7
+
 #define iswhite(x) test2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)
 #define isblack(x) testbit((x)->gch.marked, BLACKBIT)
 #define isgray(x) (!testbits((x)->gch.marked, WHITEBITS | bitmask(BLACKBIT)))

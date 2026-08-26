@@ -17,7 +17,6 @@
 #include <string.h>
 
 #include <unordered_set>
-#include <queue>
 #include <vector>
 #include <utility>
 
@@ -26,11 +25,19 @@ LUAU_FASTFLAGVARIABLE(SLuaEagerWeakClear)
 static constexpr uint8_t kWeakKey = 1 << 0;
 static constexpr uint8_t kWeakValue = 1 << 1;
 
+// Starting capacity for the walk's scratch vectors. Reserving up front keeps a
+// walk to roughly one allocation per vector, where allocations were previously
+// a big chunk of runtime for large graphs.
+static constexpr size_t kWalkReserve = 1024;
+
 // Helper functions to traverse child objects for reachable user alloc traversal
 typedef struct ReachableContext
 {
-    std::queue<GCObject*> queue;
-    std::unordered_set<const void*> visited;
+    // DFS stack of objects still to traverse.
+    std::vector<GCObject*> worklist;
+    // Every object we set WALKBIT on this walk, so it can be cleared before we
+    // return.
+    std::vector<GCObject*> marked;
     global_State* global = nullptr;
     // Only the size/clear walk defers weak sides; the baseline free-object
     // snapshot keeps fully-strong traversal so the exemption set is maximal.
@@ -38,7 +45,25 @@ typedef struct ReachableContext
     // Weak tables seen during the walk, with their weakness bits, for the
     // post-walk clear pass.
     std::vector<std::pair<LuaTable*, uint8_t>> weak_tables;
+
+    // Exception-safe way to ensure WALKBIT never persists beyond the scope of
+    // our traversal.
+    ~ReachableContext()
+    {
+        for (GCObject* obj : marked)
+            resetbit(obj->gch.marked, WALKBIT);
+    }
 } ReachableContext;
+
+static inline bool mark_seen(ReachableContext* ctx, GCObject* obj)
+{
+    if (testbit(obj->gch.marked, WALKBIT))
+        return false;
+    // Record before marking so a throwing push_back never strands a set bit.
+    ctx->marked.push_back(obj);
+    l_setbit(obj->gch.marked, WALKBIT);
+    return true;
+}
 
 static void enqueueobj(ReachableContext* ctx, GCObject* obj)
 {
@@ -49,9 +74,9 @@ static void enqueueobj(ReachableContext* ctx, GCObject* obj)
     // We allow traversing threads even if they have a system memcat so long as their _active_
     // memcat is a user memcat.
     bool eligible_thread = (obj->gch.tt == LUA_TTHREAD && gco2th(obj)->activememcat >= LUA_FIRST_USER_MEMCAT);
-    if ((eligible_thread || obj->gch.memcat >= LUA_FIRST_USER_MEMCAT) && ctx->visited.insert(obj).second)
+    if ((eligible_thread || obj->gch.memcat >= LUA_FIRST_USER_MEMCAT) && mark_seen(ctx, obj))
     {
-        ctx->queue.push(obj);
+        ctx->worklist.push_back(obj);
     }
 }
 
@@ -490,19 +515,19 @@ size_t luaC_calclogicalgcosize(GCObject *obj)
     }
 }
 
-// Mirrors isobjcleared in lgc.cpp, with "reached during the walk" standing in
-// for mark color. Objects the walker never traverses (system memcats, fixed
-// baseline objects) are conservatively live.
-static bool isweakobjdead(ReachableContext* ctx, GCObject* o)
+// Mirrors isobjcleared in lgc.cpp, with WALKBIT ("reached during the walk")
+// standing in for mark color. Objects the walker never traverses (system
+// memcats, fixed baseline objects) are conservatively live.
+static bool isweakobjdead(GCObject* o)
 {
     if (hasweakvaluesemantics(o))
         return false;
     if (isfixed(o) || o->gch.memcat < LUA_FIRST_USER_MEMCAT)
         return false;
-    return ctx->visited.find(o) == ctx->visited.end();
+    return !testbit(o->gch.marked, WALKBIT);
 }
 
-#define isweakrefdead(ctx, o) (iscollectable(o) && isweakobjdead(ctx, gcvalue(o)))
+#define isweakrefdead(o) (iscollectable(o) && isweakobjdead(gcvalue(o)))
 
 // Clears weak table entries whose referents the walk could not reach, the way
 // cleartable does at the real GC's atomic phase, minus shrinking. Writing
@@ -519,7 +544,7 @@ static void cleardeadweakrefs(ReachableContext* ctx)
         {
             for (int i = 0; i < h->sizearray; ++i)
             {
-                if (isweakrefdead(ctx, &h->array[i]))
+                if (isweakrefdead(&h->array[i]))
                     setnilvalue(&h->array[i]);
             }
         }
@@ -533,8 +558,8 @@ static void cleardeadweakrefs(ReachableContext* ctx)
             LuaNode* n = &h->node[i];
             if (ttisnil(&n->val))
                 continue;
-            if (((weakbits & kWeakKey) && isweakrefdead(ctx, &n->key)) ||
-                ((weakbits & kWeakValue) && isweakrefdead(ctx, &n->val)))
+            if (((weakbits & kWeakKey) && isweakrefdead(&n->key)) ||
+                ((weakbits & kWeakValue) && isweakrefdead(&n->val)))
             {
                 setnilvalue(&n->val);
                 if (iscollectable(&n->key))
@@ -555,25 +580,30 @@ void luaC_enumreachableuserallocs(
     ctx.global = L->global;
     ctx.defer_weak = FFlag::SLuaEagerWeakClear;
 
-    // Pre-populate visited set with free objects if provided
+    // Make sure we can hold the free objects, as well as the best-guesss max number
+    // of GCObjects we're likely to see during our walk.
+    ctx.marked.reserve((free_objects ? free_objects->size() : 0) + kWalkReserve);
+    ctx.worklist.reserve(kWalkReserve);
+
+    // Seed the baseline as already-seen so the walk prunes at it
     if (free_objects)
-    {
-        ctx.visited = *free_objects;
-    }
+        for (const void* p : *free_objects)
+            mark_seen(&ctx, (GCObject*)p);
 
-    ctx.queue.push(obj2gco(L));
-    ctx.visited.insert(obj2gco(L));
+    // We start walking from the thread root
+    if (mark_seen(&ctx, obj2gco(L)))
+        ctx.worklist.push_back(obj2gco(L));
 
-    while (!ctx.queue.empty())
+    while (!ctx.worklist.empty())
     {
-        GCObject* current = ctx.queue.front();
-        ctx.queue.pop();
+        GCObject* current = ctx.worklist.back();
+        ctx.worklist.pop_back();
 
         // Call the user-provided traversal callback
         if (current->gch.memcat >= LUA_FIRST_USER_MEMCAT)
             node(context, current, current->gch.tt, current->gch.memcat, luaC_calclogicalgcosize(current));
 
-        // Take any new references the current node has and add them to the queue
+        // Take any new references the current node has and add them to the worklist
         traverseobj(&ctx, current);
     }
 
@@ -586,17 +616,19 @@ lua_OpaqueGCObjectSet luaC_collectfreeobjects(lua_State* L)
     lua_OpaqueGCObjectSet free_objects;
     ReachableContext ctx;
     ctx.global = L->global;
+    ctx.marked.reserve(kWalkReserve);
+    ctx.worklist.reserve(kWalkReserve);
 
     const auto *gt_gco = obj2gco(L->gt);
 
-    ctx.visited.insert(obj2gco(L));
+    mark_seen(&ctx, obj2gco(L));
 
     traverseobj(&ctx, obj2gco(L));
 
-    while (!ctx.queue.empty())
+    while (!ctx.worklist.empty())
     {
-        GCObject* current = ctx.queue.front();
-        ctx.queue.pop();
+        GCObject* current = ctx.worklist.back();
+        ctx.worklist.pop_back();
 
         // Don't try to mark the globals table for the user's root thread as free,
         // and don't even bother traversing it
