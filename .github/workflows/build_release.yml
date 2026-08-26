@@ -112,7 +112,7 @@ jobs:
       - name: Rename optimized package
         if: matrix.variant == 'optimized'
         run: |
-          for f in ServerLua-*.tar.zst; do mv "$f" "${f/ServerLua/ServerLuaOptimized}"; done
+          for f in ServerLua-*.tar.zst; do mv "$f" "ServerLuaOptimized${f#ServerLua}"; done
           sed -i 's/ServerLua/ServerLuaOptimized/g' autobuild-results.json
 
       - name: Replace artifact with renamed package
