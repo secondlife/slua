@@ -40,12 +40,15 @@ jobs:
       matrix:
         # Use older Ubuntu for glibc compatibility reasons
         os: [ubuntu-22.04]
-        addrsize: ["64"]
-        include:
-          - os: "ubuntu-22.04"
-            addrsize: "32"
-    name: ${{matrix.os}}
+        addrsize: ["64", "32"]
+        # "optimized" builds with the stock SL release flags (NDEBUG intact, no
+        # asserts) for benchmarking; "default" keeps the local flag adjustments
+        # from build-cmd.sh
+        variant: [default, optimized]
+    name: ${{matrix.os}}-${{matrix.addrsize}}-${{matrix.variant}}
     runs-on: ${{matrix.os}}
+    env:
+      SLUA_OPTIMIZED_BUILD: ${{ matrix.variant == 'optimized' && '1' || '' }}
     container:
       image: debian:buster
       env:
@@ -98,6 +101,30 @@ jobs:
           token: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
           setup-python: false
           setup-autobuild: false
+          # Optimized variants need a predictable artifact name so the rename
+          # steps below can replace the artifact; the default (package basename)
+          # would also collide with the default variant's artifact
+          artifact-name: ${{ matrix.variant == 'optimized' && format('ServerLuaOptimized-{0}', matrix.addrsize) || '' }}
+
+      # Rename the optimized package so it doesn't collide with the default
+      # variant's release asset. The tarball contents are untouched, so the
+      # hashes recorded in autobuild-results.json remain valid.
+      - name: Rename optimized package
+        if: matrix.variant == 'optimized'
+        run: |
+          for f in ServerLua-*.tar.zst; do mv "$f" "${f/ServerLua/ServerLuaOptimized}"; done
+          sed -i 's/ServerLua/ServerLuaOptimized/g' autobuild-results.json
+
+      - name: Replace artifact with renamed package
+        if: matrix.variant == 'optimized'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ServerLuaOptimized-${{ matrix.addrsize }}
+          overwrite: true
+          path: |
+            ServerLuaOptimized-*.tar.zst
+            autobuild-results.json
+            autobuild-graph.mermaid
 
   release:
     name: "Upload autobuild packages to release"

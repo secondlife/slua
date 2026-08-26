@@ -86,8 +86,12 @@ pushd "$top"
             cp -v Release/slua.exe "$stage/bin/"
         ;;
         darwin*|linux*)
-            # Continue compiling with asserts for now
-            LL_BUILD_RELEASE="$(remove_switch -DNDEBUG $LL_BUILD_RELEASE)"
+            # Optimized builds use the inherited release flags as-is, any local
+            # adjustments to them belong inside this guard
+            if [[ -z "${SLUA_OPTIMIZED_BUILD:-}" ]]; then
+                # Continue compiling with asserts for now
+                LL_BUILD_RELEASE="$(remove_switch -DNDEBUG $LL_BUILD_RELEASE)"
+            fi
             cmake -DCMAKE_INSTALL_PREFIX:STRING="${stage}" \
                   -DCMAKE_CXX_FLAGS="$LL_BUILD_RELEASE -m$AUTOBUILD_ADDRSIZE" \
                   -DCMAKE_C_FLAGS="$(remove_cxxstd $LL_BUILD_RELEASE) -m$AUTOBUILD_ADDRSIZE" \
