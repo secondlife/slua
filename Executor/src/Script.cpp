@@ -790,13 +790,15 @@ int Script::memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
         // Max possible size is now over the memory limit, or we didn't have a "actual"
         // base memory measurement before. Recalculate "actual" memory usage.
 
-        // But discount the cost of walking the script if we're actually executign a handler
-        bool account_walk = execute->mHandlerState != nullptr;
-        double walk_start = account_walk ? execute->mQuantaClockProvider(L) : 0.0;
+        // Discount only the baseline measurement's walk: its timing depends on engine
+        // bookkeeping state, while walks forced by allocating near the limit are the
+        // script's own work and stay charged.
+        bool discount_walk = execute->mExactSize == 0 && execute->mHandlerState != nullptr;
+        double walk_start = discount_walk ? execute->mQuantaClockProvider(L) : 0.0;
 
         size_t current_size = lua_userthreadgc(execute->mInstance.thread(), &execute->mImage->getFreeObjects()) + execute->mChargedBytecodeSize;
 
-        if (account_walk)
+        if (discount_walk)
             execute->mExcludedTime += execute->mQuantaClockProvider(L) - walk_start;
 
         execute->mExactSize = execute->mMaxPossibleSize = (int)current_size;
@@ -854,13 +856,13 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
         if (charged > (punish_quanta * 3.5))
         {
             // They're over the time limit. Set a deadline. Don't kill immediately in case
-            // a temporary performance blip caused them to go over time.
-            double now = mQuantaClockProvider(L);
+            // a temporary performance blip caused them to go over time. The deadline is
+            // in charged time so excluded work (GC steps, heap walks) can't eat the grace.
             if (mMandatoryDeadline == 0.0)
             {
-                mMandatoryDeadline = now + punish_quanta * 0.5;
+                mMandatoryDeadline = charged + punish_quanta * 0.5;
             }
-            else if (now >= mMandatoryDeadline)
+            else if (charged >= mMandatoryDeadline)
             {
                 // It's very easy for people to intentionally write un-yieldable code. Punish them
                 // by killing their evil script. Yield is now mandatory.

@@ -1131,11 +1131,11 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor engine pauses are not charged")
         checkCapture(ts.host.printed, {"finished"});
     }
 
-    SUBCASE("heap walk feeds the exclusion accumulator")
+    SUBCASE("baseline heap walk feeds the exclusion accumulator")
     {
-        // Trigger a ton of allocations that would cause the
-        // lua_userthreadgc() check to kick in to get the
-        // actual heap size. The cost of walking the script should be excluded.
+        // Trigger a ton of allocations so the lua_userthreadgc() check kicks
+        // in to establish the baseline heap size. That walk's timing depends
+        // on engine bookkeeping state, so its cost is excluded.
         TestScript ts(R"(
             local parts = {}
             for i = 1, 50 do
@@ -1157,6 +1157,38 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor engine pauses are not charged")
         CHECK(ts.exec.getExcludedTime() > 0.0);
         CHECK(ts.exec.getSleep() == 0.0f);
         checkCapture(ts.host.printed, {"done"});
+    }
+
+    SUBCASE("limit-pressure heap walks are charged")
+    {
+        // Walks forced by allocating near the limit are the script's own
+        // work, so unlike the baseline walk they bank no exclusion.
+        TestScript ts(R"(
+            baseline = {}
+            preempt()
+            local s
+            for i = 1, 1000 do
+                s = string.rep("x", 200)
+            end
+            print("churned")
+        )");
+        ts.loadDefaultState();
+        Script& exec = ts.exec;
+        lua_State* script = exec.getInstanceState();
+        lua_gc(script, LUA_GCSETGOAL, 100000);
+        lua_gc(script, LUA_GCCOLLECT, 0);
+
+        ts.host.clock_step = 0.001;
+        // The first window's allocation establishes the baseline measurement
+        resume(exec, 10.0, HandlerRunStatus::Preempted);
+        CHECK(exec.getExcludedTime() > 0.0);
+
+        // Pin the limit just over current use so the churn loop repeatedly
+        // forces recalc walks
+        exec.setMemoryLimitUnsafe(exec.getUsedMemory() + 4096);
+        resume(exec, 10.0, HandlerRunStatus::Ok);
+        CHECK(exec.getExcludedTime() == 0.0);
+        checkCapture(ts.host.printed, {"churned"});
     }
 }
 
@@ -1217,6 +1249,40 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor mandatory yield grace")
         CHECK(ts.exec.getFaultKind() == FaultKind::Timeout);
         CHECK(ts.exec.getFaultString() == "exceeded time limit");
         CHECK(ts.host.printed.empty());
+    }
+
+    SUBCASE("excluded time does not consume the grace window")
+    {
+        // The grace deadline must be measured in charged time: a GC step
+        // landing after the deadline is armed must not burn the window.
+        TestScript ts(R"(
+            local mt = {}
+            mt.__index = function(t, k)
+                jump_clock(10)
+                local total = 0
+                for i = 1, 5 do
+                    total += i
+                end
+                simulate_gc_step(10)
+                for i = 1, 20 do
+                    total += i
+                end
+                return total
+            end
+            local obj = setmetatable({}, mt)
+            print(obj.missing)
+        )");
+        ts.loadDefaultState();
+        Script& exec = ts.exec;
+
+        ts.host.clock_step = 0.000001;
+        resume(exec, 0.005, HandlerRunStatus::Preempted);
+        CHECK(exec.getFaultKind() == FaultKind::None);
+        CHECK(exec.getSleep() > 0.0f);
+
+        exec.setSleep(0.0f);
+        resumeToCompletion(exec, 0.005);
+        checkCapture(ts.host.printed, {"225"});
     }
 }
 
