@@ -26,14 +26,10 @@ jobs:
     - name: pack
       if: matrix.os.name == 'windows'
       run: 7z a slua-${{github.event.release.tag_name}}-${{matrix.os.name}}.zip .\Release\slua*.exe
-    - uses: actions/upload-release-asset@v1
+    - name: upload release asset
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: slua-${{github.event.release.tag_name}}-${{matrix.os.name}}.zip
-        asset_name: slua-${{github.event.release.tag_name}}-${{matrix.os.name}}.zip
-        asset_content_type: application/octet-stream
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload "${{ github.event.release.tag_name }}" slua-${{github.event.release.tag_name}}-${{matrix.os.name}}.zip
 
   package:
     strategy:
@@ -152,11 +148,9 @@ jobs:
         source emsdk/emsdk_env.sh
         emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
         make -j2 Luau.Web
-    - uses: actions/upload-release-asset@v1
+    - name: upload release asset
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: Luau.Web.js
-        asset_name: SLua.Web.js
-        asset_content_type: application/octet-stream
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cp Luau.Web.js SLua.Web.js
+        gh release upload "${{ github.event.release.tag_name }}" SLua.Web.js
