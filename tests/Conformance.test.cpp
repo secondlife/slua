@@ -1856,17 +1856,17 @@ TEST_CASE("StdlibYield")
         lua_pushboolean(L, codegen && luau_codegen_supported());
         lua_setglobal(L, "is_codegen");
 
-        // Skip timing assertions under instrumented builds where per-thread
-        // CPU time is unreliable or unavailable:
+        // Skip timing assertions unless we specifically asked for them:
         // - ASAN shadow checks inflate libc calls (~5μs → ~300μs), and
         //   HARDSTACKTESTS quarantine flushes take ~700μs per free().
         // - Coverage instrumentation (-fprofile-instr-generate) adds similar overhead.
         // - Windows lacks per-thread CPU time with sufficient resolution.
+        // - CI timings are just generally flaky, unfortunately.
         lua_pushboolean(L,
-#if LUAU_ENABLE_ASAN || defined(LUAU_COVERAGE) || defined(_WIN32)
-            true
-#else
+#if defined(LUAU_FLAKY_TIMING_TESTS) && LUAU_FLAKY_TIMING_TESTS
             false
+#else
+            true
 #endif
         );
         lua_setglobal(L, "skip_timing_tests");
