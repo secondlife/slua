@@ -32,8 +32,9 @@ static void setLuauFlag(std::string_view name, bool state)
 
 static void setLuauFlags(bool state)
 {
+    // ServerLua: include our flags too.
     for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
-        if (strncmp(flag->name, "Luau", 4) == 0)
+        if (strncmp(flag->name, "Luau", 4) == 0 || strncmp(flag->name, "SLua", 4) == 0)
             flag->value = state;
 }
 

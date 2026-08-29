@@ -93,6 +93,10 @@ BYTECODE_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Bytecode.cp
 BYTECODE_CLI_OBJECTS=$(BYTECODE_CLI_SOURCES:%=$(BUILD)/%.o)
 BYTECODE_CLI_TARGET=$(BUILD)/slua-bytecode
 
+HARNESS_CLI_SOURCES=CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Harness.cpp LSLBuiltins/src/LSLBuiltins.cpp
+HARNESS_CLI_OBJECTS=$(HARNESS_CLI_SOURCES:%=$(BUILD)/%.o)
+HARNESS_CLI_TARGET=$(BUILD)/slua-harness
+
 MUTATOR_LIBS=build/libprotobuf-mutator/src/libfuzzer/libprotobuf-mutator-libfuzzer.a build/libprotobuf-mutator/src/libprotobuf-mutator.a
 
 FUZZ_SOURCES=$(wildcard fuzz/*.cpp) fuzz/luau.pb.cpp
@@ -106,8 +110,8 @@ ifneq ($(opt),)
 	TESTS_ARGS+=-O$(opt)
 endif
 
-OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(EXECUTOR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
-EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-tests
+OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(EXECUTOR_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(HARNESS_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
+EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-harness slua-tests
 
 # `LUAU_CONFORMANCE_SOURCE_DIR` is configured at build time
 LUAU_CONFORMANCE_SOURCE_DIR = "\"$(realpath .)/tests/conformance\""
@@ -199,6 +203,7 @@ $(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytec
 $(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include -ILSLBuiltins/include -Istage/packages/include
 $(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include -I$(BUILD)
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
+$(HARNESS_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -IExecutor/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include
 $(TEST_LINK_VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(TEST_LINK_CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -ICodeGen/include
 $(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IAnalysis/include -IVM/include -ICodeGen/include -IConfig/include -ILSLBuiltins/include -Istage/packages/include
@@ -207,6 +212,7 @@ $(TESTS_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
 $(REPL_CLI_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
 $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
 $(COMPILE_CLI_TARGET): LDFLAGS+=-Lstage/packages/lib/release -ltailslide
+$(HARNESS_CLI_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
 
 fuzz-proto fuzz-prototest: LDFLAGS+=$(LPROTOBUF)
 fuzz-lsl_script: LDFLAGS+=-Lstage/packages/lib/release -ltailslide
@@ -280,6 +286,9 @@ slua-compile: $(COMPILE_CLI_TARGET)
 slua-bytecode: $(BYTECODE_CLI_TARGET)
 	ln -fs $^ $@
 
+slua-harness: $(HARNESS_CLI_TARGET)
+	ln -fs $^ $@
+
 slua-tests: $(TESTS_TARGET) $(TEST_LINK_VM_TARGET) $(TEST_LINK_CODEGEN_TARGET)
 	ln -fs $(TESTS_TARGET) $@
 
@@ -289,8 +298,9 @@ $(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(JITINLINER_TARGET) 
 $(ANALYZE_CLI_TARGET): $(ANALYZE_CLI_OBJECTS) $(ANALYSIS_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(COMMON_TARGET)
 $(COMPILE_CLI_TARGET): $(COMPILE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
 $(BYTECODE_CLI_TARGET): $(BYTECODE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(COMMON_TARGET)
+$(HARNESS_CLI_TARGET): $(HARNESS_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(EXECUTOR_TARGET) $(VM_TARGET) $(COMMON_TARGET)
 
-$(TESTS_TARGET) $(REPL_CLI_TARGET) $(ANALYZE_CLI_TARGET) $(COMPILE_CLI_TARGET) $(BYTECODE_CLI_TARGET):
+$(TESTS_TARGET) $(REPL_CLI_TARGET) $(ANALYZE_CLI_TARGET) $(COMPILE_CLI_TARGET) $(BYTECODE_CLI_TARGET) $(HARNESS_CLI_TARGET):
 	$(CXX) $^ $(LDFLAGS) -o $@
 
 WHOLE_ARCHIVE_START=$(if $(filter Darwin,$(shell uname -s)),,-Wl,--whole-archive)

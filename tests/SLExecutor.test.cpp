@@ -160,23 +160,21 @@ static ScriptConfig makeScriptConfig()
     return config;
 }
 
-/*
-** One-line drivers for the begin-window-then-call pairs the engine API is
-** built around. Each opens a FRESH run window; tests exercising the window
-** itself call the engine directly. The `Raw` variants hand the status back;
-** the plain ones REQUIRE the status the test expects (Ok unless said
-** otherwise) so call sites don't have to.
-*/
+// One-line drivers for the begin/call/end run-window brackets the engine API is built around.
 static RunResult dispatchRaw(Script& exec, int lsl_state, const char* event_name, PushArgsFn push_args = nullptr, void* ctx = nullptr, double quanta = 1.0)
 {
     exec.beginRunWindow(quanta);
-    return exec.callEventHandler(lsl_state, event_name, push_args, ctx);
+    RunResult result = exec.callEventHandler(lsl_state, event_name, push_args, ctx);
+    exec.endRunWindow();
+    return result;
 }
 
 static RunResult resumeRaw(Script& exec, double quanta = 1.0)
 {
     exec.beginRunWindow(quanta);
-    return exec.resumeEventHandler();
+    RunResult result = exec.resumeEventHandler();
+    exec.endRunWindow();
+    return result;
 }
 
 static RunResult dispatch(Script& exec, int lsl_state, const char* event_name, HandlerRunStatus expect = HandlerRunStatus::Ok,
@@ -789,9 +787,14 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor yield-due is scoped to the run window
     REQUIRE(exec.callEventHandler(0, "moving_end", nullptr).status == HandlerRunStatus::Ok);
     CHECK(exec.isYieldDue());
 
+    // The flag survives the window's close
+    exec.endRunWindow();
+    CHECK(exec.isYieldDue());
+
     // Only a fresh window clears it
     exec.beginRunWindow(1.0);
     CHECK_FALSE(exec.isYieldDue());
+    exec.endRunWindow();
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor a host-set fault completes the main function")

@@ -265,6 +265,8 @@ bool Script::loadDefaultState()
 void Script::beginRunWindow(double quanta)
 {
     LUAU_ASSERT(mInstance);
+    LUAU_ASSERT(!mRunWindowOpen);
+    mRunWindowOpen = true;
     mYieldDue = false;
     mMandatoryYieldRaised = false;
     mMandatoryDeadline = 0.0;
@@ -272,6 +274,12 @@ void Script::beginRunWindow(double quanta)
     mGCStepInFlight = false;
     mWindowStart = mQuantaClockProvider(mInstance.thread());
     mQuanta = quanta;
+}
+
+void Script::endRunWindow()
+{
+    LUAU_ASSERT(mRunWindowOpen);
+    mRunWindowOpen = false;
 }
 
 RunResult Script::callEventHandler(int lsl_state, const char* event_name, PushArgsFn pushArgs, void* push_args_ctx)

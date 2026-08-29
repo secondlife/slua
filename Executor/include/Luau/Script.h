@@ -104,8 +104,11 @@ public:
     // state. Unlike loadDefaultState(), this is valid at any time.
     bool reset();
 
-    // Start a run window for `quanta` seconds
+    // Start a run window for `quanta` seconds. _must_ be followed by symmetric `endRunWindow()`
+    // TODO: RAII helper thingy maybe?
     void beginRunWindow(double quanta);
+    // And finish it.
+    void endRunWindow();
     // True once the engine has decided the current run window is over, sticky
     // for the rest of the window.
     bool isYieldDue() const { return mYieldDue; }
@@ -229,6 +232,7 @@ private:
     // it doesn't finish before the deadline.
     double mMandatoryDeadline = 0.0;
     float mSleep = 0.0f;
+    bool mRunWindowOpen = false;
     // The engine has decided that the run window is over.
     bool mYieldDue = false;
     // We already threw a catchable error trying to force a yield.

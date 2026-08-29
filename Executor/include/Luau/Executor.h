@@ -87,6 +87,9 @@ void logDebug(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logInfo(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logWarn(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 
+// Figure out which clock source to use
+lua_clockProvider resolveDefaultQuantaClock();
+
 // Give the embedder a chance to plop their own things into the environment before it's
 // fully set up. This is called before GC fixing / ares perms registration.
 using PopulateEnvironmentCallback = void (*)(IEnvironment& environment, lua_State* L);
@@ -354,7 +357,7 @@ public:
         : mCallbacks(callbacks)
     {
         if (mCallbacks.quantaClockProvider == nullptr)
-            mCallbacks.quantaClockProvider = defaultQuantaClock;
+            mCallbacks.quantaClockProvider = resolveDefaultQuantaClock();
     }
 
     Provisioner(const Provisioner&) = delete;
@@ -429,8 +432,6 @@ protected:
     }
 
 private:
-    static double defaultQuantaClock([[maybe_unused]] lua_State* L) { return lua_clock(); }
-
     HostCallbacks mCallbacks;
 };
 

@@ -499,6 +499,7 @@ target_sources(Luau.Executor PRIVATE
 
     Executor/src/Executor.cpp
     Executor/src/Logging.cpp
+    Executor/src/Scheduler.cpp
     Executor/src/Script.cpp
 )
 
@@ -755,4 +756,10 @@ if(TARGET Luau.Bytecode.CLI)
     # Luau.Bytecode.CLI Sources
     target_sources(Luau.Bytecode.CLI PRIVATE
         CLI/src/Bytecode.cpp)
+endif()
+
+if(TARGET Luau.Harness.CLI)
+    # ServerLua: Luau.Harness.CLI Sources
+    target_sources(Luau.Harness.CLI PRIVATE
+        CLI/src/Harness.cpp)
 endif()

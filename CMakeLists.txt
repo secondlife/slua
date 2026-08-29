@@ -88,6 +88,7 @@ if(LUAU_BUILD_CLI)
     add_executable(Luau.Reduce.CLI)
     add_executable(Luau.Compile.CLI)
     add_executable(Luau.Bytecode.CLI)
+    add_executable(Luau.Harness.CLI)
 
     # This also adds target `name` on Linux/macOS and `name.exe` on Windows
     set_target_properties(Luau.Repl.CLI PROPERTIES OUTPUT_NAME slua)
@@ -96,6 +97,7 @@ if(LUAU_BUILD_CLI)
     set_target_properties(Luau.Reduce.CLI PROPERTIES OUTPUT_NAME slua-reduce)
     set_target_properties(Luau.Compile.CLI PROPERTIES OUTPUT_NAME slua-compile)
     set_target_properties(Luau.Bytecode.CLI PROPERTIES OUTPUT_NAME slua-bytecode)
+    set_target_properties(Luau.Harness.CLI PROPERTIES OUTPUT_NAME slua-harness)
 endif()
 
 if(LUAU_BUILD_TESTS)
@@ -316,6 +318,7 @@ if(LUAU_BUILD_CLI)
     target_compile_options(Luau.Ast.CLI PRIVATE ${LUAU_OPTIONS})
     target_compile_options(Luau.Compile.CLI PRIVATE ${LUAU_OPTIONS})
     target_compile_options(Luau.Bytecode.CLI PRIVATE ${LUAU_OPTIONS})
+    target_compile_options(Luau.Harness.CLI PRIVATE ${LUAU_OPTIONS})
 
     target_include_directories(Luau.Repl.CLI PRIVATE extern extern/isocline/include)
     target_link_directories(Luau.Repl.CLI PRIVATE "${PACKAGE_LIB_DIR}")
@@ -328,6 +331,7 @@ if(LUAU_BUILD_CLI)
     target_link_libraries(Luau.Ast.CLI PRIVATE osthreads)
     target_link_libraries(Luau.Compile.CLI PRIVATE osthreads)
     target_link_libraries(Luau.Bytecode.CLI PRIVATE osthreads)
+    target_link_libraries(Luau.Harness.CLI PRIVATE osthreads)
 
     target_link_libraries(Luau.Analyze.CLI PRIVATE Luau.Analysis Luau.CLI.lib Luau.Require)
 
@@ -341,6 +345,9 @@ if(LUAU_BUILD_CLI)
     target_link_libraries(Luau.Compile.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
 
     target_link_libraries(Luau.Bytecode.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib)
+
+    target_link_directories(Luau.Harness.CLI PRIVATE "${PACKAGE_LIB_DIR}")
+    target_link_libraries(Luau.Harness.CLI PRIVATE Luau.Compiler Luau.VM Luau.Executor Luau.LSLBuiltins Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
 endif()
 
 if(LUAU_BUILD_TESTS)
