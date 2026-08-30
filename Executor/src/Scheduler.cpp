@@ -15,27 +15,46 @@
 
 #include "lua.h"
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
 #include <x86intrin.h>
 #endif
-#define SLUA_QUANTA_TSC_X64 1
+#define SLUA_QUANTA_TSC_X86 1
 #elif defined(__aarch64__) && !defined(_MSC_VER)
 #define SLUA_QUANTA_TSC_ARM64 1
 #endif
 
-#if defined(SLUA_QUANTA_TSC_X64) || defined(SLUA_QUANTA_TSC_ARM64)
+#if defined(SLUA_QUANTA_TSC_X86) || defined(SLUA_QUANTA_TSC_ARM64)
 #define SLUA_QUANTA_TSC 1
 #endif
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <sched.h>
+#if defined(__linux__)
+#include <cerrno>
+#include <sys/resource.h>
+#endif
+#endif
+
+LUAU_FASTFLAGVARIABLE(SLuaElevateWatchdogPriority)
 
 namespace Luau
 {
 namespace Executor
 {
 
-#if defined(SLUA_QUANTA_TSC_X64)
+#if defined(SLUA_QUANTA_TSC_X86)
 static inline uint64_t read_tsc()
 {
     // Shouldn't need a fence.
@@ -151,6 +170,48 @@ private:
 // the worst-case install lateness when the quanta is shorter than a tick.
 constexpr std::chrono::microseconds kWatchdogTick{250};
 
+// Best-effort hoist of the watch loop above the timesharing class, so a
+// deadline wakeup preempts a busy script thread immediately instead of
+// waiting out the kernel's wakeup-preemption granularity (multi-ms against
+// a spinning peer, enough to draw false punishments). Failure is survivable
+// -- fires still happen, just late -- but the outcome must be logged, or
+// "the flag didn't help" is indistinguishable from a silent EPERM.
+void elevate_watchdog_priority()
+{
+#if defined(_WIN32)
+    if (SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
+    {
+        logInfo("QuantaWatchdog", "Watchdog thread priority raised to TIME_CRITICAL");
+        return;
+    }
+    logWarn("QuantaWatchdog", "Watchdog priority elevation failed: SetThreadPriority error %lu", GetLastError());
+#else
+    // The lowest RT priority is enough: the goal is class-based wakeup
+    // preemption over SCHED_OTHER threads, not competition within RT.
+    sched_param param = {};
+    param.sched_priority = sched_get_priority_min(SCHED_RR);
+    int rr_err = pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+    if (rr_err == 0)
+    {
+        logInfo("QuantaWatchdog", "Watchdog thread scheduling class raised to SCHED_RR");
+        return;
+    }
+#if defined(__linux__)
+    // SCHED_RR needs CAP_SYS_NICE/RLIMIT_RTPRIO; a negative nice at least
+    // lowers the wakeup-preemption bar. who == 0 targets the calling thread
+    // under NPTL.
+    if (setpriority(PRIO_PROCESS, 0, -10) == 0)
+    {
+        logInfo("QuantaWatchdog", "Watchdog thread niced to -10 (SCHED_RR unavailable, errno %d)", rr_err);
+        return;
+    }
+    logWarn("QuantaWatchdog", "Watchdog priority elevation failed: SCHED_RR errno %d, setpriority errno %d", rr_err, errno);
+#else
+    logWarn("QuantaWatchdog", "Watchdog priority elevation failed: SCHED_RR errno %d", rr_err);
+#endif
+#endif
+}
+
 class ThreadedQuantaWatchdog final : public QuantaWatchdog
 {
 public:
@@ -225,6 +286,9 @@ public:
 private:
     void watch()
     {
+        if (FFlag::SLuaElevateWatchdogPriority)
+            elevate_watchdog_priority();
+
         std::unique_lock<std::mutex> lock(mMutex);
         while (!mExit)
         {
