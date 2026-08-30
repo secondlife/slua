@@ -1,6 +1,14 @@
-// low-overhead timestamp-counter clock for quanta preemption checks.
-//  This is largely a formalization of the `LLRDTSCTimer` pattern in
-//  viewer and server.
+// Quanta preemption scheduling: the watchdog policies that arm the VM's
+// interrupt pointer, and the low-overhead timestamp-counter clock they read.
+// The clock is largely a formalization of the `LLRDTSCTimer` pattern in
+// viewer and server.
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
+
 #include "Luau/Executor.h"
 
 #include "Luau/Common.h"
@@ -102,6 +110,168 @@ lua_clockProvider resolveDefaultQuantaClock()
 #else
     return fallback_quanta_clock;
 #endif
+}
+
+QuantaWatchdog::~QuantaWatchdog() = default;
+
+namespace
+{
+
+class ImmediateQuantaWatchdog final : public QuantaWatchdog
+{
+public:
+    using QuantaWatchdog::QuantaWatchdog;
+
+    void arm(lua_Callbacks* target, double /* deadline */) override
+    {
+        mTarget = target;
+        fireNow();
+    }
+
+    void disarm() override {}
+
+    void fireNow() override
+    {
+        LUAU_ASSERT(mTarget != nullptr);
+        mTarget->interrupt = mHandler;
+    }
+
+    bool clearIfArmed() override
+    {
+        // The install always stands: the resident handler is the mechanism.
+        return false;
+    }
+
+private:
+    lua_Callbacks* mTarget = nullptr;
+};
+
+// How often the watch loop re-reads its state: the discovery granularity for
+// a freshly armed window, and the bound on how stale a re-arm can be. Also
+// the worst-case install lateness when the quanta is shorter than a tick.
+constexpr std::chrono::microseconds kWatchdogTick{250};
+
+class ThreadedQuantaWatchdog final : public QuantaWatchdog
+{
+public:
+    ThreadedQuantaWatchdog(InterruptCallback handler, lua_clockProvider quanta_clock)
+        : QuantaWatchdog(handler)
+        , mQuantaClock(quanta_clock)
+    {
+        mThread = std::thread([this] { watch(); });
+    }
+
+    ~ThreadedQuantaWatchdog() override
+    {
+        {
+            std::lock_guard<std::mutex> guard(mMutex);
+            mExit = true;
+        }
+        mCondition.notify_one();
+        mThread.join();
+    }
+
+    ThreadedQuantaWatchdog(const ThreadedQuantaWatchdog&) = delete;
+    ThreadedQuantaWatchdog& operator=(const ThreadedQuantaWatchdog&) = delete;
+
+    void arm(lua_Callbacks* target, double deadline) override
+    {
+        // The null store must precede the armed publish below: stored after,
+        // a fire delivered in between would be wiped with the window's
+        // one-shot already spent, leaving the window unpreemptable.
+        target->interrupt = nullptr;
+
+        std::lock_guard<std::mutex> guard(mMutex);
+        // Run windows are serial per provisioner, and every path to a new
+        // begin passes through disarm (or a delivered fire), so an armed slot
+        // here means concurrent windows -- which would silently overwrite
+        // this deadline and lose the other window's preemption.
+        LUAU_ASSERT(!mArmed);
+        mTarget = target;
+        mDeadline = deadline;
+        mArmed = true;
+        // No notify: the watch loop picks the window up within a tick.
+    }
+
+    void disarm() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        mArmed = false;
+    }
+
+    void fireNow() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        // Unarmed mid-window means the deadline fire was already delivered,
+        // so the handler is resident and there is nothing to add. The lock
+        // makes mTarget safe to read from a cross-thread producer and orders
+        // us against the fire.
+        if (mArmed)
+            mTarget->interrupt = mHandler;
+    }
+
+    bool clearIfArmed() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        // The fire clears mArmed under this same mutex, so armed means the
+        // fire is still coming and will re-install; unarmed means the install
+        // being questioned IS the fire, and it must stand.
+        if (!mArmed)
+            return false;
+        mTarget->interrupt = nullptr;
+        return true;
+    }
+
+private:
+    void watch()
+    {
+        std::unique_lock<std::mutex> lock(mMutex);
+        while (!mExit)
+        {
+            std::chrono::duration<double> wait = kWatchdogTick;
+            if (mArmed)
+            {
+                double remaining = mDeadline - mQuantaClock(nullptr);
+                if (remaining <= 0.0)
+                {
+                    // Deliver the one-shot while holding the lock, so it can
+                    // only target the currently-armed window's VM. The VM
+                    // reads the pointer unsynchronized by design (lua.h's
+                    // interrupt contract).
+                    mTarget->interrupt = mHandler;
+                    mArmed = false;
+                    continue;
+                }
+                // Clamped to the tick so a re-arm during the wait is still
+                // picked up without any notify
+                wait = std::min(wait, std::chrono::duration<double>(remaining));
+            }
+            mCondition.wait_for(lock, wait);
+        }
+    }
+
+    lua_clockProvider mQuantaClock = nullptr;
+
+    std::mutex mMutex;
+    std::condition_variable mCondition;
+    lua_Callbacks* mTarget = nullptr;
+    double mDeadline = 0.0;
+    bool mArmed = false;
+    bool mExit = false;
+
+    std::thread mThread;
+};
+
+} // namespace
+
+std::unique_ptr<QuantaWatchdog> createImmediateQuantaWatchdog(InterruptCallback handler)
+{
+    return std::make_unique<ImmediateQuantaWatchdog>(handler);
+}
+
+std::unique_ptr<QuantaWatchdog> createQuantaWatchdog(InterruptCallback handler, lua_clockProvider quanta_clock)
+{
+    return std::make_unique<ThreadedQuantaWatchdog>(handler, quanta_clock);
 }
 
 } // namespace Executor
