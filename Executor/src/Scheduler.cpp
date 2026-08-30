@@ -1,33 +1,62 @@
-// low-overhead timestamp-counter clock for quanta preemption checks.
-//  This is largely a formalization of the `LLRDTSCTimer` pattern in
-//  viewer and server.
+// Installers to plop in the interrupt handler as-needed, and
+// the low-overhead timestamp-counter clock it reads (largely a formalization
+// of the `LLRDTSCTimer` pattern in viewer and server).
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
+
 #include "Luau/Executor.h"
 
 #include "Luau/Common.h"
 
 #include "lua.h"
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
 #include <x86intrin.h>
 #endif
-#define SLUA_QUANTA_TSC_X64 1
+#define SLUA_QUANTA_TSC_X86 1
 #elif defined(__aarch64__) && !defined(_MSC_VER)
 #define SLUA_QUANTA_TSC_ARM64 1
 #endif
 
-#if defined(SLUA_QUANTA_TSC_X64) || defined(SLUA_QUANTA_TSC_ARM64)
+#if defined(SLUA_QUANTA_TSC_X86) || defined(SLUA_QUANTA_TSC_ARM64)
 #define SLUA_QUANTA_TSC 1
 #endif
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <sched.h>
+#if defined(__linux__)
+#include <cerrno>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#endif
+#endif
+
+LUAU_FASTFLAGVARIABLE(SLuaThreadedQuantaWatchdog)
+LUAU_FASTFLAGVARIABLE(SLuaElevateWatchdogPriority)
 
 namespace Luau
 {
 namespace Executor
 {
 
-#if defined(SLUA_QUANTA_TSC_X64)
+#if defined(SLUA_QUANTA_TSC_X86)
 static inline uint64_t read_tsc()
 {
     // Shouldn't need a fence.
@@ -70,6 +99,7 @@ static double measure_seconds_per_tick()
     // The architecture publishes the exact frequency, no calibration needed.
     // Apple Silicon reports 24MHz -> ~41.7ns per tick, ~3600 ticks per 150us
     // quanta.
+    // TODO: is this the case for _all_ modern ARM64?
     uint64_t freq;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
     LUAU_ASSERT(freq != 0);
@@ -78,30 +108,273 @@ static double measure_seconds_per_tick()
 #endif
 
 #if defined(SLUA_QUANTA_TSC)
-static double tsc_quanta_clock([[maybe_unused]] lua_State* L)
+static double tsc_quanta_clock()
 {
+    // `static` so it's only computed on first call.
     static const double seconds_per_tick = measure_seconds_per_tick();
     return (double)read_tsc() * seconds_per_tick;
 }
 #endif
 
-#if !defined(SLUA_QUANTA_TSC)
-static double fallback_quanta_clock([[maybe_unused]] lua_State* L)
-{
-    return lua_clock();
-}
-#endif
-
-lua_clockProvider resolveDefaultQuantaClock()
+QuantaClock resolveDefaultQuantaClock()
 {
 #if defined(SLUA_QUANTA_TSC)
     // Warm up now so any calibration cost lands at
     // provisioner setup rather than inside the first script's run window
-    tsc_quanta_clock(nullptr);
+    tsc_quanta_clock();
     return tsc_quanta_clock;
 #else
-    return fallback_quanta_clock;
+    // If we don't have anything better, just use whatever `lua_clock()` uses for the platform.
+    return lua_clock;
 #endif
+}
+
+InterruptInstallPolicy resolveDefaultInterruptInstallPolicy()
+{
+    return FFlag::SLuaThreadedQuantaWatchdog ? InterruptInstallPolicy::Threaded : InterruptInstallPolicy::Resident;
+}
+
+InterruptInstaller::~InterruptInstaller() = default;
+
+namespace
+{
+
+/// Stays resident on `cb->interrupt`, triggering the interrupt callback
+/// wherever it is possible.
+///
+/// Expensive on platforms where constantly reading the current cycle count
+/// is expensive, but preferred everywhere else (like modern ARM64)
+class ResidentInterruptInstaller final : public InterruptInstaller
+{
+public:
+    using InterruptInstaller::InterruptInstaller;
+
+    void installBy(lua_Callbacks* target, double /* deadline */) override
+    {
+        mTarget = target;
+        installNow();
+    }
+
+    void installNow() override
+    {
+        LUAU_ASSERT(mTarget != nullptr);
+        mTarget->interrupt = mHandler;
+    }
+
+    void cancel() override {}
+
+private:
+    // Never pending, the install is immediate
+    void uninstallPending() override
+    {
+        LUAU_ASSERT(false);
+    }
+
+    lua_Callbacks* mTarget = nullptr;
+};
+
+// How early the watchdog installs the handler, to cover wakeup jitter
+constexpr double kWatchdogFireLead = 50e-6;  // 50us
+
+// Elevating the priority helps a lot if we want to stick to a strict schedule.
+// If we don't do this, the watchdog may fire much later than we intend because
+// the kernel is allowed to take its time waking the thread up.
+void elevate_watchdog_thread_priority()
+{
+#if defined(_WIN32)
+    // wait_for granularity is ~1ms at best on Windows, fires will be late regardless
+    if (SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
+    {
+        logInfo("InterruptInstaller", "Watchdog thread priority raised to TIME_CRITICAL");
+        return;
+    }
+    logWarn("InterruptInstaller", "Watchdog priority elevation failed: SetThreadPriority error %lu", GetLastError());
+#else
+#if defined(__linux__)
+    // Default timer slack is 50us, the whole fire lead
+    if (prctl(PR_SET_TIMERSLACK, 1) != 0)
+        logWarn("InterruptInstaller", "Couldn't reduce watchdog timer slack: errno %d", errno);
+#endif
+    // The lowest RT priority is enough, we only need to preempt SCHED_OTHER threads
+    sched_param param = {};
+    param.sched_priority = sched_get_priority_min(SCHED_RR);
+    int rr_err = pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+    if (rr_err == 0)
+    {
+        logInfo("InterruptInstaller", "Watchdog thread scheduling class raised to SCHED_RR");
+        return;
+    }
+#if defined(__linux__)
+    // who == 0 is the calling thread under NPTL
+    if (setpriority(PRIO_PROCESS, 0, -10) == 0)
+    {
+        logInfo("InterruptInstaller", "Watchdog thread niced to -10 (SCHED_RR unavailable, errno %d)", rr_err);
+        return;
+    }
+    logWarn("InterruptInstaller", "Watchdog priority elevation failed: SCHED_RR errno %d, setpriority errno %d", rr_err, errno);
+#else
+    logWarn("InterruptInstaller", "Watchdog priority elevation failed: SCHED_RR errno %d", rr_err);
+#endif
+#endif
+}
+
+/// Uses a background watchdog thread to only set `cb->interrupt` when quanta is up.
+///
+/// A little more convoluted than the above "resident" installer, but yields a 30% performance
+/// boost in math-heavy code on x86-64 and x86-32.
+class ThreadedInterruptInstaller final : public InterruptInstaller
+{
+public:
+    ThreadedInterruptInstaller(InterruptCallback handler, QuantaClock quanta_clock)
+        : InterruptInstaller(handler)
+        , mQuantaClock(quanta_clock)
+    {
+        mThread = std::thread([this] { loopAndWatch(); });
+    }
+
+    ~ThreadedInterruptInstaller() override
+    {
+        {
+            std::lock_guard<std::mutex> guard(mMutex);
+            mExit = true;
+        }
+        mCondition.notify_one();
+        mThread.join();
+    }
+
+    ThreadedInterruptInstaller(const ThreadedInterruptInstaller&) = delete;
+    ThreadedInterruptInstaller& operator=(const ThreadedInterruptInstaller&) = delete;
+
+    void installBy(lua_Callbacks* target, double deadline) override
+    {
+        // Clear before publishing the deadline, otherwise a fire landing in between
+        // would get wiped and the window would never be preempted.
+        target->interrupt = nullptr;
+
+        bool wake;
+        {
+            std::lock_guard<std::mutex> guard(mMutex);
+            LUAU_ASSERT(!mPending.load(std::memory_order_relaxed));
+            mTarget = target;
+            mDeadline = deadline;
+            mOverrun = 0.0;
+            mPending.store(true, std::memory_order_relaxed);
+            // Waking is a syscall and a context switch, so only do it if the
+            // thread isn't already due up in time. Otherwise it wakes at its
+            // old target, sees this deadline, and sleeps again toward it.
+            wake = mIdle || deadline - kWatchdogFireLead < mSleepUntil;
+        }
+        if (wake)
+            mCondition.notify_one();
+    }
+
+    void installNow() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        // But only if it was pending, don't touch it if we already installed.
+        if (mPending.load(std::memory_order_relaxed))
+            mTarget->interrupt = mHandler;
+    }
+
+    void cancel() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        mPending.store(false, std::memory_order_relaxed);
+    }
+
+    double getInstallOverrun() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        return mOverrun;
+    }
+
+    WatchdogStats getStats() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        return mStats;
+    }
+
+private:
+    void uninstallPending() override
+    {
+        // The inline check that got us here was lockless. Only installBy()
+        // goes false -> true, on this thread, so a false reading there is
+        // stable, but a true one needs the lock to make sure the fire didn't
+        // land in between.
+        std::lock_guard<std::mutex> guard(mMutex);
+        if (mPending.load(std::memory_order_relaxed))
+            mTarget->interrupt = nullptr;
+    }
+
+    void loopAndWatch()
+    {
+        if (FFlag::SLuaElevateWatchdogPriority)
+            elevate_watchdog_thread_priority();
+
+        std::unique_lock<std::mutex> lock(mMutex);
+        while (!mExit)
+        {
+            if (!mPending.load(std::memory_order_relaxed))
+            {
+                // cancel() doesn't notify, a stale deadline lands us here too.
+                // Just sit until we're notified.
+                mIdle = true;
+                mCondition.wait(lock);
+                mIdle = false;
+                mStats.wakes++;
+                continue;
+            }
+
+            const double remaining = mDeadline - mQuantaClock();
+            if (remaining <= kWatchdogFireLead)
+            {
+                release_store(&mTarget->interrupt, mHandler);
+                mPending.store(false, std::memory_order_relaxed);
+                mOverrun = std::max(0.0, -remaining);
+
+                double lateness = kWatchdogFireLead - remaining;
+                mStats.latenessSum += lateness;
+                mStats.latenessMin = mStats.fires == 0 ? lateness : std::min(mStats.latenessMin, lateness);
+                mStats.latenessMax = std::max(mStats.latenessMax, lateness);
+                mStats.fires++;
+                if (mOverrun > 0.0)
+                    mStats.lateFires++;
+                continue;
+            }
+            mSleepUntil = mDeadline - kWatchdogFireLead;
+            mCondition.wait_for(lock, std::chrono::duration<double>(remaining - kWatchdogFireLead));
+            mStats.wakes++;
+        }
+    }
+
+    QuantaClock mQuantaClock = nullptr;
+
+    std::mutex mMutex;
+    std::condition_variable mCondition;
+    lua_Callbacks* mTarget = nullptr;
+    double mDeadline = 0.0;
+    // Seconds past mDeadline that the last fire landed
+    double mOverrun = 0.0;
+    WatchdogStats mStats;
+    // Moment we expect the thread to wake back up
+    double mSleepUntil = 0.0;
+    // Are we currently sitting idle waiting for another script to work on
+    bool mIdle = true;
+    // Should we start tearing down the watchdog
+    bool mExit = false;
+
+    std::thread mThread;
+};
+
+} // namespace
+
+std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quanta_clock)
+{
+    if (policy == InterruptInstallPolicy::Default)
+        policy = resolveDefaultInterruptInstallPolicy();
+    if (policy == InterruptInstallPolicy::Threaded)
+        return std::make_unique<ThreadedInterruptInstaller>(handler, quanta_clock);
+    return std::make_unique<ResidentInterruptInstaller>(handler);
 }
 
 } // namespace Executor

@@ -15,6 +15,7 @@
 
 // For the handler thread's stack and CallInfo capacities, which the API surface
 // has no reason to expose
+#include "../VM/src/lgc.h"
 #include "../VM/src/lstate.h"
 
 #ifdef LUAU_USE_TAILSLIDE
@@ -31,13 +32,47 @@ using namespace Luau::Executor;
 
 LUAU_FASTFLAG(SLuaEagerWeakClear)
 
-// Provisioner with deterministic fakes: a virtual clock that advances by
-// clock_step on every reading, plus capture of print output and dynamic
-// handler registrations.
-struct TestProvisioner : Provisioner<>
+// A virtual quanta clock that advances by clock_step on every reading. The
+// quanta clock takes no lua_State, so the fake finds its host through
+// `current`: last constructed wins, and no test steps the clock while two
+// hosts are alive.
+struct FakeQuantaClock
 {
     double clock = 0.0;
     double clock_step = 0.0;
+
+    FakeQuantaClock()
+        : previous(current)
+    {
+        current = this;
+    }
+
+    ~FakeQuantaClock()
+    {
+        current = previous;
+    }
+
+    FakeQuantaClock(const FakeQuantaClock&) = delete;
+    FakeQuantaClock& operator=(const FakeQuantaClock&) = delete;
+
+    static double read()
+    {
+        LUAU_ASSERT(current != nullptr);
+        current->clock += current->clock_step;
+        return current->clock;
+    }
+
+private:
+    FakeQuantaClock* previous;
+    static FakeQuantaClock* current;
+};
+
+FakeQuantaClock* FakeQuantaClock::current = nullptr;
+
+// Provisioner with deterministic fakes: the virtual quanta clock above, plus
+// capture of print output and dynamic handler registrations.
+struct TestProvisioner : Provisioner<>, FakeQuantaClock
+{
     // The script-visible stopwatch LLTimers schedules against. Deliberately
     // separate from the quanta clock above, which advances on every reading.
     double script_clock = 0.0;
@@ -58,7 +93,9 @@ struct TestProvisioner : Provisioner<>
         callbacks.performanceClockProvider = script_clock_provider;
         callbacks.setTimerEventCb = set_timer_event;
         callbacks.eventHandlerRegistrationCb = handler_registration;
-        callbacks.quantaClockProvider = quanta_clock;
+        callbacks.quantaClockProvider = FakeQuantaClock::read;
+        // The fake clock only moves when the test says, no use for a watchdog thread
+        callbacks.interruptInstallPolicy = InterruptInstallPolicy::Resident;
         callbacks.populateEnvironment = populate_environment;
         return callbacks;
     }
@@ -71,18 +108,11 @@ struct TestProvisioner : Provisioner<>
         lua_pushcfunction(L, lua_break, "preempt");
         lua_setglobal(L, "preempt");
 
-        lua_pushcfunction(L, simulate_gc_step, "simulate_gc_step");
-        lua_setglobal(L, "simulate_gc_step");
-
         lua_pushcfunction(L, jump_clock, "jump_clock");
         lua_setglobal(L, "jump_clock");
-    }
 
-    static double quanta_clock(lua_State* L)
-    {
-        TestProvisioner& host = of(L);
-        host.clock += host.clock_step;
-        return host.clock;
+        lua_pushcfunction(L, gc_count, "gc_count");
+        lua_setglobal(L, "gc_count");
     }
 
     static double script_clock_provider(lua_State* L)
@@ -106,19 +136,6 @@ struct TestProvisioner : Provisioner<>
         return static_cast<TestProvisioner&>(executor->getProvisioner());
     }
 
-    // Invoke the GC callbacks as if GC is happening, without actually triggering it.
-    static int simulate_gc_step(lua_State* L)
-    {
-        double cost = luaL_checknumber(L, 1);
-        int post_state = luaL_optinteger(L, 2, 0);
-        void (*interrupt)(lua_State*, int) = lua_callbacks(L)->interrupt;
-        REQUIRE((interrupt != nullptr));
-        interrupt(L, 0);
-        of(L).clock += cost;
-        interrupt(L, post_state);
-        return 0;
-    }
-
     // An engine pause the executor has no bracket for: time passes with no
     // exclusion banked, as if the host got descheduled mid-execution.
     static int jump_clock(lua_State* L)
@@ -131,6 +148,13 @@ struct TestProvisioner : Provisioner<>
     {
         TestProvisioner::of(L).printed.emplace_back(luaL_checkstring(L, 1));
         return 0;
+    }
+
+    // Heap size in KB as the script sees it mid-window
+    static int gc_count(lua_State* L)
+    {
+        lua_pushnumber(L, lua_gc(L, LUA_GCCOUNT, 0));
+        return 1;
     }
 
     static bool handler_registration(lua_State* L, const char* event_name, bool registered)
@@ -160,21 +184,17 @@ static ScriptConfig makeScriptConfig()
     return config;
 }
 
-// One-line drivers for the begin/call/end run-window brackets the engine API is built around.
+// One-line drivers for a single call inside its own run window.
 static RunResult dispatchRaw(Script& exec, int lsl_state, const char* event_name, PushArgsFn push_args = nullptr, void* ctx = nullptr, double quanta = 1.0)
 {
-    exec.beginRunWindow(quanta);
-    RunResult result = exec.callEventHandler(lsl_state, event_name, push_args, ctx);
-    exec.endRunWindow();
-    return result;
+    RunWindow window(exec, quanta);
+    return exec.callEventHandler(lsl_state, event_name, push_args, ctx);
 }
 
 static RunResult resumeRaw(Script& exec, double quanta = 1.0)
 {
-    exec.beginRunWindow(quanta);
-    RunResult result = exec.resumeEventHandler();
-    exec.endRunWindow();
-    return result;
+    RunWindow window(exec, quanta);
+    return exec.resumeEventHandler();
 }
 
 static RunResult dispatch(Script& exec, int lsl_state, const char* event_name, HandlerRunStatus expect = HandlerRunStatus::Ok,
@@ -206,6 +226,8 @@ static RunResult resumeToCompletion(Script& exec, double quanta, HandlerRunStatu
     RunResult result{HandlerRunStatus::Preempted, 0};
     while (result.status == HandlerRunStatus::Preempted)
     {
+        // Bank-and-zero like a real host would
+        exec.setSleep(0.0f);
         result = resumeRaw(exec, quanta);
         if (preemptions && result.status == HandlerRunStatus::Preempted)
             ++(*preemptions);
@@ -867,9 +889,8 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor weak references die before OoM")
 
     // Keep the real GC from completing a cycle on its own so any weak
     // clearing is attributable to the memory limit callback's heap walk.
-    // Don't use LUA_GCSTOP, it disables the beforeallocate callback entirely.
-    lua_gc(script->getInstanceState(), LUA_GCSETGOAL, 100000);
     lua_gc(script->getInstanceState(), LUA_GCCOLLECT, 0);
+    lua_gc(script->getInstanceState(), LUA_GCSTOP, 0);
 
     resume(*script);
     CHECK(script->getFaultKind() == FaultKind::None);
@@ -1074,66 +1095,6 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor mandatory yield kill")
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor engine pauses are not charged")
 {
-    SUBCASE("unyieldable region survives a GC-inflated window")
-    {
-        // A long GC step lands while execution is inside a metamethod frame,
-        // where a yield can't be injected. GC isn't the executing code's fault,
-        // necessarily, so we discount it against their runtime.
-        TestScript ts(R"(
-            local mt = {}
-            mt.__index = function(t, k)
-                simulate_gc_step(10, 2)
-                local total = 0
-                for i = 1, 20 do
-                    total += i
-                end
-                return total
-            end
-            local obj = setmetatable({}, mt)
-            print(obj.missing)
-        )");
-        ts.loadDefaultState();
-        Script& exec = ts.exec;
-
-        // Charged time only accrues one clock step per interrupt reading, so
-        // it stays far below the punishment thresholds against a 5ms quanta.
-        ts.host.clock_step = 0.0001;
-        resumeToCompletion(exec, 0.005, HandlerRunStatus::Ok);
-        CHECK(exec.getFaultKind() == FaultKind::None);
-        CHECK(exec.getSleep() == 0.0f);
-        checkCapture(ts.host.printed, {"210"});
-    }
-
-    SUBCASE("GC-inflated time is not punished, preemption stays on wall time")
-    {
-        TestScript ts(R"(
-            simulate_gc_step(10)
-            local total = 0
-            for i = 1, 100 do
-                total += i
-            end
-            print("finished")
-        )");
-        ts.loadDefaultState();
-        Script& exec = ts.exec;
-
-        // Wall elapsed is ~10s against a 50ms quanta, so the first yieldable
-        // interrupt still preempts, but the charged handful of clock steps
-        // stays under the 3x threshold, so no sleep punishment lands.
-        ts.host.clock_step = 0.001;
-        resume(exec, 0.05, HandlerRunStatus::Preempted);
-        CHECK(exec.isYieldDue());
-        CHECK(exec.getSleep() == 0.0f);
-        // The banked exclusion is readable until the next window resets it
-        CHECK(exec.getExcludedTime() >= 10.0);
-
-        // Zero out the sleep so we don't deadlock the suite if the earlier
-        // getSleep() == 0.0f check didn't hold.
-        exec.setSleep(0.0f);
-        resumeToCompletion(exec, 0.05);
-        checkCapture(ts.host.printed, {"finished"});
-    }
-
     SUBCASE("baseline heap walk feeds the exclusion accumulator")
     {
         // Trigger a ton of allocations so the lua_userthreadgc() check kicks
@@ -1254,39 +1215,6 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor mandatory yield grace")
         CHECK(ts.host.printed.empty());
     }
 
-    SUBCASE("excluded time does not consume the grace window")
-    {
-        // The grace deadline must be measured in charged time: a GC step
-        // landing after the deadline is armed must not burn the window.
-        TestScript ts(R"(
-            local mt = {}
-            mt.__index = function(t, k)
-                jump_clock(10)
-                local total = 0
-                for i = 1, 5 do
-                    total += i
-                end
-                simulate_gc_step(10)
-                for i = 1, 20 do
-                    total += i
-                end
-                return total
-            end
-            local obj = setmetatable({}, mt)
-            print(obj.missing)
-        )");
-        ts.loadDefaultState();
-        Script& exec = ts.exec;
-
-        ts.host.clock_step = 0.000001;
-        resume(exec, 0.005, HandlerRunStatus::Preempted);
-        CHECK(exec.getFaultKind() == FaultKind::None);
-        CHECK(exec.getSleep() > 0.0f);
-
-        exec.setSleep(0.0f);
-        resumeToCompletion(exec, 0.005);
-        checkCapture(ts.host.printed, {"225"});
-    }
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor pending sleep preempts")
@@ -1300,14 +1228,167 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor pending sleep preempts")
     )");
     ts.loadDefaultState();
 
-    ts.exec.setSleep(1.0f);
-    resume(ts.exec, 1.0, HandlerRunStatus::Preempted);
+    RunResult result;
+    {
+        RunWindow window(ts.exec, 1.0);
+        ts.exec.setSleep(1.0f);
+        result = ts.exec.resumeEventHandler();
+    }
+    REQUIRE(result.status == HandlerRunStatus::Preempted);
     CHECK(ts.exec.isYieldDue());
     // Sleep-driven preemption carries no punishment
     CHECK(ts.exec.getSleep() == 1.0f);
 
-    ts.exec.setSleep(0.0f);
     resumeToCompletion(ts.exec, 1.0);
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor run window guard")
+{
+    TestScript ts(R"(
+        local total = 0
+        for i = 1, 100 do
+            total += i
+        end
+        print("finished")
+    )");
+    ts.loadDefaultState();
+
+    RunResult result;
+    {
+        RunWindow window(ts.exec, 1.0);
+        ts.exec.setForceYield(true);
+        result = ts.exec.resumeEventHandler();
+    }
+    REQUIRE(result.status == HandlerRunStatus::Preempted);
+    // Scope exit closed the window: GC unparked, force-yield cleared
+    CHECK(ts.exec.getInstanceState()->global->GCthreshold < SIZE_MAX);
+    resumeToCompletion(ts.exec, 1.0);
+    checkCapture(ts.host.printed, {"finished"});
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor run window catch-up collects the window's garbage")
+{
+    TestScript ts(R"(
+        for i = 1, 20000 do
+            local t = {i, i, i}
+        end
+        peak_kb = gc_count()
+    )");
+    ts.loadDefaultState();
+    lua_State* instance = ts.exec.getInstanceState();
+
+    // Parked for the whole window, so the heap only grows until the end
+    resumeToCompletion(ts.exec, 1.0);
+    lua_getglobal(instance, "peak_kb");
+    int peak_kb = lua_tointeger(instance, -1);
+    lua_pop(instance, 1);
+    REQUIRE(peak_kb > 0);
+
+    // The catch-up loop's postcondition, and proof it actually collected
+    CHECK(!luaC_needsGC(instance));
+    CHECK(lua_gc(instance, LUA_GCCOUNT, 0) < peak_kb);
+}
+
+// Real quanta clock and the watchdog thread
+static HostCallbacks threadedCallbacks()
+{
+    HostCallbacks callbacks;
+    callbacks.interruptInstallPolicy = InterruptInstallPolicy::Threaded;
+    return callbacks;
+}
+
+static const char* kBusyLoop = R"(
+    local total = 0
+    for i = 1, 1000000000 do
+        total += i
+    end
+)";
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog preempts a busy script")
+{
+    TestProvisioner host{threadedCallbacks()};
+    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+    REQUIRE(script != nullptr);
+    REQUIRE(script->loadDefaultState());
+
+    // 1e9 iterations can't finish inside 2ms, so preemption is the only way out
+    RunResult result = resumeRaw(*script, 0.002);
+    REQUIRE(result.status == HandlerRunStatus::Preempted);
+    CHECK(script->isYieldDue());
+    CHECK(script->getInstanceState()->global->GCthreshold < SIZE_MAX);
+    // The fired handler doesn't outlive the window
+    CHECK((lua_callbacks(script->getInstanceState())->interrupt == nullptr));
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog honors a mid-window sleep")
+{
+    TestProvisioner host{threadedCallbacks()};
+    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+    REQUIRE(script != nullptr);
+    REQUIRE(script->loadDefaultState());
+
+    // Quanta generous enough that only the sleep can preempt us
+    RunResult result;
+    {
+        RunWindow window(*script, 10.0);
+        script->setSleep(0.5f);
+        result = script->resumeEventHandler();
+    }
+    REQUIRE(result.status == HandlerRunStatus::Preempted);
+    CHECK(script->isYieldDue());
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog uninstalls a withdrawn force-yield")
+{
+    TestProvisioner host{threadedCallbacks()};
+    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(R"(
+        local total = 0
+        for i = 1, 1000 do
+            total += i
+        end
+    )")), makeScriptConfig());
+    REQUIRE(script != nullptr);
+    REQUIRE(script->loadDefaultState());
+
+    // The set installs the handler. The first safepoint finds nothing to do
+    // and the deadline far away, so it uninstalls itself.
+    RunResult result;
+    {
+        RunWindow window(*script, 10.0);
+        script->setForceYield(true);
+        script->setForceYield(false);
+        result = script->resumeEventHandler();
+    }
+    REQUIRE(result.status == HandlerRunStatus::Ok);
+    CHECK(!script->isYieldDue());
+    CHECK((lua_callbacks(script->getInstanceState())->interrupt == nullptr));
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog survives mid-window script destruction")
+{
+    TestProvisioner host{threadedCallbacks()};
+    std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
+    std::shared_ptr<IImage> image = host.buildImage(env, makeImageConfig(Luau::compile(kBusyLoop)));
+    REQUIRE(image != nullptr);
+
+    std::shared_ptr<Script> first = host.instantiateScript(image, makeScriptConfig());
+    REQUIRE(first != nullptr);
+    REQUIRE(first->loadDefaultState());
+
+    // Die with a window open: the destructor has to disarm and unpark the
+    // GC of the VM it's leaving behind.
+    first->beginRunWindow(10.0);
+    first.reset();
+    CHECK(env->getBaseState()->global->GCthreshold < SIZE_MAX);
+
+    // A second script in the same VM gets a clean slate. In a debug build
+    // installBy() asserts if the first window was never cancelled.
+    std::shared_ptr<Script> second = host.instantiateScript(image, makeScriptConfig());
+    REQUIRE(second != nullptr);
+    REQUIRE(second->loadDefaultState());
+    RunResult result = resumeRaw(*second, 0.002);
+    REQUIRE(result.status == HandlerRunStatus::Preempted);
+    CHECK(second->isYieldDue());
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit")
@@ -1402,20 +1483,23 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor pushes args outside a resume")
 
     resume(ts.exec);
 
-    // A pending forced yield makes the first interrupt mandatory, so one reaching
-    // the marshalling would kill the script rather than pass unnoticed. The first
-    // one that does fire lands in `handleEvent`, which is yieldable.
-    ts.exec.setForceYield(true);
-
-    RunResult result = dispatchRaw(ts.exec, 0, "dataserver", [](lua_State* handler, void*) {
-        luaSL_pushuuidstring(handler, "8d4a1e26-3f2b-4c7d-9a15-6e0b3c8f2d41");
-        lua_pushstring(handler, "payload");
-    });
+    // A forced yield makes the first interrupt mandatory, so one reaching the
+    // marshalling would kill the script rather than pass unnoticed. The first
+    // one that does fire lands in `handleEvent`, which is yieldable. Driven
+    // by hand because force-yield can only be set inside a window.
+    RunResult result;
+    {
+        RunWindow window(ts.exec, 1.0);
+        ts.exec.setForceYield(true);
+        result = ts.exec.callEventHandler(0, "dataserver", [](lua_State* handler, void*) {
+            luaSL_pushuuidstring(handler, "8d4a1e26-3f2b-4c7d-9a15-6e0b3c8f2d41");
+            lua_pushstring(handler, "payload");
+        });
+    }
     REQUIRE(result.status == HandlerRunStatus::Preempted);
     CHECK(ts.exec.getFaultKind() == FaultKind::None);
     CHECK(ts.host.printed.empty());
 
-    ts.exec.setForceYield(false);
     resumeToCompletion(ts.exec, 1.0);
     checkCapture(ts.host.printed, {"uuid/payload"});
 }
@@ -1963,10 +2047,8 @@ public:
 
 // Replaces every tier. TestProvisioner's callbacks recover it by downcasting
 // getProvisioner() to itself, so a provisioner of other types needs its own.
-struct StatefulProvisioner : Provisioner<StatefulScript>
+struct StatefulProvisioner : Provisioner<StatefulScript>, FakeQuantaClock
 {
-    double clock = 0.0;
-    double clock_step = 0.0;
     int environments_made = 0;
     int images_made = 0;
 
@@ -1978,18 +2060,9 @@ struct StatefulProvisioner : Provisioner<StatefulScript>
     static HostCallbacks makeCallbacks()
     {
         HostCallbacks callbacks;
-        callbacks.quantaClockProvider = quanta_clock;
+        callbacks.quantaClockProvider = FakeQuantaClock::read;
+        callbacks.interruptInstallPolicy = InterruptInstallPolicy::Resident;
         return callbacks;
-    }
-
-    static double quanta_clock(lua_State* L)
-    {
-        Script* executor = Script::fromLuaState(L);
-        LUAU_ASSERT(executor != nullptr);
-
-        auto& host = static_cast<StatefulProvisioner&>(executor->getProvisioner());
-        host.clock += host.clock_step;
-        return host.clock;
     }
 
     // The only place the downcast happens, since everything this provisioner

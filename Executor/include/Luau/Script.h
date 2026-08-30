@@ -101,22 +101,25 @@ public:
     bool loadDefaultState();
 
     // Drops any live instance and returns the script to the image's default
-    // state. Unlike loadDefaultState(), this is valid at any time.
+    // state. Unlike loadDefaultState(), this is valid at any time, though
+    // they're functionally the same.
     bool reset();
 
-    // Start a run window for `quanta` seconds. _must_ be followed by symmetric `endRunWindow()`
-    // TODO: RAII helper thingy maybe?
+    // Start a run window for `quanta` seconds. Pair with endRunWindow().
     void beginRunWindow(double quanta);
-    // And finish it.
+    // isYieldDue(), getExcludedTime() and getSleep() stay readable until the
+    // next begin. Clears any force-yield.
     void endRunWindow();
     // True once the engine has decided the current run window is over, sticky
     // for the rest of the window.
     bool isYieldDue() const { return mYieldDue; }
 
-    // Level-triggered forced preemption, port of the host's
-    // `getReset() || !mIsEnabled` check. The host both sets and clears it.
-    void setForceYield(bool force) { mForceYield = force; }
+    // Make the current window yield at its next safepoint. Port of the host's
+    // `getReset() || !mIsEnabled` check. Cleared by endRunWindow().
+    void setForceYield(bool force);
 
+    // Only has meaning for embedders, in `indra` this allows us to get the wrapping
+    // `LLScriptExecute` ptr.
     void *getHostContext() const { return mHostContext; }
 
     // Call an event handler associated with the given state, works for both
@@ -157,7 +160,7 @@ public:
     // How long we've been told to sleep. Never decremented, only zeroed out when the scheduler
     // decides we're done the sleep.
     float getSleep() const { return mSleep; }
-    void setSleep(float sleep) { mSleep = sleep; }
+    void setSleep(float sleep);
 
     // Wall time excluded from punishment accounting in the current window
     double getExcludedTime() const { return mExcludedTime; }
@@ -218,16 +221,25 @@ private:
 
     // Monotonic stopwatch used for quanta-elapsed measurement, seeded from the
     // provisioner's.
-    lua_clockProvider mQuantaClockProvider = nullptr;
+    QuantaClock mQuantaClockProvider = nullptr;
+    // Puts the interrupt handler on mCallbacks by each run window's deadline
+    InterruptInstaller* mInterruptInstaller = nullptr;
+    // The environment VM's, which outlives us
+    lua_Callbacks* mCallbacks = nullptr;
 
     // When did we start running
     double mWindowStart = 0.0;
     // How long are we supposed to run?
     double mQuanta = 0.0;
-    // Wall time this window spent inside GC steps and reachability walks.
+    // Wall time this window spent inside reachability walks.
     double mExcludedTime = 0.0;
-    // Quanta clock reading at the opening bracket of the GC step in flight.
-    double mGCStepStart = 0.0;
+    // When we're supposed to invoke GC next. Held here since we disable GC during a run.
+    // TODO: there is probably some threshold of churn after which we want a script to take
+    //  a nap. There needs to be some quantifiable cost for abusive garbage creation during
+    //  a quanta, but we don't really have a "proper" scheduler that would let us deprioritize.
+    //  All we have is the blunt instrument of "sleep"... When there is one, churn should
+    //  accrue in memoryLimitCallback(), where each allocation is attributable to a script.
+    size_t mSavedGCThreshold = 0;
     // We've planned a script kill for this time, the script will be killed if
     // it doesn't finish before the deadline.
     double mMandatoryDeadline = 0.0;
@@ -237,17 +249,36 @@ private:
     bool mYieldDue = false;
     // We already threw a catchable error trying to force a yield.
     bool mMandatoryYieldRaised = false;
-    // Between the paired pre and post interrupts of one GC step.
-    bool mGCStepInFlight = false;
     bool mInExecution = false;
     bool mMainFunctionComplete = false;
     // The host has indicated that a yield should happen at the next interrupt.
-    // TODO: Hmm. Seems whe might be able to merge this with `mYieldDue` if we're smart.
+    // TODO: Hmm. Seems we might be able to merge this with `mYieldDue` if we're smart.
     bool mForceYield = false;
 
     FaultKind mFaultKind = FaultKind::None;
     std::string mFaultString;
     std::string mExtendedFaultString;
+};
+
+/// An execution span for a single script that may contain multiple handler invocations.
+/// The script must outlive the guard. A host that can destroy a script mid-window
+/// (the destructor closes the window itself) has to close() first.
+class RunWindow
+{
+public:
+    RunWindow(Script& script, double quanta);
+    ~RunWindow();
+
+    RunWindow(RunWindow&& other) noexcept;
+    RunWindow(const RunWindow&) = delete;
+    RunWindow& operator=(const RunWindow&) = delete;
+    RunWindow& operator=(RunWindow&&) = delete;
+
+    // End the window early. No-op if it's already closed.
+    void close();
+
+private:
+    Script* mScript;
 };
 
 } // namespace Executor

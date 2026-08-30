@@ -114,7 +114,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
 #define VM_INTERRUPT() VM_INTERRUPT_WITHCODE(LUA_INTERRUPT_NORMAL)
 #define VM_INTERRUPT_WITHCODE(code) \
     { \
-        void (*interrupt)(lua_State*, int) = L->global->cb.interrupt; \
+        void (*interrupt)(lua_State*, int) = Luau::opaque_load(&L->global->cb.interrupt); \
         if (LUAU_UNLIKELY(!!interrupt)) \
         { /* the interrupt hook is called right before we advance pc */ \
             static_assert((code) < 0, "code is negative");              \

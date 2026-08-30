@@ -98,7 +98,7 @@ using Luau::YieldGuard;
         (_yieldable_phase) = Phase::phase_name;                                     \
         if ((L)->status == LUA_OK)                                                  \
         {                                                                           \
-            void (*_yc_int)(lua_State*, int) = _yieldable_slots.callbacks->interrupt; \
+            void (*_yc_int)(lua_State*, int) = Luau::opaque_load(&_yieldable_slots.callbacks->interrupt); \
             if (LUAU_LIKELY(!!_yc_int))                                             \
                 _yc_int((L), (reason));                                             \
         }                                                                           \

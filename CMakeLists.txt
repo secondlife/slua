@@ -14,6 +14,7 @@ option(LUAU_STATIC_CRT "Link with the static CRT (/MT)" OFF)
 option(LUAU_EXTERN_C "Use extern C for all APIs" OFF)
 option(LUAU_USE_TAILSLIDE "Link against tailslide for LSL support" OFF)
 option(LUAU_BUILD_SHARED "Build as a shared library" OFF)
+option(LUAU_TSAN "Build with ThreadSanitizer" OFF)
 
 if(LUAU_BUILD_SHARED AND NOT LUAU_EXTERN_C)
     message(FATAL_ERROR "LUAU_BUILD_SHARED requires LUAU_EXTERN_C to be ON")
@@ -39,6 +40,15 @@ if (LUAU_USE_TAILSLIDE)
 endif()
 
 project(Luau LANGUAGES CXX C)
+
+if(LUAU_TSAN)
+    if(MSVC)
+        message(FATAL_ERROR "LUAU_TSAN requires a Clang or GCC toolchain")
+    endif()
+    add_compile_options(-fsanitize=thread)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=thread")
+endif()
 
 # Embed builtins.txt into a header file at configure time
 file(READ "${CMAKE_SOURCE_DIR}/builtins.txt" BUILTINS_HEX HEX)
@@ -310,6 +320,9 @@ add_library(osthreads INTERFACE)
 if(CMAKE_SYSTEM_NAME MATCHES "Linux|Darwin|iOS")
     target_link_libraries(osthreads INTERFACE "-lpthread")
 endif ()
+
+# ServerLua: We use threads internally, library consumers need pthreads if applciable.
+target_link_libraries(Luau.Executor PUBLIC osthreads)
 
 if(LUAU_BUILD_CLI)
     target_compile_options(Luau.Repl.CLI PRIVATE ${LUAU_OPTIONS})

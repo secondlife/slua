@@ -102,13 +102,18 @@ static void displayHelp(const char* argv0)
     printf("  --quanta=<usecs>: time slice per run window (default 200)\n");
     printf("  -O<n>: compile with optimization level n (default 1)\n");
     printf("  --fflags=<list>: comma-separated fast flag settings (name=true/false),\n");
+    printf("  --use-lua-clock: Use lua_clock() instead of a specialized quanta timer\n");
+    printf("  --interrupt=<resident|threaded>: keep the interrupt handler resident, "
+           "                 or have the watchdog thread install it at the deadline\n");
 }
 
 int main(int argc, char** argv)
 {
     const char* script_path = nullptr;
     double quanta_usec = 200.0;
+    bool use_lua_clock = false;
     int optimization_level = 1;
+    InterruptInstallPolicy interrupt_policy = resolveDefaultInterruptInstallPolicy();
 
     for (int i = 1; i < argc; ++i)
     {
@@ -129,6 +134,27 @@ int main(int argc, char** argv)
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
             setLuauFlags(argv[i] + 9);
+        }
+        else if (strncmp(argv[i], "--interrupt=", 12) == 0)
+        {
+            const char* value = argv[i] + 9;
+            if (strcmp(value, "resident") == 0)
+            {
+                interrupt_policy = InterruptInstallPolicy::Resident;
+            }
+            else if (strcmp(value, "threaded") == 0)
+            {
+                interrupt_policy = InterruptInstallPolicy::Threaded;
+            }
+            else
+            {
+                fprintf(stderr, "Error: invalid --interrupt value.\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--use-lua-clock") == 0)
+        {
+            use_lua_clock = true;
         }
         else if (strncmp(argv[i], "-O", 2) == 0)
         {
@@ -199,7 +225,12 @@ int main(int argc, char** argv)
     HostCallbacks callbacks;
     callbacks.clockProvider = script_clock;
     callbacks.populateEnvironment = populate_environment;
-    // quantaClockProvider stays null so we exercise the engine's default
+    callbacks.interruptInstallPolicy = interrupt_policy;
+    if (use_lua_clock)
+    {
+        // Leaving this null uses a platform-optimized quanta clock provider
+        callbacks.quantaClockProvider = lua_clock;
+    }
 
     Provisioner<> provisioner(callbacks);
 
@@ -255,17 +286,18 @@ int main(int argc, char** argv)
             script->setSleep(0.0f);
         }
 
-        script->beginRunWindow(quanta);
-        if (dispatch_state_entry)
         {
-            result = script->callEventHandler(lsl_state, "state_entry", nullptr);
-            dispatch_state_entry = false;
+            RunWindow window(*script, quanta);
+            if (dispatch_state_entry)
+            {
+                result = script->callEventHandler(lsl_state, "state_entry", nullptr);
+                dispatch_state_entry = false;
+            }
+            else
+            {
+                result = script->resumeEventHandler();
+            }
         }
-        else
-        {
-            result = script->resumeEventHandler();
-        }
-        script->endRunWindow();
         ++slices;
 
         if (result.status == HandlerRunStatus::Preempted)
@@ -288,6 +320,22 @@ int main(int argc, char** argv)
 
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
+
+    if (interrupt_policy == InterruptInstallPolicy::Threaded)
+    {
+        WatchdogStats wd_stats = provisioner.getWatchdogStats();
+        double avg = wd_stats.fires > 0 ? wd_stats.latenessSum / (double)wd_stats.fires : 0.0;
+        fprintf(
+            stderr,
+            "Watchdog wakes: %llu, fires: %llu, late fires: %llu, lateness usecs min/avg/max: %.1f/%.1f/%.1f\n",
+            (unsigned long long)wd_stats.wakes,
+            (unsigned long long)wd_stats.fires,
+            (unsigned long long)wd_stats.lateFires,
+            wd_stats.latenessMin * 1e6,
+            avg * 1e6,
+            wd_stats.latenessMax * 1e6
+        );
+    }
 
     if (result.status == HandlerRunStatus::Fault)
     {

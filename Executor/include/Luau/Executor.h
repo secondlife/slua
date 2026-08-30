@@ -1,6 +1,7 @@
 // ServerLua: per-script execution engine shared with the script host.
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -32,6 +33,7 @@ enum class LogLevel : uint8_t
     Debug = 0,
     Info,
     Warn,
+    Error,
 };
 
 // Parameters that define the sealed image consumed by buildImage()
@@ -88,7 +90,91 @@ void logInfo(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logWarn(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 
 // Figure out which clock source to use
-lua_clockProvider resolveDefaultQuantaClock();
+// Monotonic seconds for run-window deadlines. No lua_State because the
+// threaded installer reads it off the script thread.
+using QuantaClock = double (*)();
+
+QuantaClock resolveDefaultQuantaClock();
+
+using InterruptCallback = void (*)(lua_State* L, int gc);
+
+// Lateness is how far past the intended fire instant the handler actually got
+// installed.
+struct WatchdogStats
+{
+    uint64_t fires = 0;
+    // Fires that landed after the deadline itself, not just after the fire lead
+    uint64_t lateFires = 0;
+    // Watchdog thread wakeups, whether or not they led to a fire
+    uint64_t wakes = 0;
+    double latenessSum = 0.0;
+    double latenessMin = 0.0;
+    double latenessMax = 0.0;
+};
+
+// Owns `cb.interrupt` for a run window and decides when it's installed.
+// The handler checks the clock itself, so the contract is a latest install
+// time, not an exact one. One per provisioner, one open window at a time.
+class InterruptInstaller
+{
+public:
+    explicit InterruptInstaller(InterruptCallback handler)
+        : mHandler(handler)
+    {
+    }
+
+    virtual ~InterruptInstaller();
+
+    // Install `cb.interrupt` no later than `deadline` (quanta clock domain).
+    // Installing it earlier is allowed.
+    virtual void installBy(lua_Callbacks* target, double deadline) = 0;
+
+    // For things that need the script to yield immediately (sleep, force-yield).
+    // Harmless if it's already installed.
+    virtual void installNow() = 0;
+
+    // Forget the deadline. Nothing touches `target` after this returns.
+    virtual void cancel() = 0;
+
+    // From the handler when it had nothing to do: uninstall it if a deadline
+    // install is still pending to bring it back, otherwise leave it resident.
+    // Called at every safepoint while the handler is in early, so the common
+    // "nothing pending" answer stays inline.
+    void uninstallIfPending()
+    {
+        if (mPending.load(std::memory_order_relaxed))
+            uninstallPending();
+    }
+
+    // How far past the deadline the current window's handler went in, in
+    // seconds. Zero until it does, and zero again after the next installBy().
+    virtual double getInstallOverrun() { return 0.0; }
+
+    virtual WatchdogStats getStats() { return {}; }
+
+protected:
+    virtual void uninstallPending() = 0;
+
+    InterruptCallback mHandler = nullptr;
+    // An installBy() whose install hasn't landed yet
+    std::atomic<bool> mPending{false};
+};
+
+enum class InterruptInstallPolicy
+{
+    // Whatever resolveDefaultInterruptInstallPolicy() says
+    Default,
+    // Handler stays resident and checks the clock at every safepoint
+    Resident,
+    // A watchdog thread installs the handler just ahead of the deadline
+    Threaded,
+};
+
+// Figure out which install policy to use when the host doesn't say
+InterruptInstallPolicy resolveDefaultInterruptInstallPolicy();
+
+// Throws std::system_error if the threaded policy can't create its thread
+std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quantaClock);
 
 // Give the embedder a chance to plop their own things into the environment before it's
 // fully set up. This is called before GC fixing / ares perms registration.
@@ -102,13 +188,20 @@ struct HostCallbacks
     lua_randomProvider randomProvider = nullptr;
     lua_setTimerEventCallback setTimerEventCb = nullptr;
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
-    lua_clockProvider quantaClockProvider = nullptr;
+    QuantaClock quantaClockProvider = nullptr;
+    // Resident is required when quantaClockProvider doesn't track real time
+    // (test fake clocks), Threaded reads it from the watchdog thread too
+    InterruptInstallPolicy interruptInstallPolicy = InterruptInstallPolicy::Default;
     PopulateEnvironmentCallback populateEnvironment = nullptr;
 };
 
 // An environment is... basically just a Lua VM with some particular settings. It's
 // intended for multiple of these to be able to be living at any given moment, one
 // for LSL, one for a particular version of the Lua API, etc.
+//
+// It is expected that any use of a given environment is _exclusive_ to a particular
+// thread at any given time, with no interleaved access. In almost all cases, it is
+// in fact exclusive to a particular thread for its lifetime.
 class IEnvironment
 {
 public:
@@ -340,6 +433,10 @@ public:
 
     virtual const HostCallbacks& getCallbacks() const = 0;
 
+    // Engine-internal, for Script. Null until the first environment exists.
+    virtual InterruptInstaller* getInterruptInstaller() const = 0;
+    virtual WatchdogStats getWatchdogStats() const = 0;
+
     virtual std::shared_ptr<IEnvironment> createEnvironment(bool is_lsl, uint32_t api_version) = 0;
     virtual std::shared_ptr<IImage> buildImage(std::shared_ptr<IEnvironment> environment, const ImageConfig& config) = 0;
     virtual std::shared_ptr<Script> instantiateScript(const std::shared_ptr<IImage>& image, const ScriptConfig& config) = 0;
@@ -365,10 +462,20 @@ public:
 
     const HostCallbacks& getCallbacks() const override { return mCallbacks; }
 
+    InterruptInstaller* getInterruptInstaller() const override { return mInterruptInstaller.get(); }
+    WatchdogStats getWatchdogStats() const override { return mInterruptInstaller ? mInterruptInstaller->getStats() : WatchdogStats{}; }
+
     std::shared_ptr<IEnvironment> createEnvironment(bool is_lsl, uint32_t api_version) override
     {
         std::shared_ptr<Environment> environment = makeEnvironment(is_lsl, api_version);
         environment->build<S>();
+
+        if (mInterruptInstaller == nullptr)
+        {
+            InterruptCallback handler = lua_callbacks(environment->getBaseState())->interrupt;
+            mInterruptInstaller = createInterruptInstaller(mCallbacks.interruptInstallPolicy, handler, mCallbacks.quantaClockProvider);
+        }
+
         return environment;
     }
 
@@ -433,6 +540,7 @@ protected:
 
 private:
     HostCallbacks mCallbacks;
+    std::unique_ptr<InterruptInstaller> mInterruptInstaller;
 };
 
 } // namespace Executor

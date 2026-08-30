@@ -150,6 +150,11 @@ ifeq ($(config),sanitize)
 	LDFLAGS+=-fsanitize=address,undefined
 endif
 
+ifeq ($(config),tsan)
+	CXXFLAGS+=-fsanitize=thread -O1
+	LDFLAGS+=-fsanitize=thread
+endif
+
 ifeq ($(config),analyze)
 	CXXFLAGS+=--analyze
 endif

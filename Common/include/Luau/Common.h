@@ -3,6 +3,11 @@
 
 #include <string.h>
 
+// ServerLua: for the std::atomic_thread_fence fallback below
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <atomic>
+#endif
+
 // Compiler codegen control macros
 #ifdef _MSC_VER
 #define LUAU_NORETURN __declspec(noreturn)
@@ -55,6 +60,31 @@
 
 namespace Luau
 {
+
+// ServerLua: TSan-visible accessors for fields the VM reads unsynchronized by
+// contract, like lua_Callbacks::interrupt. Same codegen as a plain access on
+// x86/ARM64 (the release store is stlr on ARM64).
+// clang-cl defines both _MSC_VER and __clang__, so guard on __clang__ too.
+template<typename T>
+inline T opaque_load(T* p)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *static_cast<T volatile*>(p);
+#else
+    return __atomic_load_n(p, __ATOMIC_RELAXED);
+#endif
+}
+
+template<typename T>
+inline void release_store(T* p, T v)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    std::atomic_thread_fence(std::memory_order_release);
+    *static_cast<T volatile*>(p) = v;
+#else
+    __atomic_store_n(p, v, __ATOMIC_RELEASE);
+#endif
+}
 
 using AssertHandler = int (*)(const char* expression, const char* file, int line, const char* function);
 

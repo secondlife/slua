@@ -84,6 +84,7 @@ pushd "$top"
             cp -v "Release/Luau.Common.lib" "$stage/lib/release/"
 
             cp -v Release/slua.exe "$stage/bin/"
+            cp -v Release/slua-harness.exe "$stage/bin/"
         ;;
         darwin*|linux*)
             # Optimized builds use the inherited release flags as-is, any local
@@ -111,6 +112,7 @@ pushd "$top"
             cp -v "libLuau.Executor.a" "$stage/lib/release"
 
             cp -v "slua" "$stage/bin/"
+            cp -v "slua-harness" "$stage/bin/"
 
             # Run the conformance test for good measure
             "${stage}/build/Luau.Conformance"
