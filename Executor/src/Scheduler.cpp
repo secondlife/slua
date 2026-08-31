@@ -165,10 +165,9 @@ private:
     lua_Callbacks* mTarget = nullptr;
 };
 
-// How often the watch loop re-reads its state: the discovery granularity for
-// a freshly armed window, and the bound on how stale a re-arm can be. Also
-// the worst-case install lateness when the quanta is shorter than a tick.
-constexpr std::chrono::microseconds kWatchdogTick{250};
+// How far ahead of the deadline the watch loop delivers its fire.
+// Allows some slop to
+constexpr double kWatchdogFireLead = 50e-6;  // 50us
 
 // Best-effort hoist of the watch loop above the timesharing class, so a
 // deadline wakeup preempts a busy script thread immediately instead of
@@ -242,16 +241,21 @@ public:
         // one-shot already spent, leaving the window unpreemptable.
         target->interrupt = nullptr;
 
-        std::lock_guard<std::mutex> guard(mMutex);
-        // Run windows are serial per provisioner, and every path to a new
-        // begin passes through disarm (or a delivered fire), so an armed slot
-        // here means concurrent windows -- which would silently overwrite
-        // this deadline and lose the other window's preemption.
-        LUAU_ASSERT(!mArmed);
-        mTarget = target;
-        mDeadline = deadline;
-        mArmed = true;
-        // No notify: the watch loop picks the window up within a tick.
+        {
+            std::lock_guard<std::mutex> guard(mMutex);
+            // Run windows are serial per provisioner, and every path to a new
+            // begin passes through disarm (or a delivered fire), so an armed
+            // slot here means concurrent windows -- which would silently
+            // overwrite this deadline and lose the other window's preemption.
+            LUAU_ASSERT(!mArmed);
+            mTarget = target;
+            mDeadline = deadline;
+            mArmed = true;
+        }
+        // The watch loop sleeps indefinitely while unarmed (and on a stale
+        // deadline after a disarm), so every arm must wake it. Notified
+        // outside the lock so the woken thread doesn't stall on it.
+        mCondition.notify_one();
     }
 
     void disarm() override
@@ -283,6 +287,12 @@ public:
         return true;
     }
 
+    WatchdogStats getStats() override
+    {
+        std::lock_guard<std::mutex> guard(mMutex);
+        return mStats;
+    }
+
 private:
     void watch()
     {
@@ -292,25 +302,34 @@ private:
         std::unique_lock<std::mutex> lock(mMutex);
         while (!mExit)
         {
-            std::chrono::duration<double> wait = kWatchdogTick;
-            if (mArmed)
+            if (!mArmed)
             {
-                double remaining = mDeadline - mQuantaClock(nullptr);
-                if (remaining <= 0.0)
-                {
-                    // Deliver the one-shot while holding the lock, so it can
-                    // only target the currently-armed window's VM. The VM
-                    // reads the pointer unsynchronized by design (lua.h's
-                    // interrupt contract).
-                    mTarget->interrupt = mHandler;
-                    mArmed = false;
-                    continue;
-                }
-                // Clamped to the tick so a re-arm during the wait is still
-                // picked up without any notify
-                wait = std::min(wait, std::chrono::duration<double>(remaining));
+                // Nothing scheduled: block until an arm (or exit) notifies.
+                // A disarm doesn't notify, so this can also be reached by a
+                // stale deadline expiring after its window closed -- harmless,
+                // we just go back to sleep here.
+                mCondition.wait(lock);
+                continue;
             }
-            mCondition.wait_for(lock, wait);
+
+            double remaining = mDeadline - mQuantaClock(nullptr);
+            if (remaining <= kWatchdogFireLead)
+            {
+                // Deliver the one-shot while holding the lock, so it can
+                // only target the currently-armed window's VM. The VM
+                // reads the pointer unsynchronized by design (lua.h's
+                // interrupt contract).
+                mTarget->interrupt = mHandler;
+                mArmed = false;
+
+                double lateness = kWatchdogFireLead - remaining;
+                mStats.latenessSum += lateness;
+                mStats.latenessMin = mStats.fires == 0 ? lateness : std::min(mStats.latenessMin, lateness);
+                mStats.latenessMax = std::max(mStats.latenessMax, lateness);
+                mStats.fires++;
+                continue;
+            }
+            mCondition.wait_for(lock, std::chrono::duration<double>(remaining - kWatchdogFireLead));
         }
     }
 
@@ -320,6 +339,7 @@ private:
     std::condition_variable mCondition;
     lua_Callbacks* mTarget = nullptr;
     double mDeadline = 0.0;
+    WatchdogStats mStats;
     bool mArmed = false;
     bool mExit = false;
 

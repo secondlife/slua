@@ -297,6 +297,19 @@ int main(int argc, char** argv)
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
 
+    WatchdogStats wd_stats = provisioner.getQuantaWatchdog()->getStats();
+    if (wd_stats.fires > 0)
+    {
+        fprintf(
+            stderr,
+            "Watchdog fires: %llu, lateness usecs min/avg/max: %.1f/%.1f/%.1f\n",
+            (unsigned long long)wd_stats.fires,
+            wd_stats.latenessMin * 1e6,
+            wd_stats.latenessSum / (double)wd_stats.fires * 1e6,
+            wd_stats.latenessMax * 1e6
+        );
+    }
+
     if (result.status == HandlerRunStatus::Fault)
     {
         auto &fault_str = script->getExtendedFaultString().empty() ? script->getFaultString() : script->getExtendedFaultString();

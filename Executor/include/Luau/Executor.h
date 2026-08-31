@@ -93,6 +93,19 @@ lua_clockProvider resolveDefaultQuantaClock();
 // Signature of the VM interrupt callback, as installed into lua_Callbacks
 using InterruptCallback = void (*)(lua_State* L, int gc);
 
+// Aggregate timing of a watchdog's deadline fires, for tuning its fire lead.
+// Lateness (seconds) is how far past the intended fire instant the install
+// actually happened: OS wakeup jitter in the common case, but it also
+// absorbs the whole overshoot when a window is armed with less than a
+// lead's worth of quanta, so a bimodal max isn't necessarily jitter.
+struct WatchdogStats
+{
+    uint64_t fires = 0;
+    double latenessSum = 0.0;
+    double latenessMin = 0.0;
+    double latenessMax = 0.0;
+};
+
 // Arming policy for a Script's run windows: owns the VM's interrupt handler
 // and how it gets installed so that quanta expiry can be delivered. The
 // installed pointer is only a request; the handler re-reads the real clock at
@@ -132,6 +145,10 @@ public:
     // spend the window's one-shot.
     virtual bool clearIfArmed() = 0;
 
+    // Lifetime totals of deadline fires. Zeros for policies where the
+    // deadline never fires as a distinct event (the synchronous one).
+    virtual WatchdogStats getStats() { return {}; }
+
 protected:
     InterruptCallback mHandler = nullptr;
 };
@@ -140,8 +157,10 @@ protected:
 // resident and checks the clock at every safepoint.
 std::unique_ptr<QuantaWatchdog> createImmediateQuantaWatchdog(InterruptCallback handler);
 // Go-sysmon-shaped policy for real-time clocks: windows run with no interrupt
-// installed, and a long-running watchdog thread stores the handler when the
-// deadline passes. Thread-creation failure propagates as std::system_error.
+// installed, and a long-running watchdog thread -- asleep whenever no window
+// is armed -- stores the handler slightly ahead of the deadline so the
+// preemption lands on it rather than after it. Thread-creation failure
+// propagates as std::system_error.
 std::unique_ptr<QuantaWatchdog> createQuantaWatchdog(InterruptCallback handler, lua_clockProvider quantaClock);
 
 // Give the embedder a chance to plop their own things into the environment before it's
