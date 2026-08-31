@@ -311,6 +311,10 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux|Darwin|iOS")
     target_link_libraries(osthreads INTERFACE "-lpthread")
 endif ()
 
+# ServerLua: the executor's quanta watchdog runs on a thread; PUBLIC so
+# embedders of the static library inherit the pthread requirement
+target_link_libraries(Luau.Executor PUBLIC osthreads)
+
 if(LUAU_BUILD_CLI)
     target_compile_options(Luau.Repl.CLI PRIVATE ${LUAU_OPTIONS})
     target_compile_options(Luau.Reduce.CLI PRIVATE ${LUAU_OPTIONS})

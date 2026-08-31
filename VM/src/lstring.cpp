@@ -136,7 +136,7 @@ static TString* findstring(lua_State * L, const char *data, unsigned int len, un
             {
                 // See `lgctraverse.cpp` for reasoning behind this
                 const size_t str_size = 16 + el->len;
-                if (LUAU_LIKELY(g->GCthreshold != SIZE_MAX) && g->cb.beforeallocate(L, 0, str_size))
+                if (g->cb.beforeallocate(L, 0, str_size))
                     luaD_throw(L, LUA_ERRMEM);
             }
             return el;

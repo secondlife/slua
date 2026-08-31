@@ -90,6 +90,79 @@ void logWarn(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 // Figure out which clock source to use
 lua_clockProvider resolveDefaultQuantaClock();
 
+// Signature of the VM interrupt callback, as installed into lua_Callbacks
+using InterruptCallback = void (*)(lua_State* L, int gc);
+
+// Aggregate timing of a watchdog's deadline fires, for tuning its fire lead.
+// Lateness (seconds) is how far past the intended fire instant the install
+// actually happened: OS wakeup jitter in the common case, but it also
+// absorbs the whole overshoot when a window is armed with less than a
+// lead's worth of quanta, so a bimodal max isn't necessarily jitter.
+struct WatchdogStats
+{
+    uint64_t fires = 0;
+    double latenessSum = 0.0;
+    double latenessMin = 0.0;
+    double latenessMax = 0.0;
+};
+
+// Arming policy for a Script's run windows: owns the VM's interrupt handler
+// and how it gets installed so that quanta expiry can be delivered. The
+// installed pointer is only a request; the handler re-reads the real clock at
+// the safepoint, so the clock stays the source of truth. One watchdog serves
+// every VM of its provisioner (one per environment); arm() binds the open
+// window's VM as the one slot everything else operates on.
+class QuantaWatchdog
+{
+public:
+    // `handler` is whatever the script type's installVMCallbacks() put on the
+    // VM -- captured by the provisioner, so subclass handlers are honored.
+    explicit QuantaWatchdog(InterruptCallback handler)
+        : mHandler(handler)
+    {
+    }
+
+    virtual ~QuantaWatchdog();
+
+    // Open a run window: bind `target` as THE window (exactly one is open per
+    // provisioner, assert-enforced), reset its interrupt pointer to the
+    // implementation's baseline, and schedule `deadline`, a reading in the
+    // quanta clock's domain.
+    virtual void arm(lua_Callbacks* target, double deadline) = 0;
+
+    // Close out the window. Guarantees no future fire; does not touch the
+    // pointer.
+    virtual void disarm() = 0;
+
+    // Install the handler in the open window's VM right now, so the next
+    // safepoint runs it: what a deadline fire does, on demand. For conditions
+    // that must be noticed mid-window (sleep, force-yield).
+    virtual void fireNow() = 0;
+
+    // Self-heal for a spurious install in the open window: uninstall only if
+    // the window's fire is still pending, and report whether that happened.
+    // A bare store in the handler could instead wipe a concurrent fire and
+    // spend the window's one-shot.
+    virtual bool clearIfArmed() = 0;
+
+    // Lifetime totals of deadline fires. Zeros for policies where the
+    // deadline never fires as a distinct event (the synchronous one).
+    virtual WatchdogStats getStats() { return {}; }
+
+protected:
+    InterruptCallback mHandler = nullptr;
+};
+
+// The synchronous policy: arm installs the handler on the spot, so it stays
+// resident and checks the clock at every safepoint.
+std::unique_ptr<QuantaWatchdog> createImmediateQuantaWatchdog(InterruptCallback handler);
+// Go-sysmon-shaped policy for real-time clocks: windows run with no interrupt
+// installed, and a long-running watchdog thread -- asleep whenever no window
+// is armed -- stores the handler slightly ahead of the deadline so the
+// preemption lands on it rather than after it. Thread-creation failure
+// propagates as std::system_error.
+std::unique_ptr<QuantaWatchdog> createQuantaWatchdog(InterruptCallback handler, lua_clockProvider quantaClock);
+
 // Give the embedder a chance to plop their own things into the environment before it's
 // fully set up. This is called before GC fixing / ares perms registration.
 using PopulateEnvironmentCallback = void (*)(IEnvironment& environment, lua_State* L);
@@ -103,6 +176,11 @@ struct HostCallbacks
     lua_setTimerEventCallback setTimerEventCb = nullptr;
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
     lua_clockProvider quantaClockProvider = nullptr;
+    // Install the interrupt handler synchronously at window start (resident
+    // at every safepoint) instead of from the watchdog thread at the
+    // deadline. Required when quantaClockProvider doesn't advance with real
+    // time, e.g. a test's stepped fake clock.
+    bool synchronousQuantaArming = false;
     PopulateEnvironmentCallback populateEnvironment = nullptr;
 };
 
@@ -340,6 +418,10 @@ public:
 
     virtual const HostCallbacks& getCallbacks() const = 0;
 
+    // The arming policy this provisioner's scripts use for their run windows.
+    // Never null once an environment exists (scripts can't exist before one).
+    virtual QuantaWatchdog* getQuantaWatchdog() const = 0;
+
     virtual std::shared_ptr<IEnvironment> createEnvironment(bool is_lsl, uint32_t api_version) = 0;
     virtual std::shared_ptr<IImage> buildImage(std::shared_ptr<IEnvironment> environment, const ImageConfig& config) = 0;
     virtual std::shared_ptr<Script> instantiateScript(const std::shared_ptr<IImage>& image, const ScriptConfig& config) = 0;
@@ -365,10 +447,26 @@ public:
 
     const HostCallbacks& getCallbacks() const override { return mCallbacks; }
 
+    QuantaWatchdog* getQuantaWatchdog() const override { return mWatchdog.get(); }
+
     std::shared_ptr<IEnvironment> createEnvironment(bool is_lsl, uint32_t api_version) override
     {
         std::shared_ptr<Environment> environment = makeEnvironment(is_lsl, api_version);
         environment->build<S>();
+
+        if (mWatchdog == nullptr)
+        {
+            // The first environment tells us which interrupt handler
+            // `S::installVMCallbacks` really installs (it may be a subclass's
+            // own, wrapping ours) -- every environment of this provisioner
+            // installs the same one.
+            InterruptCallback handler = lua_callbacks(environment->getBaseState())->interrupt;
+            if (mCallbacks.synchronousQuantaArming)
+                mWatchdog = createImmediateQuantaWatchdog(handler);
+            else
+                mWatchdog = createQuantaWatchdog(handler, mCallbacks.quantaClockProvider);
+        }
+
         return environment;
     }
 
@@ -433,6 +531,9 @@ protected:
 
 private:
     HostCallbacks mCallbacks;
+    // Created with the first environment, once the installed interrupt
+    // handler is known. Destruction joins the threaded impl's thread.
+    std::unique_ptr<QuantaWatchdog> mWatchdog;
 };
 
 } // namespace Executor

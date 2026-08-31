@@ -104,18 +104,25 @@ public:
     // state. Unlike loadDefaultState(), this is valid at any time.
     bool reset();
 
-    // Start a run window for `quanta` seconds. _must_ be followed by symmetric `endRunWindow()`
-    // TODO: RAII helper thingy maybe?
+    // Start a run window for `quanta` seconds. Every window must be closed by
+    // exactly one endRunWindow() before the next begin, and must not begin
+    // with a pending sleep or force-yield (assert-enforced): sleep is a
+    // window output the host consumes (banks + zeroes) before scheduling the
+    // script again, and a host that wants a script stopped shouldn't be
+    // scheduling windows for it.
     void beginRunWindow(double quanta);
-    // And finish it.
+    // Close the current run window. isYieldDue(), getExcludedTime() and
+    // getSleep() stay readable after the close (only the next begin resets
+    // them); a pending force-yield is consumed, its life ends with its window.
     void endRunWindow();
     // True once the engine has decided the current run window is over, sticky
     // for the rest of the window.
     bool isYieldDue() const { return mYieldDue; }
 
-    // Level-triggered forced preemption, port of the host's
-    // `getReset() || !mIsEnabled` check. The host both sets and clears it.
-    void setForceYield(bool force) { mForceYield = force; }
+    // Forced preemption, a mid-window mechanism: the current window yields at
+    // its first safepoint. Port of the host's `getReset() || !mIsEnabled`
+    // check; the host sets it, and endRunWindow() consumes it.
+    void setForceYield(bool force);
 
     void *getHostContext() const { return mHostContext; }
 
@@ -157,7 +164,7 @@ public:
     // How long we've been told to sleep. Never decremented, only zeroed out when the scheduler
     // decides we're done the sleep.
     float getSleep() const { return mSleep; }
-    void setSleep(float sleep) { mSleep = sleep; }
+    void setSleep(float sleep);
 
     // Wall time excluded from punishment accounting in the current window
     double getExcludedTime() const { return mExcludedTime; }
@@ -219,15 +226,21 @@ private:
     // Monotonic stopwatch used for quanta-elapsed measurement, seeded from the
     // provisioner's.
     lua_clockProvider mQuantaClockProvider = nullptr;
+    // Arming policy for run windows, from the provisioner. Never null.
+    QuantaWatchdog* mWatchdog = nullptr;
+    // The VM's callback struct, one per environment and stable for its whole
+    // life -- which brackets ours, so this never dangles. Every instance we
+    // ever fork lives in that same VM.
+    lua_Callbacks* mCallbacks = nullptr;
 
     // When did we start running
     double mWindowStart = 0.0;
     // How long are we supposed to run?
     double mQuanta = 0.0;
-    // Wall time this window spent inside GC steps and reachability walks.
+    // Wall time this window spent inside reachability walks.
     double mExcludedTime = 0.0;
-    // Quanta clock reading at the opening bracket of the GC step in flight.
-    double mGCStepStart = 0.0;
+    // GC threshold saved across a run window while the GC is parked.
+    size_t mSavedGCThreshold = 0;
     // We've planned a script kill for this time, the script will be killed if
     // it doesn't finish before the deadline.
     double mMandatoryDeadline = 0.0;
@@ -237,8 +250,6 @@ private:
     bool mYieldDue = false;
     // We already threw a catchable error trying to force a yield.
     bool mMandatoryYieldRaised = false;
-    // Between the paired pre and post interrupts of one GC step.
-    bool mGCStepInFlight = false;
     bool mInExecution = false;
     bool mMainFunctionComplete = false;
     // The host has indicated that a yield should happen at the next interrupt.

@@ -172,6 +172,10 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
     L = lua_mainthread(L);
     RuntimeState* state = (RuntimeState*)L->userdata;
 
+    // Bail if GC is disabled (host bulk work like luau_load)
+    if (L->global->GCthreshold == SIZE_MAX)
+        return 0;
+
     // This is a net shrink in memory, not relevant for our limiting logic. We can't assume that
     // memory being freed has anything to do with us, given that the GC can work on things unrelated
     // to the currently executing task.

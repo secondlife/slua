@@ -102,6 +102,8 @@ static void displayHelp(const char* argv0)
     printf("  --quanta=<usecs>: time slice per run window (default 200)\n");
     printf("  -O<n>: compile with optimization level n (default 1)\n");
     printf("  --fflags=<list>: comma-separated fast flag settings (name=true/false),\n");
+    printf("  --sync-arming: install the quanta interrupt at window start instead of\n");
+    printf("                 from the watchdog thread (the legacy resident-handler policy)\n");
 }
 
 int main(int argc, char** argv)
@@ -109,6 +111,7 @@ int main(int argc, char** argv)
     const char* script_path = nullptr;
     double quanta_usec = 200.0;
     int optimization_level = 1;
+    bool sync_arming = false;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -129,6 +132,10 @@ int main(int argc, char** argv)
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
             setLuauFlags(argv[i] + 9);
+        }
+        else if (strcmp(argv[i], "--sync-arming") == 0)
+        {
+            sync_arming = true;
         }
         else if (strncmp(argv[i], "-O", 2) == 0)
         {
@@ -199,6 +206,7 @@ int main(int argc, char** argv)
     HostCallbacks callbacks;
     callbacks.clockProvider = script_clock;
     callbacks.populateEnvironment = populate_environment;
+    callbacks.synchronousQuantaArming = sync_arming;
     // quantaClockProvider stays null so we exercise the engine's default
 
     Provisioner<> provisioner(callbacks);
@@ -288,6 +296,19 @@ int main(int argc, char** argv)
 
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
+
+    WatchdogStats wd_stats = provisioner.getQuantaWatchdog()->getStats();
+    if (wd_stats.fires > 0)
+    {
+        fprintf(
+            stderr,
+            "Watchdog fires: %llu, lateness usecs min/avg/max: %.1f/%.1f/%.1f\n",
+            (unsigned long long)wd_stats.fires,
+            wd_stats.latenessMin * 1e6,
+            wd_stats.latenessSum / (double)wd_stats.fires * 1e6,
+            wd_stats.latenessMax * 1e6
+        );
+    }
 
     if (result.status == HandlerRunStatus::Fault)
     {
