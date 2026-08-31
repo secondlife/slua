@@ -856,10 +856,11 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor weak references die before OoM")
     REQUIRE(script->loadDefaultState());
 
     // Keep the real GC from completing a cycle on its own so any weak
-    // clearing is attributable to the memory limit callback's heap walk.
-    // Don't use LUA_GCSTOP, it disables the beforeallocate callback entirely.
-    lua_gc(script->getInstanceState(), LUA_GCSETGOAL, 100000);
+    // clearing is attributable to the memory limit callback's heap walk. The
+    // callback stays live under LUA_GCSTOP: it gates on execution state, not
+    // the GC threshold.
     lua_gc(script->getInstanceState(), LUA_GCCOLLECT, 0);
+    lua_gc(script->getInstanceState(), LUA_GCSTOP, 0);
 
     resume(*script);
     CHECK(script->getFaultKind() == FaultKind::None);
@@ -1233,7 +1234,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog preempts a busy script")
     REQUIRE(result.status == HandlerRunStatus::Preempted);
     CHECK(script->isYieldDue());
     // The close unparked the GC and paid down the window's debt
-    CHECK(script->getInstanceState()->global->GCthreshold < SIZE_MAX - 1);
+    CHECK(script->getInstanceState()->global->GCthreshold < SIZE_MAX);
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog honors a mid-window sleep")

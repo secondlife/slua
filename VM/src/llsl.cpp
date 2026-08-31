@@ -1182,7 +1182,7 @@ static int push_uuid_common(lua_State *L, const char *str, size_t len, bool comp
         {
             // See `lgctraverse.cpp` for reasoning behind this
             const size_t uuid_size = 4;
-            if (LUAU_LIKELY(g->GCthreshold != SIZE_MAX) && g->cb.beforeallocate(L, 0, uuid_size))
+            if (g->cb.beforeallocate(L, 0, uuid_size))
                 luaD_throw(L, LUA_ERRMEM);
         }
 

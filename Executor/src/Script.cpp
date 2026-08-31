@@ -16,12 +16,6 @@ namespace Luau
 namespace Executor
 {
 
-// Parks the GC for a run window by making luaC_needsGC unreachable. One under
-// SIZE_MAX, because that exact value is the engine-internal limits-off
-// sentinel: lmem skips the beforeallocate hook there, and serialization
-// asserts on it meaning "currently serializing".
-constexpr size_t kGCParkedThreshold = SIZE_MAX - 1;
-
 // Buckets unrecognized persisted fault kinds instead of trusting the byte
 static FaultKind validate_fault_kind(uint8_t kind)
 {
@@ -150,11 +144,17 @@ Script::~Script()
     // A teardown mid-window must disarm (a later fire would write into a
     // lua_Callbacks that dies with the VM) and unpark the GC of the
     // environment's VM, which outlives us.
+    // TODO: Ech. Yeah, we want more RAII to improve discipline around keeping
+    //  these all synced.
     if (mRunWindowOpen)
     {
         mWatchdog->disarm();
         if (mInstance)
-            mInstance.thread()->global->GCthreshold = mSavedGCThreshold;
+        {
+            global_State* global = mInstance.thread()->global;
+            LUAU_ASSERT(global->GCthreshold == SIZE_MAX);
+            global->GCthreshold = mSavedGCThreshold;
+        }
     }
     // mInstance releases its anchor before mImage lets go of the VM, by
     // member declaration order.
@@ -304,8 +304,9 @@ void Script::beginRunWindow(double quanta)
     mQuanta = quanta;
 
     // Park the GC for the window; endRunWindow() pays down the debt
-    mSavedGCThreshold = instance->global->GCthreshold;
-    instance->global->GCthreshold = kGCParkedThreshold;
+    global_State* global = instance->global;
+    mSavedGCThreshold = global->GCthreshold;
+    global->GCthreshold = SIZE_MAX;
 
     mWatchdog->arm(mCallbacks, mWindowStart + quanta);
 }
@@ -324,7 +325,11 @@ void Script::endRunWindow()
         // Restore before stepping: the pacer computes its debt from the
         // threshold. This is the window's deferred GC work, on host time.
         lua_State* instance = mInstance.thread();
-        instance->global->GCthreshold = mSavedGCThreshold;
+        global_State* global = instance->global;
+        // Anything that rewrote the threshold mid-window (a lua_gc call, a
+        // new engine path) would corrupt the parking dance; catch it here.
+        LUAU_ASSERT(global->GCthreshold == SIZE_MAX);
+        global->GCthreshold = mSavedGCThreshold;
         while (luaC_needsGC(instance))
             luaC_step(instance, false);
     }
