@@ -31,3 +31,10 @@ __pycache__
 !/fuzz/corpus/json/*.json
 *.code-workspace
 *.tar.bz2
+
+# Python tooling
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.swp

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slua-bundle"
+version = "0.1.0"
+description = "Reference implementation of the SLua static-require-bundle algorithm: bundle, inspect, and extract Luau projects."
+requires-python = ">=3.7"
+readme = "README.md"
+
+[project.scripts]
+slua-bundle = "slua_bundle.cli:main"
+
+[tool.setuptools]
+packages = ["slua_bundle"]
+
+[tool.setuptools.package-data]
+slua_bundle = ["py.typed"]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.0",
+  "pytest>=8",
+  "pytest-cov>=6",
+  "ruff>=0.8",
+]
+test = [
+  "pytest>=8",
+  "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py37"
+
+[tool.ruff.lint]
+select = ["B", "C", "E", "F", "W", "I", "C90", "RUF"]
+ignore = ["E501", "RUF012"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
+[tool.mypy]
+follow_imports = "normal"
+strict_optional = true
+
+[tool.coverage.run]
+source = ["slua_bundle"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
