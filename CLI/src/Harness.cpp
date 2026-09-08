@@ -137,7 +137,7 @@ int main(int argc, char** argv)
         }
         else if (strncmp(argv[i], "--interrupt=", 12) == 0)
         {
-            const char* value = argv[i] + 9;
+            const char* value = argv[i] + 12;
             if (strcmp(value, "resident") == 0)
             {
                 interrupt_policy = InterruptInstallPolicy::Resident;
