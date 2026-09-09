@@ -323,6 +323,10 @@ endif ()
 
 # ServerLua: We use threads internally, library consumers need pthreads if applciable.
 target_link_libraries(Luau.Executor PUBLIC osthreads)
+# ServerLua: POSIX timers live in librt on glibc < 2.34, a stub elsewhere
+if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+    target_link_libraries(Luau.Executor PUBLIC "-lrt")
+endif ()
 
 if(LUAU_BUILD_CLI)
     target_compile_options(Luau.Repl.CLI PRIVATE ${LUAU_OPTIONS})
