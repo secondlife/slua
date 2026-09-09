@@ -1385,6 +1385,30 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog uninstalls a withdrawn force
     }
 }
 
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor deadline installers honor the host fire lead")
+{
+    for (InterruptInstallPolicy policy : kDeadlinePolicies)
+    {
+        INFO("policy ", (int)policy);
+        HostCallbacks callbacks = deadlineCallbacks(policy);
+        // A lead longer than the window means the deadline is already inside
+        // it when the window opens, so the handler goes in up front and the
+        // first safepoint yields.
+        callbacks.interruptFireLead = 1.0;
+        TestProvisioner host{callbacks};
+        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+        REQUIRE(script != nullptr);
+        REQUIRE(script->loadDefaultState());
+
+        RunResult result = resumeRaw(*script, 0.002);
+        REQUIRE(result.status == HandlerRunStatus::Preempted);
+        CHECK(script->isYieldDue());
+        WatchdogStats stats = host.getWatchdogStats();
+        CHECK(stats.fires == 1);
+        CHECK(stats.fireLead == 1.0);
+    }
+}
+
 #if defined(__linux__)
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor signal installer handles a deadline that is already due")
 {

@@ -137,7 +137,7 @@ QuantaClock resolveDefaultQuantaClock()
 #endif
 }
 
-InterruptInstallPolicy resolveDefaultInterruptInstallPolicy()
+static InterruptInstallPolicy resolveDefaultInterruptInstallPolicy()
 {
     return FFlag::SLuaThreadedQuantaWatchdog ? InterruptInstallPolicy::Threaded : InterruptInstallPolicy::Resident;
 }
@@ -181,8 +181,9 @@ private:
     lua_Callbacks* mTarget = nullptr;
 };
 
-// How early the watchdog installs the handler, to cover wakeup jitter
-constexpr double kWatchdogFireLead = 50e-6;  // 50us
+// How early the watchdog installs the handler when the host doesn't say, to
+// cover wakeup jitter
+constexpr double kDefaultThreadedFireLead = 50e-6;
 
 // Elevating the priority helps a lot if we want to stick to a strict schedule.
 // If we don't do this, the watchdog may fire much later than we intend because
@@ -233,9 +234,10 @@ void elevate_watchdog_thread_priority()
 class ThreadedInterruptInstaller final : public InterruptInstaller
 {
 public:
-    ThreadedInterruptInstaller(InterruptCallback handler, QuantaClock quanta_clock)
+    ThreadedInterruptInstaller(InterruptCallback handler, QuantaClock quanta_clock, double fire_lead)
         : InterruptInstaller(handler)
         , mQuantaClock(quanta_clock)
+        , mFireLead(fire_lead)
     {
         mThread = std::thread([this] { loopAndWatch(); });
     }
@@ -270,7 +272,7 @@ public:
             // Waking is a syscall and a context switch, so only do it if the
             // thread isn't already due up in time. Otherwise it wakes at its
             // old target, sees this deadline, and sleeps again toward it.
-            wake = mIdle || deadline - kWatchdogFireLead < mSleepUntil;
+            wake = mIdle || deadline - mFireLead < mSleepUntil;
         }
         if (wake)
             mCondition.notify_one();
@@ -299,7 +301,9 @@ public:
     WatchdogStats getStats() override
     {
         std::lock_guard<std::mutex> guard(mMutex);
-        return mStats;
+        WatchdogStats stats = mStats;
+        stats.fireLead = mFireLead;
+        return stats;
     }
 
 private:
@@ -334,13 +338,13 @@ private:
             }
 
             const double remaining = mDeadline - mQuantaClock();
-            if (remaining <= kWatchdogFireLead)
+            if (remaining <= mFireLead)
             {
                 release_store(&mTarget->interrupt, mHandler);
                 mPending.store(false, std::memory_order_relaxed);
                 mOverrun = std::max(0.0, -remaining);
 
-                double lateness = kWatchdogFireLead - remaining;
+                double lateness = mFireLead - remaining;
                 mStats.latenessSum += lateness;
                 mStats.latenessMin = mStats.fires == 0 ? lateness : std::min(mStats.latenessMin, lateness);
                 mStats.latenessMax = std::max(mStats.latenessMax, lateness);
@@ -349,13 +353,14 @@ private:
                     mStats.lateFires++;
                 continue;
             }
-            mSleepUntil = mDeadline - kWatchdogFireLead;
-            mCondition.wait_for(lock, std::chrono::duration<double>(remaining - kWatchdogFireLead));
+            mSleepUntil = mDeadline - mFireLead;
+            mCondition.wait_for(lock, std::chrono::duration<double>(remaining - mFireLead));
             mStats.wakes++;
         }
     }
 
     QuantaClock mQuantaClock = nullptr;
+    double mFireLead = 0.0;
 
     std::mutex mMutex;
     std::condition_variable mCondition;
@@ -375,9 +380,10 @@ private:
 };
 
 #if defined(__linux__)
-// How much lead-time to try to have the timer trigger before the actual deadline.
-// Timers are an inexact mechanism, so we do want a little bit of slop.
-constexpr double kSignalFireLead = 10e-6;
+// How early the signal is asked for when the host doesn't say. Sized to cover
+// the bulk of hrtimer expiry plus delivery to a running thread on a
+// virtualized simhost, where the average is ~11us with a long tail.
+constexpr double kDefaultSignalFireLead = 25e-6;
 
 // signal number that shouldn't be taken by indra, value not important
 // this is only a function because `SIGRTMIN` does a function call :(
@@ -400,9 +406,10 @@ static std::once_flag sSignalHandlerRegistered;
 class SignalInterruptInstaller final : public InterruptInstaller
 {
 public:
-    SignalInterruptInstaller(InterruptCallback handler, QuantaClock quanta_clock)
+    SignalInterruptInstaller(InterruptCallback handler, QuantaClock quanta_clock, double fire_lead)
         : InterruptInstaller(handler)
         , mQuantaClock(quanta_clock)
+        , mFireLead(fire_lead)
     {
         std::call_once(sSignalHandlerRegistered, [] {
             const int signum = get_watchdog_signal();
@@ -441,6 +448,12 @@ public:
         LUAU_ASSERT(!mPending.load(std::memory_order_relaxed));
         ensureTimer();
 
+        // Both clocks before the syscall, so its entry latency doesn't count
+        // against the fire.
+        timespec mono_now = {};
+        clock_gettime(CLOCK_MONOTONIC, &mono_now);
+        const double fire_in = deadline - mFireLead - mQuantaClock();
+
         mTarget = target;
         mDeadline = deadline;
         mOverrun = 0.0;
@@ -450,7 +463,7 @@ public:
         mPending.store(true, std::memory_order_relaxed);
         // If the timer can't deliver, whether it's too late already or we never
         // got one, the install happens here instead.
-        if (!requestSignalIn(deadline - kSignalFireLead - mQuantaClock()))
+        if (!requestSignalAt(mono_now, fire_in))
             deadlineInstall();
     }
 
@@ -482,7 +495,9 @@ public:
 
     WatchdogStats getStats() override
     {
-        return mStats;
+        WatchdogStats stats = mStats;
+        stats.fireLead = mFireLead;
+        return stats;
     }
 
 private:
@@ -522,7 +537,7 @@ private:
         const double remaining = mDeadline - mQuantaClock();
         mOverrun = std::max(0.0, -remaining);
 
-        double lateness = kSignalFireLead - remaining;
+        double lateness = mFireLead - remaining;
         mStats.latenessSum += lateness;
         mStats.latenessMin = mStats.fires == 0 ? lateness : std::min(mStats.latenessMin, lateness);
         mStats.latenessMax = std::max(mStats.latenessMax, lateness);
@@ -570,22 +585,23 @@ private:
         //     logWarn("InterruptInstaller", "Couldn't reduce script thread timer slack: errno %d", errno);
     }
 
-    // Ask for one signal `seconds` from now. False when the timer can't deliver
-    // it: there is no timer, the moment has already passed, or the kernel
-    // refused. A zero it_value would cancel the timer instead of firing it,
-    // hence the floor.
-    bool requestSignalIn(double seconds)
+    // Ask for one signal `seconds` after `from` on the timer's clock. False when
+    // the timer can't deliver it: there is no timer, the moment has already
+    // passed, or the kernel refused.
+    bool requestSignalAt(const timespec& from, double seconds)
     {
         if (!mHaveTimer || seconds <= 0.0)
             return false;
 
+        const int64_t fire_ns = (int64_t)from.tv_sec * 1000000000 + from.tv_nsec + (int64_t)(seconds * 1e9);
         itimerspec spec = {};
-        spec.it_value.tv_sec = (time_t)seconds;
-        spec.it_value.tv_nsec = std::max(1L, (long)((seconds - (double)spec.it_value.tv_sec) * 1e9));
-        return timer_settime(mTimer, 0, &spec, nullptr) == 0;
+        spec.it_value.tv_sec = (time_t)(fire_ns / 1000000000);
+        spec.it_value.tv_nsec = (long)(fire_ns % 1000000000);
+        return timer_settime(mTimer, TIMER_ABSTIME, &spec, nullptr) == 0;
     }
 
     QuantaClock mQuantaClock = nullptr;
+    double mFireLead = 0.0;
 
     lua_Callbacks* mTarget = nullptr;
     double mDeadline = 0.0;
@@ -602,21 +618,27 @@ private:
 
 } // namespace
 
-std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quanta_clock)
+std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quanta_clock, double fire_lead)
 {
     if (policy == InterruptInstallPolicy::Default)
         policy = resolveDefaultInterruptInstallPolicy();
     if (policy == InterruptInstallPolicy::Signal)
     {
 #if defined(__linux__)
-        return std::make_unique<SignalInterruptInstaller>(handler, quanta_clock);
+        if (fire_lead <= 0.0)
+            fire_lead = kDefaultSignalFireLead;
+        return std::make_unique<SignalInterruptInstaller>(handler, quanta_clock, fire_lead);
 #else
         logWarn("InterruptInstaller", "Signal install policy is Linux only, using the watchdog thread instead");
         policy = InterruptInstallPolicy::Threaded;
 #endif
     }
     if (policy == InterruptInstallPolicy::Threaded)
-        return std::make_unique<ThreadedInterruptInstaller>(handler, quanta_clock);
+    {
+        if (fire_lead <= 0.0)
+            fire_lead = kDefaultThreadedFireLead;
+        return std::make_unique<ThreadedInterruptInstaller>(handler, quanta_clock, fire_lead);
+    }
     return std::make_unique<ResidentInterruptInstaller>(handler);
 }
 

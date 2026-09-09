@@ -100,6 +100,8 @@ static void displayHelp(const char* argv0)
     printf("\n");
     printf("Options:\n");
     printf("  --quanta=<usecs>: time slice per run window (default 200)\n");
+    printf("  --fire-lead=<usecs>: how early the threaded or signal installer puts the\n"
+           "                 interrupt handler in ahead of the deadline (default: per policy)\n");
     printf("  -O<n>: compile with optimization level n (default 1)\n");
     printf("  --fflags=<list>: comma-separated fast flag settings (name=true/false),\n");
     printf("  --use-lua-clock: Use lua_clock() instead of a specialized quanta timer\n");
@@ -112,9 +114,10 @@ int main(int argc, char** argv)
 {
     const char* script_path = nullptr;
     double quanta_usec = 200.0;
+    double fire_lead_usec = 0.0;
     bool use_lua_clock = false;
     int optimization_level = 1;
-    InterruptInstallPolicy interrupt_policy = resolveDefaultInterruptInstallPolicy();
+    InterruptInstallPolicy interrupt_policy = InterruptInstallPolicy::Default;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -129,6 +132,15 @@ int main(int argc, char** argv)
             if (quanta_usec <= 0.0)
             {
                 fprintf(stderr, "Error: --quanta must be a positive number of usecs.\n");
+                return 1;
+            }
+        }
+        else if (strncmp(argv[i], "--fire-lead=", 12) == 0)
+        {
+            fire_lead_usec = atof(argv[i] + 12);
+            if (fire_lead_usec <= 0.0)
+            {
+                fprintf(stderr, "Error: --fire-lead must be a positive number of usecs.\n");
                 return 1;
             }
         }
@@ -231,6 +243,7 @@ int main(int argc, char** argv)
     callbacks.clockProvider = script_clock;
     callbacks.populateEnvironment = populate_environment;
     callbacks.interruptInstallPolicy = interrupt_policy;
+    callbacks.interruptFireLead = fire_lead_usec * 1e-6;
     if (use_lua_clock)
     {
         // Leaving this null uses a platform-optimized quanta clock provider
@@ -326,13 +339,15 @@ int main(int argc, char** argv)
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
 
-    if (interrupt_policy != InterruptInstallPolicy::Resident)
+    // Resident never fires, so this only shows for the deadline installers
+    WatchdogStats wd_stats = provisioner.getWatchdogStats();
+    if (wd_stats.fires > 0)
     {
-        WatchdogStats wd_stats = provisioner.getWatchdogStats();
         double avg = wd_stats.fires > 0 ? wd_stats.latenessSum / (double)wd_stats.fires : 0.0;
         fprintf(
             stderr,
-            "Watchdog wakes: %llu, fires: %llu, late fires: %llu, lateness usecs min/avg/max: %.1f/%.1f/%.1f\n",
+            "Watchdog lead: %.1f usecs, wakes: %llu, fires: %llu, late fires: %llu, lateness usecs min/avg/max: %.1f/%.1f/%.1f\n",
+            wd_stats.fireLead * 1e6,
             (unsigned long long)wd_stats.wakes,
             (unsigned long long)wd_stats.fires,
             (unsigned long long)wd_stats.lateFires,

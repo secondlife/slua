@@ -111,6 +111,8 @@ struct WatchdogStats
     double latenessSum = 0.0;
     double latenessMin = 0.0;
     double latenessMax = 0.0;
+    // The lead in effect, so a stats dump is self-describing
+    double fireLead = 0.0;
 };
 
 // Owns `cb.interrupt` for a run window and decides when it's installed.
@@ -163,7 +165,7 @@ protected:
 
 enum class InterruptInstallPolicy
 {
-    // Whatever resolveDefaultInterruptInstallPolicy() says
+    // Resident, or Threaded when the SLuaThreadedQuantaWatchdog fflag is on
     Default,
     // Handler stays resident and checks the clock at every safepoint
     Resident,
@@ -175,11 +177,8 @@ enum class InterruptInstallPolicy
     Signal,
 };
 
-// Figure out which install policy to use when the host doesn't say
-InterruptInstallPolicy resolveDefaultInterruptInstallPolicy();
-
-// Throws std::system_error if the threaded policy can't create its thread
-std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quantaClock);
+// Throws std::system_error if the threaded policy can't create its thread.
+std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quantaClock, double fireLead);
 
 // Give the embedder a chance to plop their own things into the environment before it's
 // fully set up. This is called before GC fixing / ares perms registration.
@@ -197,6 +196,10 @@ struct HostCallbacks
     // Resident is required when quantaClockProvider doesn't track real time
     // (test fake clocks), Threaded reads it from the watchdog thread too
     InterruptInstallPolicy interruptInstallPolicy = InterruptInstallPolicy::Default;
+    // How early, in seconds, the Threaded and Signal policies put the handler in
+    // ahead of the deadline to cover delivery latency. Zero takes the policy's
+    // default. Size it from the harness's lateness stats on the target hardware.
+    double interruptFireLead = 0.0;
     PopulateEnvironmentCallback populateEnvironment = nullptr;
 };
 
@@ -478,7 +481,7 @@ public:
         if (mInterruptInstaller == nullptr)
         {
             InterruptCallback handler = lua_callbacks(environment->getBaseState())->interrupt;
-            mInterruptInstaller = createInterruptInstaller(mCallbacks.interruptInstallPolicy, handler, mCallbacks.quantaClockProvider);
+            mInterruptInstaller = createInterruptInstaller(mCallbacks.interruptInstallPolicy, handler, mCallbacks.quantaClockProvider, mCallbacks.interruptFireLead);
         }
 
         return environment;
