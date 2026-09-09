@@ -405,13 +405,23 @@ public:
         , mQuantaClock(quanta_clock)
     {
         std::call_once(sSignalHandlerRegistered, [] {
+            const int signum = get_watchdog_signal();
+
+            // Mono and friends pick their RT signals by searching for SIG_DFL, so
+            // anything else here is someone we'd be clobbering.
+            struct sigaction current = {};
+            int query_rc = sigaction(signum, nullptr, &current);
+            LUAU_ASSERT_ALWAYS(query_rc == 0);
+            LUAU_ASSERT_ALWAYS(current.sa_handler == SIG_DFL);
+
             struct sigaction action = {};
             action.sa_sigaction = onSignal;
             // SA_RESTART so no syscall in the host sees an EINTR from us
             action.sa_flags = SA_SIGINFO | SA_RESTART;
             sigemptyset(&action.sa_mask);
-            if (sigaction(get_watchdog_signal(), &action, nullptr) != 0)
-                logWarn("InterruptInstaller", "Couldn't register the watchdog signal handler: errno %d", errno);
+            // Without our handler the first timer expiry would terminate the process
+            int install_rc = sigaction(signum, &action, nullptr);
+            LUAU_ASSERT_ALWAYS(install_rc == 0);
         });
     }
 

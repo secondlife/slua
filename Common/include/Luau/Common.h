@@ -118,6 +118,10 @@ LUAU_NOINLINE inline int assertCallHandler(const char* expression, const char* f
 #define LUAU_ASSERT(expr) (void)sizeof(!!(expr))
 #endif
 
+// ServerLua: for invariants about the host process rather than our own code,
+// which only release builds will ever get to see
+#define LUAU_ASSERT_ALWAYS(expr) ((void)(!!(expr) || (Luau::assertCallHandler(#expr, __FILE__, __LINE__, __FUNCTION__) && (LUAU_DEBUGBREAK(), 0))))
+
 namespace Luau
 {
 
