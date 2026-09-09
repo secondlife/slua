@@ -49,6 +49,10 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+// Only newer glibc names the SIGEV_THREAD_ID target, older ones just have the union member
+#if defined(__GLIBC__) && !defined(sigev_notify_thread_id)
+#define sigev_notify_thread_id _sigev_un._tid
+#endif
 #endif
 #endif
 
