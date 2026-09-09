@@ -376,7 +376,11 @@ private:
 constexpr double kSignalFireLead = 10e-6;
 
 // signal number that shouldn't be taken by indra, value not important
-constexpr int kWatchdogSignal = SIGRTMIN + 4;
+// this is only a function because `SIGRTMIN` does a function call :(
+static int get_watchdog_signal()
+{
+    return SIGRTMIN + 4;
+}
 
 // One sigaction per process, however many installers get made
 static std::once_flag sSignalHandlerRegistered;
@@ -402,7 +406,7 @@ public:
             // SA_RESTART so no syscall in the host sees an EINTR from us
             action.sa_flags = SA_SIGINFO | SA_RESTART;
             sigemptyset(&action.sa_mask);
-            if (sigaction(kWatchdogSignal, &action, nullptr) != 0)
+            if (sigaction(get_watchdog_signal(), &action, nullptr) != 0)
                 logWarn("InterruptInstaller", "Couldn't register the watchdog signal handler: errno %d", errno);
         });
     }
@@ -533,7 +537,7 @@ private:
 
         struct sigevent event = {};
         event.sigev_notify = SIGEV_THREAD_ID;
-        event.sigev_signo = kWatchdogSignal;
+        event.sigev_signo = get_watchdog_signal();
         event.sigev_value.sival_ptr = this;
         event.sigev_notify_thread_id = tid;
         mHaveTimer = timer_create(CLOCK_MONOTONIC, &event, &mTimer) == 0;
@@ -546,8 +550,10 @@ private:
         // Slack is a property of the thread that sets the timer and defaults to
         // 50us, which would swallow the lead several times over. This tightens
         // every timer on the script thread, not just ours.
-        if (prctl(PR_SET_TIMERSLACK, 1) != 0)
-            logWarn("InterruptInstaller", "Couldn't reduce script thread timer slack: errno %d", errno);
+        // I'm a little squeamish about setting this since it's in the main thread and process-global,
+        // so let's see if it's a problem in practice...
+        // if (prctl(PR_SET_TIMERSLACK, 1) != 0)
+        //     logWarn("InterruptInstaller", "Couldn't reduce script thread timer slack: errno %d", errno);
     }
 
     // Ask for one signal `seconds` from now. False when the timer can't deliver
