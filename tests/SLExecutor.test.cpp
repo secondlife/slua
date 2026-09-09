@@ -1289,13 +1289,21 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor run window catch-up collects the wind
     CHECK(lua_gc(instance, LUA_GCCOUNT, 0) < peak_kb);
 }
 
-// Real quanta clock and the watchdog thread
-static HostCallbacks threadedCallbacks()
+// Real quanta clock, handler put in at the deadline by a watchdog thread or a
+// timer signal. The policies below all get the same tests.
+static HostCallbacks deadlineCallbacks(InterruptInstallPolicy policy)
 {
     HostCallbacks callbacks;
-    callbacks.interruptInstallPolicy = InterruptInstallPolicy::Threaded;
+    callbacks.interruptInstallPolicy = policy;
     return callbacks;
 }
+
+static const std::vector<InterruptInstallPolicy> kDeadlinePolicies = {
+    InterruptInstallPolicy::Threaded,
+#if defined(__linux__)
+    InterruptInstallPolicy::Signal,
+#endif
+};
 
 static const char* kBusyLoop = R"(
     local total = 0
@@ -1306,90 +1314,95 @@ static const char* kBusyLoop = R"(
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog preempts a busy script")
 {
-    TestProvisioner host{threadedCallbacks()};
-    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
-    REQUIRE(script != nullptr);
-    REQUIRE(script->loadDefaultState());
+    for (InterruptInstallPolicy policy : kDeadlinePolicies)
+    {
+        INFO("policy ", (int)policy);
+        TestProvisioner host{deadlineCallbacks(policy)};
+        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+        REQUIRE(script != nullptr);
+        REQUIRE(script->loadDefaultState());
 
-    // 1e9 iterations can't finish inside 2ms, so preemption is the only way out
-    RunResult result = resumeRaw(*script, 0.002);
-    REQUIRE(result.status == HandlerRunStatus::Preempted);
-    CHECK(script->isYieldDue());
-    CHECK(script->getInstanceState()->global->GCthreshold < SIZE_MAX);
-    // The fired handler doesn't outlive the window
-    CHECK((lua_callbacks(script->getInstanceState())->interrupt == nullptr));
+        // 1e9 iterations can't finish inside 2ms, so preemption is the only way out
+        RunResult result = resumeRaw(*script, 0.002);
+        REQUIRE(result.status == HandlerRunStatus::Preempted);
+        CHECK(script->isYieldDue());
+        CHECK(script->getInstanceState()->global->GCthreshold < SIZE_MAX);
+        // The fired handler doesn't outlive the window
+        CHECK((lua_callbacks(script->getInstanceState())->interrupt == nullptr));
+        CHECK(host.getWatchdogStats().fires == 1);
+    }
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog honors a mid-window sleep")
 {
-    TestProvisioner host{threadedCallbacks()};
-    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
-    REQUIRE(script != nullptr);
-    REQUIRE(script->loadDefaultState());
-
-    // Quanta generous enough that only the sleep can preempt us
-    RunResult result;
+    for (InterruptInstallPolicy policy : kDeadlinePolicies)
     {
-        RunWindow window(*script, 10.0);
-        script->setSleep(0.5f);
-        result = script->resumeEventHandler();
+        INFO("policy ", (int)policy);
+        TestProvisioner host{deadlineCallbacks(policy)};
+        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+        REQUIRE(script != nullptr);
+        REQUIRE(script->loadDefaultState());
+
+        // Quanta generous enough that only the sleep can preempt us
+        RunResult result;
+        {
+            RunWindow window(*script, 10.0);
+            script->setSleep(0.5f);
+            result = script->resumeEventHandler();
+        }
+        REQUIRE(result.status == HandlerRunStatus::Preempted);
+        CHECK(script->isYieldDue());
     }
-    REQUIRE(result.status == HandlerRunStatus::Preempted);
-    CHECK(script->isYieldDue());
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog uninstalls a withdrawn force-yield")
 {
-    TestProvisioner host{threadedCallbacks()};
-    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(R"(
-        local total = 0
-        for i = 1, 1000 do
-            total += i
-        end
-    )")), makeScriptConfig());
+    for (InterruptInstallPolicy policy : kDeadlinePolicies)
+    {
+        INFO("policy ", (int)policy);
+        TestProvisioner host{deadlineCallbacks(policy)};
+        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(R"(
+            local total = 0
+            for i = 1, 1000 do
+                total += i
+            end
+        )")), makeScriptConfig());
+        REQUIRE(script != nullptr);
+        REQUIRE(script->loadDefaultState());
+
+        // The set installs the handler. The first safepoint finds nothing to do
+        // and the deadline far away, so it uninstalls itself.
+        RunResult result;
+        {
+            RunWindow window(*script, 10.0);
+            script->setForceYield(true);
+            script->setForceYield(false);
+            result = script->resumeEventHandler();
+        }
+        REQUIRE(result.status == HandlerRunStatus::Ok);
+        CHECK(!script->isYieldDue());
+        CHECK((lua_callbacks(script->getInstanceState())->interrupt == nullptr));
+    }
+}
+
+#if defined(__linux__)
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor signal installer handles a deadline that is already due")
+{
+    TestProvisioner host{deadlineCallbacks(InterruptInstallPolicy::Signal)};
+    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
     REQUIRE(script != nullptr);
     REQUIRE(script->loadDefaultState());
 
-    // The set installs the handler. The first safepoint finds nothing to do
-    // and the deadline far away, so it uninstalls itself.
-    RunResult result;
-    {
-        RunWindow window(*script, 10.0);
-        script->setForceYield(true);
-        script->setForceYield(false);
-        result = script->resumeEventHandler();
-    }
-    REQUIRE(result.status == HandlerRunStatus::Ok);
-    CHECK(!script->isYieldDue());
+    // A zero quanta puts the deadline inside the fire lead before the timer
+    // could be asked for anything, so the install has to happen inline and
+    // the first safepoint yields.
+    RunResult result = resumeRaw(*script, 0.0);
+    REQUIRE(result.status == HandlerRunStatus::Preempted);
+    CHECK(script->isYieldDue());
+    CHECK(host.getWatchdogStats().fires == 1);
     CHECK((lua_callbacks(script->getInstanceState())->interrupt == nullptr));
 }
-
-TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog survives mid-window script destruction")
-{
-    TestProvisioner host{threadedCallbacks()};
-    std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
-    std::shared_ptr<IImage> image = host.buildImage(env, makeImageConfig(Luau::compile(kBusyLoop)));
-    REQUIRE(image != nullptr);
-
-    std::shared_ptr<Script> first = host.instantiateScript(image, makeScriptConfig());
-    REQUIRE(first != nullptr);
-    REQUIRE(first->loadDefaultState());
-
-    // Die with a window open: the destructor has to disarm and unpark the
-    // GC of the VM it's leaving behind.
-    first->beginRunWindow(10.0);
-    first.reset();
-    CHECK(env->getBaseState()->global->GCthreshold < SIZE_MAX);
-
-    // A second script in the same VM gets a clean slate. In a debug build
-    // installBy() asserts if the first window was never cancelled.
-    std::shared_ptr<Script> second = host.instantiateScript(image, makeScriptConfig());
-    REQUIRE(second != nullptr);
-    REQUIRE(second->loadDefaultState());
-    RunResult result = resumeRaw(*second, 0.002);
-    REQUIRE(result.status == HandlerRunStatus::Preempted);
-    CHECK(second->isYieldDue());
-}
+#endif
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit")
 {

@@ -105,7 +105,8 @@ struct WatchdogStats
     uint64_t fires = 0;
     // Fires that landed after the deadline itself, not just after the fire lead
     uint64_t lateFires = 0;
-    // Watchdog thread wakeups, whether or not they led to a fire
+    // Watchdog thread wakeups, whether or not they led to a fire. Always zero
+    // for installers without a thread.
     uint64_t wakes = 0;
     double latenessSum = 0.0;
     double latenessMin = 0.0;
@@ -168,6 +169,10 @@ enum class InterruptInstallPolicy
     Resident,
     // A watchdog thread installs the handler just ahead of the deadline
     Threaded,
+    // A POSIX timer signals the script thread, which installs the handler in
+    // the signal handler. No second thread and no scheduling priority needed.
+    // Linux only, falls back to Threaded elsewhere.
+    Signal,
 };
 
 // Figure out which install policy to use when the host doesn't say

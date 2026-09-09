@@ -43,8 +43,12 @@
 #include <sched.h>
 #if defined(__linux__)
 #include <cerrno>
+#include <csignal>
+#include <ctime>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 #endif
 
@@ -366,12 +370,231 @@ private:
     std::thread mThread;
 };
 
+#if defined(__linux__)
+// How much lead-time to try to have the timer trigger before the actual deadline.
+// Timers are an inexact mechanism, so we do want a little bit of slop.
+constexpr double kSignalFireLead = 10e-6;
+
+// signal number that shouldn't be taken by indra, value not important
+constexpr int kWatchdogSignal = SIGRTMIN + 4;
+
+// One sigaction per process, however many installers get made
+static std::once_flag sSignalHandlerRegistered;
+
+/// A POSIX timer bound to the script thread delivers a signal at the deadline,
+/// and the signal handler installs `cb->interrupt` from the script thread itself.
+/// Nothing has to be woken up, so nothing has to win a scheduling decision to
+/// land on time. That makes it the pick where SCHED_RR isn't on the table.
+///
+/// Everything here runs on the script thread. The only concurrency is the
+/// signal handler landing between two of our own instructions, so the atomics
+/// and fences are there for the compiler, not for another core.
+class SignalInterruptInstaller final : public InterruptInstaller
+{
+public:
+    SignalInterruptInstaller(InterruptCallback handler, QuantaClock quanta_clock)
+        : InterruptInstaller(handler)
+        , mQuantaClock(quanta_clock)
+    {
+        std::call_once(sSignalHandlerRegistered, [] {
+            struct sigaction action = {};
+            action.sa_sigaction = onSignal;
+            // SA_RESTART so no syscall in the host sees an EINTR from us
+            action.sa_flags = SA_SIGINFO | SA_RESTART;
+            sigemptyset(&action.sa_mask);
+            if (sigaction(kWatchdogSignal, &action, nullptr) != 0)
+                logWarn("InterruptInstaller", "Couldn't register the watchdog signal handler: errno %d", errno);
+        });
+    }
+
+    ~SignalInterruptInstaller() override
+    {
+        // Any signal still queued for it is dropped along with the timer
+        if (mHaveTimer)
+            timer_delete(mTimer);
+    }
+
+    SignalInterruptInstaller(const SignalInterruptInstaller&) = delete;
+    SignalInterruptInstaller& operator=(const SignalInterruptInstaller&) = delete;
+
+    void installBy(lua_Callbacks* target, double deadline) override
+    {
+        target->interrupt = nullptr;
+        LUAU_ASSERT(!mPending.load(std::memory_order_relaxed));
+        ensureTimer();
+
+        mTarget = target;
+        mDeadline = deadline;
+        mOverrun = 0.0;
+
+        // Publish the window before the signal handler can see pending
+        std::atomic_signal_fence(std::memory_order_release);
+        mPending.store(true, std::memory_order_relaxed);
+        // If the timer can't deliver, whether it's too late already or we never
+        // got one, the install happens here instead.
+        if (!requestSignalIn(deadline - kSignalFireLead - mQuantaClock()))
+            deadlineInstall();
+    }
+
+    void installNow() override
+    {
+        // But only if it was pending, don't touch it if we already installed.
+        if (mPending.load(std::memory_order_relaxed))
+            mTarget->interrupt = mHandler;
+    }
+
+    void cancel() override
+    {
+        // Once the install has happened there's no signal left to withdraw, so
+        // a preempted window only pays for the request. The exchange can't be
+        // split by the signal handler.
+        if (mPending.exchange(false, std::memory_order_relaxed))
+        {
+            if (!mHaveTimer)
+                return;
+            itimerspec spec = {};
+            timer_settime(mTimer, 0, &spec, nullptr);
+        }
+    }
+
+    double getInstallOverrun() override
+    {
+        return mOverrun;
+    }
+
+    WatchdogStats getStats() override
+    {
+        return mStats;
+    }
+
+private:
+    void uninstallPending() override
+    {
+        mTarget->interrupt = nullptr;
+        // The signal can land between the inline pending check and that store,
+        // in which case we just wiped a real install. Recheck and put it back.
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        if (!mPending.load(std::memory_order_relaxed))
+            mTarget->interrupt = mHandler;
+    }
+
+    static void onSignal(int, siginfo_t* info, void*)
+    {
+        // If we're not being woken up for a timer, this isn't for us.
+        if (info->si_code != SI_TIMER)
+            return;
+        // Get a reference to the specific interrupt installer
+        auto* self = static_cast<SignalInterruptInstaller*>(info->si_value.sival_ptr);
+        // A signal that was already queued when its window was cancelled still
+        // gets delivered
+        if (!self->mPending.load(std::memory_order_relaxed))
+            return;
+        std::atomic_signal_fence(std::memory_order_acquire);
+        self->deadlineInstall();
+    }
+
+    // The install installBy() promised, plus the timing for it. Usually from the
+    // signal handler, so only atomics, plain stores and the clock: it has to
+    // stay async-signal-safe.
+    void deadlineInstall()
+    {
+        mTarget->interrupt = mHandler;
+        mPending.store(false, std::memory_order_relaxed);
+
+        const double remaining = mDeadline - mQuantaClock();
+        mOverrun = std::max(0.0, -remaining);
+
+        double lateness = kSignalFireLead - remaining;
+        mStats.latenessSum += lateness;
+        mStats.latenessMin = mStats.fires == 0 ? lateness : std::min(mStats.latenessMin, lateness);
+        mStats.latenessMax = std::max(mStats.latenessMax, lateness);
+        mStats.fires++;
+        if (mOverrun > 0.0)
+            mStats.lateFires++;
+    }
+
+    // The timer is bound to a thread, so it follows whichever one opens windows.
+    void ensureTimer()
+    {
+        pid_t tid = (pid_t)syscall(SYS_gettid);
+        // We have a timer and it's for this thread
+        if (mHaveTimer && mTimerThread == tid)
+            return;
+
+        if (mHaveTimer)
+        {
+            // This should never be used cross-thread!
+            LUAU_ASSERT(mTimerThread == tid);
+            timer_delete(mTimer);
+            mHaveTimer = false;
+        }
+
+        mTimerThread = tid;
+
+        struct sigevent event = {};
+        event.sigev_notify = SIGEV_THREAD_ID;
+        event.sigev_signo = kWatchdogSignal;
+        event.sigev_value.sival_ptr = this;
+        event.sigev_notify_thread_id = tid;
+        mHaveTimer = timer_create(CLOCK_MONOTONIC, &event, &mTimer) == 0;
+        if (!mHaveTimer)
+        {
+            logWarn("InterruptInstaller", "Couldn't create the watchdog timer (errno %d), installing at window start instead", errno);
+            return;
+        }
+
+        // Slack is a property of the thread that sets the timer and defaults to
+        // 50us, which would swallow the lead several times over. This tightens
+        // every timer on the script thread, not just ours.
+        if (prctl(PR_SET_TIMERSLACK, 1) != 0)
+            logWarn("InterruptInstaller", "Couldn't reduce script thread timer slack: errno %d", errno);
+    }
+
+    // Ask for one signal `seconds` from now. False when the timer can't deliver
+    // it: there is no timer, the moment has already passed, or the kernel
+    // refused. A zero it_value would cancel the timer instead of firing it,
+    // hence the floor.
+    bool requestSignalIn(double seconds)
+    {
+        if (!mHaveTimer || seconds <= 0.0)
+            return false;
+
+        itimerspec spec = {};
+        spec.it_value.tv_sec = (time_t)seconds;
+        spec.it_value.tv_nsec = std::max(1L, (long)((seconds - (double)spec.it_value.tv_sec) * 1e9));
+        return timer_settime(mTimer, 0, &spec, nullptr) == 0;
+    }
+
+    QuantaClock mQuantaClock = nullptr;
+
+    lua_Callbacks* mTarget = nullptr;
+    double mDeadline = 0.0;
+    // Seconds past mDeadline that the last fire landed
+    double mOverrun = 0.0;
+    WatchdogStats mStats;
+
+    timer_t mTimer{};
+    bool mHaveTimer = false;
+    // Thread the timer signals, 0 until the first window
+    pid_t mTimerThread = 0;
+};
+#endif
+
 } // namespace
 
 std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quanta_clock)
 {
     if (policy == InterruptInstallPolicy::Default)
         policy = resolveDefaultInterruptInstallPolicy();
+    if (policy == InterruptInstallPolicy::Signal)
+    {
+#if defined(__linux__)
+        return std::make_unique<SignalInterruptInstaller>(handler, quanta_clock);
+#else
+        logWarn("InterruptInstaller", "Signal install policy is Linux only, using the watchdog thread instead");
+        policy = InterruptInstallPolicy::Threaded;
+#endif
+    }
     if (policy == InterruptInstallPolicy::Threaded)
         return std::make_unique<ThreadedInterruptInstaller>(handler, quanta_clock);
     return std::make_unique<ResidentInterruptInstaller>(handler);

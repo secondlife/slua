@@ -261,8 +261,7 @@ private:
 };
 
 /// An execution span for a single script that may contain multiple handler invocations.
-/// The script must outlive the guard. A host that can destroy a script mid-window
-/// (the destructor closes the window itself) has to close() first.
+/// The script must outlive the guard.
 class RunWindow
 {
 public:

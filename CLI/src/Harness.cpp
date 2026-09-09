@@ -103,8 +103,9 @@ static void displayHelp(const char* argv0)
     printf("  -O<n>: compile with optimization level n (default 1)\n");
     printf("  --fflags=<list>: comma-separated fast flag settings (name=true/false),\n");
     printf("  --use-lua-clock: Use lua_clock() instead of a specialized quanta timer\n");
-    printf("  --interrupt=<resident|threaded>: keep the interrupt handler resident, "
-           "                 or have the watchdog thread install it at the deadline\n");
+    printf("  --interrupt=<resident|threaded|signal>: keep the interrupt handler resident,\n"
+           "                 have the watchdog thread install it at the deadline, or have a\n"
+           "                 POSIX timer signal install it (Linux only)\n");
 }
 
 int main(int argc, char** argv)
@@ -145,6 +146,10 @@ int main(int argc, char** argv)
             else if (strcmp(value, "threaded") == 0)
             {
                 interrupt_policy = InterruptInstallPolicy::Threaded;
+            }
+            else if (strcmp(value, "signal") == 0)
+            {
+                interrupt_policy = InterruptInstallPolicy::Signal;
             }
             else
             {
@@ -321,7 +326,7 @@ int main(int argc, char** argv)
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
 
-    if (interrupt_policy == InterruptInstallPolicy::Threaded)
+    if (interrupt_policy != InterruptInstallPolicy::Resident)
     {
         WatchdogStats wd_stats = provisioner.getWatchdogStats();
         double avg = wd_stats.fires > 0 ? wd_stats.latenessSum / (double)wd_stats.fires : 0.0;

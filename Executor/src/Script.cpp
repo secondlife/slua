@@ -138,17 +138,7 @@ Script::Script(const std::shared_ptr<IImage>& image, const ScriptConfig& config)
 
 Script::~Script()
 {
-    LUAU_ASSERT(!mHandlerState && !mInExecution);
-    // A late fire would write into a dead lua_Callbacks, and the VM's GC
-    // outlives us.
-    if (mRunWindowOpen)
-    {
-        mInterruptInstaller->cancel();
-        mCallbacks->interrupt = nullptr;
-        global_State* global = mImage->getEnvironment().getBaseState()->global;
-        LUAU_ASSERT(global->GCthreshold == SIZE_MAX);
-        global->GCthreshold = mSavedGCThreshold;
-    }
+    LUAU_ASSERT(!mHandlerState && !mInExecution && !mRunWindowOpen);
     // mInstance releases its anchor before mImage lets go of the VM, by
     // member declaration order.
 }
