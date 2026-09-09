@@ -89,9 +89,8 @@ void logDebug(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logInfo(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logWarn(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 
-// Figure out which clock source to use
-// Monotonic seconds for run-window deadlines. No lua_State because the
-// threaded installer reads it off the script thread.
+// Monotonic seconds for the per-safepoint elapsed check, which is the one
+// place clock cost shows up in throughput. Nothing else reads it.
 using QuantaClock = double (*)();
 
 QuantaClock resolveDefaultQuantaClock();
@@ -128,9 +127,9 @@ public:
 
     virtual ~InterruptInstaller();
 
-    // Install `cb.interrupt` no later than `deadline` (quanta clock domain).
-    // Installing it earlier is allowed.
-    virtual void installBy(lua_Callbacks* target, double deadline) = 0;
+    // Install `cb.interrupt` no later than `seconds` from now. Installing it
+    // earlier is allowed.
+    virtual void installWithin(lua_Callbacks* target, double seconds) = 0;
 
     // For things that need the script to yield immediately (sleep, force-yield).
     // Harmless if it's already installed.
@@ -150,7 +149,7 @@ public:
     }
 
     // How far past the deadline the current window's handler went in, in
-    // seconds. Zero until it does, and zero again after the next installBy().
+    // seconds. Zero until it does, and zero again after the next installWithin().
     virtual double getInstallOverrun() { return 0.0; }
 
     virtual WatchdogStats getStats() { return {}; }
@@ -159,7 +158,7 @@ protected:
     virtual void uninstallPending() = 0;
 
     InterruptCallback mHandler = nullptr;
-    // An installBy() whose install hasn't landed yet
+    // An installWithin() whose install hasn't landed yet
     std::atomic<bool> mPending{false};
 };
 
@@ -178,7 +177,7 @@ enum class InterruptInstallPolicy
 };
 
 // Throws std::system_error if the threaded policy can't create its thread.
-std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, QuantaClock quantaClock, double fireLead);
+std::unique_ptr<InterruptInstaller> createInterruptInstaller(InterruptInstallPolicy policy, InterruptCallback handler, double fireLead);
 
 // Give the embedder a chance to plop their own things into the environment before it's
 // fully set up. This is called before GC fixing / ares perms registration.
@@ -194,7 +193,7 @@ struct HostCallbacks
     lua_eventHandlerRegistrationCallback eventHandlerRegistrationCb = nullptr;
     QuantaClock quantaClockProvider = nullptr;
     // Resident is required when quantaClockProvider doesn't track real time
-    // (test fake clocks), Threaded reads it from the watchdog thread too
+    // (test fake clocks), since the deadline installers schedule on lua_clock()
     InterruptInstallPolicy interruptInstallPolicy = InterruptInstallPolicy::Default;
     // How early, in seconds, the Threaded and Signal policies put the handler in
     // ahead of the deadline to cover delivery latency. Zero takes the policy's
@@ -481,7 +480,7 @@ public:
         if (mInterruptInstaller == nullptr)
         {
             InterruptCallback handler = lua_callbacks(environment->getBaseState())->interrupt;
-            mInterruptInstaller = createInterruptInstaller(mCallbacks.interruptInstallPolicy, handler, mCallbacks.quantaClockProvider, mCallbacks.interruptFireLead);
+            mInterruptInstaller = createInterruptInstaller(mCallbacks.interruptInstallPolicy, handler, mCallbacks.interruptFireLead);
         }
 
         return environment;

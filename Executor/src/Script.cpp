@@ -314,7 +314,7 @@ void Script::beginRunWindow(double quanta)
     mSavedGCThreshold = global->GCthreshold;
     global->GCthreshold = SIZE_MAX;
 
-    mInterruptInstaller->installBy(mCallbacks, mWindowStart + quanta);
+    mInterruptInstaller->installWithin(mCallbacks, quanta);
 }
 
 void Script::endRunWindow()
