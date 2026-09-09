@@ -342,7 +342,7 @@ void luau_callinterrupthandler(lua_State* L, int code)
 {
     LUAU_ASSERT(code < 0); // Interrupt codes must be negative (>= 0 reserved for GC)
 
-    void (*interrupt)(lua_State*, int) = L->global->cb.interrupt;
+    void (*interrupt)(lua_State*, int) = Luau::opaque_load(&L->global->cb.interrupt); // ServerLua
 
     if (LUAU_UNLIKELY(!!interrupt))
     {

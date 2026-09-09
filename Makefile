@@ -150,6 +150,11 @@ ifeq ($(config),sanitize)
 	LDFLAGS+=-fsanitize=address,undefined
 endif
 
+ifeq ($(config),tsan)
+	CXXFLAGS+=-fsanitize=thread -O1
+	LDFLAGS+=-fsanitize=thread
+endif
+
 ifeq ($(config),analyze)
 	CXXFLAGS+=--analyze
 endif
@@ -208,11 +213,14 @@ $(TEST_LINK_VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(TEST_LINK_CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -ICodeGen/include
 $(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IAnalysis/include -IVM/include -ICodeGen/include -IConfig/include -ILSLBuiltins/include -Istage/packages/include
 
-$(TESTS_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
+# POSIX timers live in librt on glibc < 2.34, a stub elsewhere
+LIBRT=$(if $(filter Darwin,$(shell uname -s)),,-lrt)
+
+$(TESTS_TARGET): LDFLAGS+=-lpthread $(LIBRT) -Lstage/packages/lib/release -ltailslide
 $(REPL_CLI_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
 $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
 $(COMPILE_CLI_TARGET): LDFLAGS+=-Lstage/packages/lib/release -ltailslide
-$(HARNESS_CLI_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
+$(HARNESS_CLI_TARGET): LDFLAGS+=-lpthread $(LIBRT) -Lstage/packages/lib/release -ltailslide
 
 fuzz-proto fuzz-prototest: LDFLAGS+=$(LPROTOBUF)
 fuzz-lsl_script: LDFLAGS+=-Lstage/packages/lib/release -ltailslide

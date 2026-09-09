@@ -906,6 +906,7 @@ struct lua_Callbacks
 
     void (*onallocate)(lua_State* L, size_t osize, size_t nsize); // gets called when memory is allocated
     // gets called before memory is allocated, return non-zero to fail the alloc. Only called for allocs in user memcats.
+    // ServerLua: called even while the GC is paused (GCthreshold == SIZE_MAX), so gate on your own state if that matters.
     int (*beforeallocate)(lua_State* L, size_t osize, size_t nsize);
 };
 typedef struct lua_Callbacks lua_Callbacks;

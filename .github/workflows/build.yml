@@ -85,6 +85,13 @@ jobs:
          ./slua tests/conformance/assert.luau
          ./slua-analyze tests/conformance/assert.luau
          ./slua-compile tests/conformance/assert.luau
+    # ServerLua: scoped to SLExecutor since TSan is slow and the threading lives there
+    - name: run SLExecutor tests under TSan
+      if: matrix.os.name == 'ubuntu'
+      run: |
+        make -j4 config=tsan slua-tests
+        ./build/tsan/slua-tests -ts=SLExecutor
+        ./build/tsan/slua-tests -ts=SLExecutor --fflags=true
 
   windows:
     runs-on: windows-2022

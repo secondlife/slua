@@ -91,6 +91,194 @@ static void log_to_stderr(LogLevel level, const char* source, const char* messag
     fprintf(stderr, "[%s] %s: %s\n", level_names[(int)level], source, message);
 }
 
+// Drives the script through run windows until it completes, faults, or
+// refuses. `lsl_state` is left at whatever state it ended in so a later
+// dispatch lands in the right handler table.
+static RunResult run_to_completion(Script& script, double quanta, bool is_lsl, double& accum_sleep, size_t& slices, int& lsl_state)
+{
+    // state_entry is implicit in Lua, but LSL needs it specifically dispatched.
+    bool dispatch_state_entry = is_lsl;
+    RunResult result;
+    for (;;)
+    {
+        // Fake the sleep, just collect it so we know the accumulated
+        // sleep across the entire script run.
+        if (script.getSleep() > 0.0f)
+        {
+            accum_sleep += script.getSleep();
+            script.setSleep(0.0f);
+        }
+
+        {
+            RunWindow window(script, quanta);
+            if (dispatch_state_entry)
+            {
+                result = script.callEventHandler(lsl_state, "state_entry", nullptr);
+                dispatch_state_entry = false;
+            }
+            else
+            {
+                result = script.resumeEventHandler();
+            }
+        }
+        ++slices;
+
+        if (result.status == HandlerRunStatus::Preempted)
+            continue;
+        if (result.status == HandlerRunStatus::StateChange)
+        {
+            // TODO: Do state_exit too... meh.
+            lsl_state = result.newState;
+            dispatch_state_entry = true;
+            continue;
+        }
+
+        // Anything else means we're done.
+        break;
+    }
+
+    // Bank sleep the final slice left behind
+    if (script.getSleep() > 0.0f)
+        accum_sleep += script.getSleep();
+
+    return result;
+}
+
+// Prints why a run stopped early, for the statuses that mean the script is
+// done for good. Returns the process exit code.
+static int report_failure(Script& script, const RunResult& result)
+{
+    if (result.status == HandlerRunStatus::Fault)
+    {
+        auto& fault_str = script.getExtendedFaultString().empty() ? script.getFaultString() : script.getExtendedFaultString();
+        fprintf(stderr, "Fault: %s\n", fault_str.c_str());
+        return 1;
+    }
+    if (result.status == HandlerRunStatus::Refused)
+    {
+        fprintf(stderr, "Error: engine refused to run the handler\n");
+        return 1;
+    }
+    return 0;
+}
+
+static void print_watchdog_stats(const IProvisioner& provisioner)
+{
+    // Resident never fires or wakes, so this only shows for the deadline installers
+    WatchdogStats wd_stats = provisioner.getWatchdogStats();
+    if (wd_stats.fires == 0 && wd_stats.wakes == 0)
+        return;
+
+    double avg = wd_stats.fires > 0 ? wd_stats.latenessSum / (double)wd_stats.fires : 0.0;
+    fprintf(
+        stderr,
+        "Watchdog lead: %.1f usecs, wakes: %llu, fires: %llu, late fires: %llu, lateness usecs min/avg/max: %.1f/%.1f/%.1f\n",
+        wd_stats.fireLead * 1e6,
+        (unsigned long long)wd_stats.wakes,
+        (unsigned long long)wd_stats.fires,
+        (unsigned long long)wd_stats.lateFires,
+        wd_stats.latenessMin * 1e6,
+        avg * 1e6,
+        wd_stats.latenessMax * 1e6
+    );
+}
+
+struct WindowTiming
+{
+    // Windows actually run, short of the request only when the body bailed
+    size_t completed = 0;
+    double total = 0.0;
+    double min = 0.0;
+    double max = 0.0;
+};
+
+// Runs `body` `count` times, timing each. The body returns false to stop.
+template<typename Body>
+static WindowTiming time_windows(size_t count, Body&& body)
+{
+    WindowTiming timing;
+    double phase_start = lua_clock();
+    for (size_t i = 0; i < count; ++i)
+    {
+        double window_start = lua_clock();
+        bool keep_going = body();
+        double window_time = lua_clock() - window_start;
+
+        ++timing.completed;
+        if (i == 0 || window_time < timing.min)
+            timing.min = window_time;
+        if (window_time > timing.max)
+            timing.max = window_time;
+        if (!keep_going)
+            break;
+    }
+    timing.total = lua_clock() - phase_start;
+    return timing;
+}
+
+static void print_window_timing(const char* label, const WindowTiming& timing)
+{
+    double avg = timing.completed > 0 ? timing.total / (double)timing.completed : 0.0;
+    fprintf(
+        stderr,
+        "%s windows: %zu, total %.3fs, per window usecs avg/min/max: %.3f/%.1f/%.1f\n",
+        label,
+        timing.completed,
+        timing.total,
+        avg * 1e6,
+        timing.min * 1e6,
+        timing.max * 1e6
+    );
+}
+
+// Opens and closes `count` windows twice over: once empty, so the installer
+// and GC bookkeeping are all that's measured, then once dispatching a
+// handler each time. The difference is the Lua dispatch cost.
+static int run_window_bench(Script& script, double quanta, size_t count, int lsl_state)
+{
+    WindowTiming empty = time_windows(count, [&]() {
+        RunWindow window(script, quanta);
+        return true;
+    });
+    print_window_timing("Empty", empty);
+
+    // A deadline install can land at the first safepoint when the fire lead
+    // exceeds the quanta, so a preempted handler is resumed in the next window
+    // rather than treated as a failure.
+    bool resuming = false;
+    RunResult result;
+    WindowTiming handler = time_windows(count, [&]() {
+        RunWindow window(script, quanta);
+        if (resuming)
+            result = script.resumeEventHandler();
+        else
+            script.callEventHandler(lsl_state, "touch_start", [](lua_State* L, void *ctx)
+            {
+                lua_pushnumber(L, 0);
+            });
+        resuming = result.status == HandlerRunStatus::Preempted;
+        return resuming || result.status == HandlerRunStatus::Ok;
+    });
+    print_window_timing("Handler", handler);
+
+    // The script can't be torn down with a handler still staged
+    while (resuming)
+    {
+        RunWindow window(script, quanta);
+        result = script.resumeEventHandler();
+        resuming = result.status == HandlerRunStatus::Preempted;
+    }
+
+    // A missing state_entry is fine for a normal run, but here it means the
+    // user's script has nothing to dispatch.
+    if (result.status == HandlerRunStatus::NotRun)
+    {
+        fprintf(stderr, "Error: script has no touch_start handler to benchmark\n");
+        return 1;
+    }
+    return report_failure(script, result);
+}
+
 static void displayHelp(const char* argv0)
 {
     printf("Usage: %s [options] script\n", argv0);
@@ -100,15 +288,28 @@ static void displayHelp(const char* argv0)
     printf("\n");
     printf("Options:\n");
     printf("  --quanta=<usecs>: time slice per run window (default 200)\n");
+    printf("  --window-bench=<n>: after the script completes, open and close n run\n"
+           "                 windows, empty and then dispatching its touch_start handler,\n"
+           "                 to measure the per-window overhead\n");
+    printf("  --fire-lead=<usecs>: how early the threaded or signal installer puts the\n"
+           "                 interrupt handler in ahead of the deadline (default: per policy)\n");
     printf("  -O<n>: compile with optimization level n (default 1)\n");
     printf("  --fflags=<list>: comma-separated fast flag settings (name=true/false),\n");
+    printf("  --use-lua-clock: Use lua_clock() instead of a specialized quanta timer\n");
+    printf("  --interrupt=<resident|threaded|signal>: keep the interrupt handler resident,\n"
+           "                 have the watchdog thread install it at the deadline, or have a\n"
+           "                 POSIX timer signal install it (Linux only)\n");
 }
 
 int main(int argc, char** argv)
 {
     const char* script_path = nullptr;
     double quanta_usec = 200.0;
+    double fire_lead_usec = 0.0;
+    size_t window_bench = 0;
+    bool use_lua_clock = false;
     int optimization_level = 1;
+    InterruptInstallPolicy interrupt_policy = InterruptInstallPolicy::Default;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -126,9 +327,53 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
+        else if (strncmp(argv[i], "--fire-lead=", 12) == 0)
+        {
+            fire_lead_usec = atof(argv[i] + 12);
+            if (fire_lead_usec <= 0.0)
+            {
+                fprintf(stderr, "Error: --fire-lead must be a positive number of usecs.\n");
+                return 1;
+            }
+        }
+        else if (strncmp(argv[i], "--window-bench=", 15) == 0)
+        {
+            long long count = atoll(argv[i] + 15);
+            if (count <= 0)
+            {
+                fprintf(stderr, "Error: --window-bench must be a positive number of windows.\n");
+                return 1;
+            }
+            window_bench = (size_t)count;
+        }
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
             setLuauFlags(argv[i] + 9);
+        }
+        else if (strncmp(argv[i], "--interrupt=", 12) == 0)
+        {
+            const char* value = argv[i] + 12;
+            if (strcmp(value, "resident") == 0)
+            {
+                interrupt_policy = InterruptInstallPolicy::Resident;
+            }
+            else if (strcmp(value, "threaded") == 0)
+            {
+                interrupt_policy = InterruptInstallPolicy::Threaded;
+            }
+            else if (strcmp(value, "signal") == 0)
+            {
+                interrupt_policy = InterruptInstallPolicy::Signal;
+            }
+            else
+            {
+                fprintf(stderr, "Error: invalid --interrupt value.\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--use-lua-clock") == 0)
+        {
+            use_lua_clock = true;
         }
         else if (strncmp(argv[i], "-O", 2) == 0)
         {
@@ -199,7 +444,13 @@ int main(int argc, char** argv)
     HostCallbacks callbacks;
     callbacks.clockProvider = script_clock;
     callbacks.populateEnvironment = populate_environment;
-    // quantaClockProvider stays null so we exercise the engine's default
+    callbacks.interruptInstallPolicy = interrupt_policy;
+    callbacks.interruptFireLead = fire_lead_usec * 1e-6;
+    if (use_lua_clock)
+    {
+        // Leaving this null uses a platform-optimized quanta clock provider
+        callbacks.quantaClockProvider = lua_clock;
+    }
 
     Provisioner<> provisioner(callbacks);
 
@@ -239,67 +490,16 @@ int main(int argc, char** argv)
     double quanta = quanta_usec * 1e-6;
     double accum_sleep = 0.0;
     size_t slices = 0;
-    double start = lua_clock();
-
-    // state_entry is implicit in Lua, but LSL needs it specifically dispatched.
-    bool dispatch_state_entry = is_lsl;
     int lsl_state = 0;
-    RunResult result;
-    for (;;)
-    {
-        // Fake the sleep, just collect it so we know the accumulated
-        // sleep across the entire script run.
-        if (script->getSleep() > 0.0f)
-        {
-            accum_sleep += script->getSleep();
-            script->setSleep(0.0f);
-        }
-
-        script->beginRunWindow(quanta);
-        if (dispatch_state_entry)
-        {
-            result = script->callEventHandler(lsl_state, "state_entry", nullptr);
-            dispatch_state_entry = false;
-        }
-        else
-        {
-            result = script->resumeEventHandler();
-        }
-        script->endRunWindow();
-        ++slices;
-
-        if (result.status == HandlerRunStatus::Preempted)
-            continue;
-        if (result.status == HandlerRunStatus::StateChange)
-        {
-            // TODO: Do state_exit too... meh.
-            lsl_state = result.newState;
-            dispatch_state_entry = true;
-            continue;
-        }
-
-        // Anything else means we're done.
-        break;
-    }
-
-    // Bank sleep the final slice left behind
-    if (script->getSleep() > 0.0f)
-        accum_sleep += script->getSleep();
-
+    double start = lua_clock();
+    RunResult result = run_to_completion(*script, quanta, is_lsl, accum_sleep, slices, lsl_state);
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
 
-    if (result.status == HandlerRunStatus::Fault)
-    {
-        auto &fault_str = script->getExtendedFaultString().empty() ? script->getFaultString() : script->getExtendedFaultString();
-        fprintf(stderr, "Fault: %s\n", fault_str.c_str());
-        return 1;
-    }
-    if (result.status == HandlerRunStatus::Refused)
-    {
-        fprintf(stderr, "Error: engine refused to run the handler\n");
-        return 1;
-    }
+    int exit_code = report_failure(*script, result);
+    if (exit_code == 0 && window_bench > 0)
+        exit_code = run_window_bench(*script, quanta, window_bench, lsl_state);
 
-    return 0;
+    print_watchdog_stats(provisioner);
+    return exit_code;
 }

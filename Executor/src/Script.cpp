@@ -8,6 +8,7 @@
 #include "lualib.h"
 #include "llsl.h"
 
+#include "lgc.h"
 #include "lstate.h"
 
 namespace Luau
@@ -129,13 +130,42 @@ Script::Script(const std::shared_ptr<IImage>& image, const ScriptConfig& config)
     setTimerEventCb = callbacks.setTimerEventCb;
     eventHandlerRegistrationCb = callbacks.eventHandlerRegistrationCb;
     mQuantaClockProvider = callbacks.quantaClockProvider;
+
+    mInterruptInstaller = image->getProvisioner().getInterruptInstaller();
+    LUAU_ASSERT(mInterruptInstaller != nullptr);
+    mCallbacks = lua_callbacks(image->getEnvironment().getBaseState());
 }
 
 Script::~Script()
 {
-    LUAU_ASSERT(!mHandlerState && !mInExecution);
-    // Nothing to do: mInstance releases its anchor before mImage lets go of
-    // the VM, by member declaration order.
+    LUAU_ASSERT(!mHandlerState && !mInExecution && !mRunWindowOpen);
+    // mInstance releases its anchor before mImage lets go of the VM, by
+    // member declaration order.
+}
+
+RunWindow::RunWindow(Script& script, double quanta)
+    : mScript(&script)
+{
+    script.beginRunWindow(quanta);
+}
+
+RunWindow::~RunWindow()
+{
+    close();
+}
+
+RunWindow::RunWindow(RunWindow&& other) noexcept
+    : mScript(other.mScript)
+{
+    other.mScript = nullptr;
+}
+
+void RunWindow::close()
+{
+    if (mScript == nullptr)
+        return;
+    mScript->endRunWindow();
+    mScript = nullptr;
 }
 
 // static
@@ -190,7 +220,6 @@ bool Script::loadDefaultState()
     mMandatoryYieldRaised = false;
     mMandatoryDeadline = 0.0;
     mExcludedTime = 0.0;
-    mGCStepInFlight = false;
     mSleep = 0.0f;
     // in LSL we treat the main function as complete, since it runs
     // while loading the image.
@@ -266,20 +295,59 @@ void Script::beginRunWindow(double quanta)
 {
     LUAU_ASSERT(mInstance);
     LUAU_ASSERT(!mRunWindowOpen);
+    LUAU_ASSERT(mSleep == 0.0f);
+    LUAU_ASSERT(!mForceYield);
+
     mRunWindowOpen = true;
     mYieldDue = false;
     mMandatoryYieldRaised = false;
     mMandatoryDeadline = 0.0;
     mExcludedTime = 0.0;
-    mGCStepInFlight = false;
-    mWindowStart = mQuantaClockProvider(mInstance.thread());
+    mWindowStart = mQuantaClockProvider();
     mQuanta = quanta;
+
+    // Park the GC for the window, endRunWindow() pays down the debt.
+    // The time it took to GC something arbitrary during the window doesn't
+    // necessarily have any relation to anything that happened during the window,
+    // so we just do it at the end to discount it for now.
+    global_State* global = mImage->getEnvironment().getBaseState()->global;
+    mSavedGCThreshold = global->GCthreshold;
+    global->GCthreshold = SIZE_MAX;
+
+    mInterruptInstaller->installWithin(mCallbacks, quanta);
 }
 
 void Script::endRunWindow()
 {
     LUAU_ASSERT(mRunWindowOpen);
     mRunWindowOpen = false;
+    mForceYield = false;
+
+    mInterruptInstaller->cancel();
+    // A fired handler would otherwise linger through the catch-up below
+    mCallbacks->interrupt = nullptr;
+
+    lua_State* base = mImage->getEnvironment().getBaseState();
+    global_State* global = base->global;
+    LUAU_ASSERT(global->GCthreshold == SIZE_MAX);
+    // Restore before stepping, the pacer computes its debt from the threshold.
+    global->GCthreshold = mSavedGCThreshold;
+    while (luaC_needsGC(base))
+        luaC_step(base, false);
+}
+
+void Script::setSleep(float sleep)
+{
+    mSleep = sleep;
+    if (sleep > 0.0f && mRunWindowOpen)
+        mInterruptInstaller->installNow();
+}
+
+void Script::setForceYield(bool force)
+{
+    mForceYield = force;
+    if (force && mRunWindowOpen)
+        mInterruptInstaller->installNow();
 }
 
 RunResult Script::callEventHandler(int lsl_state, const char* event_name, PushArgsFn pushArgs, void* push_args_ctx)
@@ -715,21 +783,9 @@ void Script::interruptHandler(lua_State* L, int gc)
     if (!execute || !execute->mInExecution || execute->mHandlerState == nullptr)
         return;
 
-    // Keep track of GC phases so we can discount their cost
+    // GC is parked for the whole window, this can't be ours
     if (gc >= 0)
-    {
-        if (!execute->mGCStepInFlight)
-        {
-            execute->mGCStepInFlight = true;
-            execute->mGCStepStart = execute->mQuantaClockProvider(L);
-        }
-        else
-        {
-            execute->mGCStepInFlight = false;
-            execute->mExcludedTime += execute->mQuantaClockProvider(L) - execute->mGCStepStart;
-        }
         return;
-    }
 
     // This particular handler had better be _active_, or we're somehow triggering
     // interrupts through pushing handler arguments or something like that.
@@ -741,10 +797,16 @@ void Script::interruptHandler(lua_State* L, int gc)
         return;
     }
 
-    double elapsed = execute->mQuantaClockProvider(L) - execute->mWindowStart;
+    double elapsed = execute->mQuantaClockProvider() - execute->mWindowStart;
     if (elapsed > execute->mQuanta)
     {
         execute->tryYield(L, elapsed);
+    }
+    else
+    {
+        // Installed early (fire lead, or a withdrawn force-yield). Uninstalls
+        // only if the deadline will bring us back.
+        execute->mInterruptInstaller->uninstallIfPending();
     }
 }
 
@@ -801,13 +863,15 @@ int Script::memoryLimitCallback(lua_State* L, size_t osize, size_t nsize)
         // Discount only the baseline measurement's walk: its timing depends on engine
         // bookkeeping state, while walks forced by allocating near the limit are the
         // script's own work and stay charged.
+        // TODO: Maybe simpler to get rid of the time exclusion mechanism and just opportunistically
+        //  scan whenever we load a script?
         bool discount_walk = execute->mExactSize == 0 && execute->mHandlerState != nullptr;
-        double walk_start = discount_walk ? execute->mQuantaClockProvider(L) : 0.0;
+        double walk_start = discount_walk ? execute->mQuantaClockProvider() : 0.0;
 
         size_t current_size = lua_userthreadgc(execute->mInstance.thread(), &execute->mImage->getFreeObjects()) + execute->mChargedBytecodeSize;
 
         if (discount_walk)
-            execute->mExcludedTime += execute->mQuantaClockProvider(L) - walk_start;
+            execute->mExcludedTime += execute->mQuantaClockProvider() - walk_start;
 
         execute->mExactSize = execute->mMaxPossibleSize = (int)current_size;
         int new_size = execute->mExactSize + (int)net_gain;
@@ -833,8 +897,11 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
     // Some quantas are extremely small, so don't punish if they were overrun due to blocking code.
     // Use a higher threshold for punishment in those cases.
     double punish_quanta = std::max(mQuanta, 0.001);
+    // The script ran unbounded through the overrun, but that's the watchdog's
+    // lateness, not the script's. Preemption still sees it in `elapsed`.
+    double overrun = mInterruptInstaller->getInstallOverrun();
     // Discount time spent on work outside the script's control
-    double charged = std::max(elapsed - mExcludedTime, 0.0);
+    double charged = std::max(elapsed - mExcludedTime - overrun, 0.0);
 
     if (interrupt_status == YieldableStatus::OK)
     {
@@ -865,7 +932,7 @@ void Script::tryYield(lua_State* L, double elapsed, bool mandatory)
         {
             // They're over the time limit. Set a deadline. Don't kill immediately in case
             // a temporary performance blip caused them to go over time. The deadline is
-            // in charged time so excluded work (GC steps, heap walks) can't eat the grace.
+            // in charged time so excluded work (heap walks) can't eat the grace.
             if (mMandatoryDeadline == 0.0)
             {
                 mMandatoryDeadline = charged + punish_quanta * 0.5;
