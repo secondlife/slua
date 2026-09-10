@@ -470,7 +470,7 @@ void Script::setLuaFaultFromStatus(lua_State* L, int status)
         return;
 
     // Acts as a signal that we've registered all of our event handlers, and
-    // don't need to be greedy anymore. Crashed scripts tell no tales.
+    // don't need to be greedy about events anymore. Crashed scripts tell no tales.
     mMainFunctionComplete = true;
 
     if (status == LUA_YIELD)
@@ -481,6 +481,8 @@ void Script::setLuaFaultFromStatus(lua_State* L, int status)
     }
     else if (status == LUA_BREAK)
     {
+        // TODO: Uhhhh what? Would this even happen?
+        //  this isn't really an error and needs no fault?
         mFaultKind = FaultKind::Timeout;
         mFaultString = "exceeded time limit";
         mExtendedFaultString = "";
@@ -669,7 +671,7 @@ bool Script::serializeState(std::string& out)
 
 bool Script::restoreState(const char* data, size_t len)
 {
-    LUAU_ASSERT(!mInExecution);
+    LUAU_ASSERT(!mInExecution && !mInstance);
 
     // Parse the whole payload before touching anything, so a bad one leaves
     // us exactly as we were
@@ -735,13 +737,6 @@ bool Script::restoreState(const char* data, size_t len)
     if (memory_limit <= 0 || memory_limit > INT32_MAX)
     {
         logWarn(logSource(), "Script state carries an unusable memory limit");
-        setFault(FaultKind::Runtime, "invalid script state");
-        return false;
-    }
-
-    if (mInstance)
-    {
-        logWarn(logSource(), "Refusing to restore state over a live script instance");
         setFault(FaultKind::Runtime, "invalid script state");
         return false;
     }
