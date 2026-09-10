@@ -198,6 +198,7 @@ bool Script::reset()
     // Whatever was running is forfeit, so we always satisfy loadDefaultState()'s
     // "no live instance" precondition.
     mInstance = Instance();
+    mMemoryLimit = kDefaultMemoryLimit;
 
     return loadDefaultState();
 }
