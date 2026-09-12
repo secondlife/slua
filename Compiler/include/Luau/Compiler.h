@@ -5,6 +5,7 @@
 #include "Luau/Location.h"
 #include "Luau/StringUtils.h"
 #include "Luau/Common.h"
+#include "Luau/BytecodeHeader.h"
 
 namespace Luau
 {
@@ -99,6 +100,17 @@ void compileOrThrow(BytecodeBuilder& bytecode, const std::string& source, const 
 // compiles bytecode into a bytecode blob, that either contains the valid bytecode or an encoded error that luau_load can decode
 std::string compile(
     const std::string& source,
+    const CompileOptions& options = {},
+    const ParseOptions& parseOptions = {},
+    BytecodeEncoder* encoder = nullptr
+);
+
+// ServerLua: compiles a complete asset, a BytecodeHeader followed by the
+// bytecode. Throws on errors rather than encoding one in the return value:
+// nothing stores a failed compile, so there is no asset shape to put it in.
+std::string compileAssetOrThrow(
+    const std::string& source,
+    uint32_t apiVersion = 0,
     const CompileOptions& options = {},
     const ParseOptions& parseOptions = {},
     BytecodeEncoder* encoder = nullptr

@@ -3,14 +3,15 @@
 // scheduling overhead that a bare REPL never exercises can be measured.
 #include "lua.h"
 #include "lualib.h"
+#include "luacode.h"
 #include "llsl.h"
 
 #include "Luau/Common.h"
 #include "Luau/Compiler.h"
+#include "Luau/ParseResult.h"
 #include "Luau/Executor.h"
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
-#include "Luau/LSLBuiltins.h"
 #include "Luau/Script.h"
 
 #ifdef LUAU_USE_TAILSLIDE
@@ -87,17 +88,15 @@ static double script_clock(lua_State* L)
 
 static void log_to_stderr(LogLevel level, const char* source, const char* message)
 {
-    static const char* level_names[] = {"DEBUG", "INFO", "WARN"};
+    static const char* level_names[] = {"DEBUG", "INFO", "WARN", "ERROR"};
     fprintf(stderr, "[%s] %s: %s\n", level_names[(int)level], source, message);
 }
 
 // Drives the script through run windows until it completes, faults, or
-// refuses. `lsl_state` is left at whatever state it ended in so a later
-// dispatch lands in the right handler table.
-static RunResult run_to_completion(Script& script, double quanta, bool is_lsl, double& accum_sleep, size_t& slices, int& lsl_state)
+// refuses, following the sim's driver: finish whatever is in flight, run a
+// pending state_exit, commit the state change, run state_entry.
+static RunResult run_to_completion(Script& script, double quanta, double& accum_sleep, size_t& slices)
 {
-    // state_entry is implicit in Lua, but LSL needs it specifically dispatched.
-    bool dispatch_state_entry = is_lsl;
     RunResult result;
     for (;;)
     {
@@ -109,32 +108,40 @@ static RunResult run_to_completion(Script& script, double quanta, bool is_lsl, d
             script.setSleep(0.0f);
         }
 
+        int event = Luau::LSLEvent::None;
+        if (!script.isHandlerActive())
+        {
+            // The engine only pends state_exit when the departing state handles it
+            if (script.isStateChangePending() && !(script.getCurrentEvents() & Luau::LSLEventBit::StateExit))
+                script.nextState();
+
+            if (script.getCurrentEvents() & Luau::LSLEventBit::StateExit)
+                event = Luau::LSLEvent::StateExit;
+            else if (script.getCurrentEvents() & Luau::LSLEventBit::StateEntry)
+                event = Luau::LSLEvent::StateEntry;
+            else
+                break;
+
+            // A state without the handler just drops the event
+            const uint64_t event_bit = Luau::lslEventBit(event);
+            if (!(script.getEventHandlers() & event_bit))
+            {
+                script.setCurrentEvents(script.getCurrentEvents() & ~event_bit);
+                continue;
+            }
+        }
+
         {
             RunWindow window(script, quanta);
-            if (dispatch_state_entry)
-            {
-                result = script.callEventHandler(lsl_state, "state_entry", nullptr);
-                dispatch_state_entry = false;
-            }
+            if (event != Luau::LSLEvent::None)
+                result = script.callEventHandler(event, nullptr);
             else
-            {
                 result = script.resumeEventHandler();
-            }
         }
         ++slices;
 
-        if (result.status == HandlerRunStatus::Preempted)
-            continue;
-        if (result.status == HandlerRunStatus::StateChange)
-        {
-            // TODO: Do state_exit too... meh.
-            lsl_state = result.newState;
-            dispatch_state_entry = true;
-            continue;
-        }
-
-        // Anything else means we're done.
-        break;
+        if (result.status != HandlerRunStatus::Preempted && result.status != HandlerRunStatus::Ok && result.status != HandlerRunStatus::StateChange)
+            break;
     }
 
     // Bank sleep the final slice left behind
@@ -234,7 +241,7 @@ static void print_window_timing(const char* label, const WindowTiming& timing)
 // Opens and closes `count` windows twice over: once empty, so the installer
 // and GC bookkeeping are all that's measured, then once dispatching a
 // handler each time. The difference is the Lua dispatch cost.
-static int run_window_bench(Script& script, double quanta, size_t count, int lsl_state)
+static int run_window_bench(Script& script, double quanta, size_t count)
 {
     WindowTiming empty = time_windows(count, [&]() {
         RunWindow window(script, quanta);
@@ -252,10 +259,7 @@ static int run_window_bench(Script& script, double quanta, size_t count, int lsl
         if (resuming)
             result = script.resumeEventHandler();
         else
-            script.callEventHandler(lsl_state, "touch_start", [](lua_State* L, void *ctx)
-            {
-                lua_pushnumber(L, 0);
-            });
+            result = script.callEventHandler(Luau::LSLEvent::MovingStart, nullptr);
         resuming = result.status == HandlerRunStatus::Preempted;
         return resuming || result.status == HandlerRunStatus::Ok;
     });
@@ -269,11 +273,11 @@ static int run_window_bench(Script& script, double quanta, size_t count, int lsl
         resuming = result.status == HandlerRunStatus::Preempted;
     }
 
-    // A missing state_entry is fine for a normal run, but here it means the
+    // A missing handler is fine for a normal run, but here it means the
     // user's script has nothing to dispatch.
     if (result.status == HandlerRunStatus::NotRun)
     {
-        fprintf(stderr, "Error: script has no touch_start handler to benchmark\n");
+        fprintf(stderr, "Error: script has no moving_start handler to benchmark\n");
         return 1;
     }
     return report_failure(script, result);
@@ -289,7 +293,7 @@ static void displayHelp(const char* argv0)
     printf("Options:\n");
     printf("  --quanta=<usecs>: time slice per run window (default 200)\n");
     printf("  --window-bench=<n>: after the script completes, open and close n run\n"
-           "                 windows, empty and then dispatching its touch_start handler,\n"
+           "                 windows, empty and then dispatching its moving_start handler,\n"
            "                 to measure the per-window overhead\n");
     printf("  --fire-lead=<usecs>: how early the threaded or signal installer puts the\n"
            "                 interrupt handler in ahead of the deadline (default: per policy)\n");
@@ -420,25 +424,45 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const bool is_lsl = strstr(script_path, ".lsl") != nullptr;
-    std::string bytecode;
-    if (is_lsl)
+    // Only picks which compiler to run; everything downstream reads the flavor
+    // off the asset header instead.
+    const bool compile_as_lsl = strstr(script_path, ".lsl") != nullptr;
+    const uint32_t api_version = 0;
+    // What a host would have stored: the header, then the bytecode. A failed
+    // compile throws instead, so nothing that isn't an asset reaches the engine.
+    std::string asset;
+    try
     {
+        if (compile_as_lsl)
+        {
 #ifdef LUAU_USE_TAILSLIDE
-        bytecode = compileLSL(*source);
+            asset = compileLSLAssetOrThrow(*source, api_version);
 #else
-        fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
-        return 1;
+            fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
+            return 1;
 #endif
+        }
+        else
+        {
+            Luau::CompileOptions copts = {};
+            copts.optimizationLevel = optimization_level;
+            copts.debugLevel = 1;
+            copts.typeInfoLevel = 1;
+            copts.libraryMemberConstantCb = &luauSL_lookup_constant_cb;
+            asset = Luau::compileAssetOrThrow(*source, api_version, copts);
+        }
     }
-    else
+    catch (Luau::ParseErrors& e)
     {
-        Luau::CompileOptions copts = {};
-        copts.optimizationLevel = optimization_level;
-        copts.debugLevel = 1;
-        copts.typeInfoLevel = 1;
-        copts.libraryMemberConstantCb = &luauSL_lookup_constant_cb;
-        bytecode = Luau::compile(*source, copts);
+        fprintf(stderr, "Compile error:\n");
+        for (const Luau::ParseError& error : e.getErrors())
+            fprintf(stderr, "%d: %s\n", error.getLocation().begin.line + 1, error.what());
+        return 1;
+    }
+    catch (Luau::CompileError& e)
+    {
+        fprintf(stderr, "Compile error:\n%d: %s\n", e.getLocation().begin.line + 1, e.what());
+        return 1;
     }
 
     HostCallbacks callbacks;
@@ -455,19 +479,16 @@ int main(int argc, char** argv)
     Provisioner<> provisioner(callbacks);
 
     ImageConfig image_config;
-    image_config.bytecode = bytecode.data();
-    image_config.bytecodeSize = bytecode.size();
-    image_config.chargedBytecodeSize = bytecode.size();
-    image_config.isLSL = is_lsl;
-    image_config.chunkname = is_lsl ? "=lsl_script" : "=lua_script";
+    image_config.asset = asset.data();
+    image_config.assetSize = asset.size();
     image_config.name = script_path;
 
-    // Built stepwise rather than through provisionScript() so compile and
-    // load errors can be printed.
-    std::shared_ptr<IImage> image = provisioner.buildImage(provisioner.createEnvironment(is_lsl, 0), image_config);
+    // Built stepwise rather than through provisionScript() so load errors can
+    // be printed.
+    std::shared_ptr<IImage> image = provisioner.buildImage(provisioner.createEnvironment(compile_as_lsl, api_version), image_config);
     if (image == nullptr || !image->isValid())
     {
-        fprintf(stderr, "Compile error:\n%s\n", image != nullptr ? image->getError().c_str() : "image build refused");
+        fprintf(stderr, "Load error:\n%s\n", image != nullptr ? image->getError().c_str() : "image build refused");
         return 1;
     }
 
@@ -480,7 +501,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // For LSL this also runs the constructor
+    // Stages the main function (LSL's constructor) as the first handler
     if (!script->loadDefaultState())
     {
         fprintf(stderr, "Load error: %s\n", script->getExtendedFaultString().empty() ? script->getFaultString().c_str() : script->getExtendedFaultString().c_str());
@@ -490,15 +511,14 @@ int main(int argc, char** argv)
     double quanta = quanta_usec * 1e-6;
     double accum_sleep = 0.0;
     size_t slices = 0;
-    int lsl_state = 0;
     double start = lua_clock();
-    RunResult result = run_to_completion(*script, quanta, is_lsl, accum_sleep, slices, lsl_state);
+    RunResult result = run_to_completion(*script, quanta, accum_sleep, slices);
     double runtime = lua_clock() - start;
     fprintf(stderr, "Runtime: %f, Accum. Sleep: %f, Time Slices: %zu\n", runtime, accum_sleep, slices);
 
     int exit_code = report_failure(*script, result);
     if (exit_code == 0 && window_bench > 0)
-        exit_code = run_window_bench(*script, quanta, window_bench, lsl_state);
+        exit_code = run_window_bench(*script, quanta, window_bench);
 
     print_watchdog_stats(provisioner);
     return exit_code;

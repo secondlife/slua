@@ -44,5 +44,13 @@ void logWarn(const char* source, const char* fmt, ...)
     va_end(args);
 }
 
+void logError(const char* source, const char* fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vlog(LogLevel::Error, source, fmt, args);
+    va_end(args);
+}
+
 } // namespace Executor
 } // namespace Luau

@@ -136,7 +136,7 @@ target_link_libraries(Luau.CLI.lib PUBLIC Luau.LSLBuiltins)
 target_compile_features(Luau.LSLBuiltins PUBLIC cxx_std_17)
 target_include_directories(Luau.LSLBuiltins PUBLIC LSLBuiltins/include)
 target_include_directories(Luau.LSLBuiltins PRIVATE ${CMAKE_BINARY_DIR})  # For builtins_embedded.h
-target_link_libraries(Luau.LSLBuiltins PRIVATE Luau.Common Luau.VM Luau.Compiler)
+target_link_libraries(Luau.LSLBuiltins PUBLIC Luau.Common)
 
 target_compile_features(Luau.Ast PUBLIC cxx_std_17)
 target_include_directories(Luau.Ast PUBLIC Ast/include)
@@ -154,7 +154,7 @@ target_link_libraries(Luau.Inliner PUBLIC Luau.Bytecode)
 
 target_compile_features(Luau.Compiler PUBLIC cxx_std_17)
 target_include_directories(Luau.Compiler PUBLIC Compiler/include "${PACKAGE_INCLUDE_DIR}")
-target_link_libraries(Luau.Compiler PUBLIC Luau.Ast Luau.Bytecode)
+target_link_libraries(Luau.Compiler PUBLIC Luau.Ast Luau.Bytecode Luau.LSLBuiltins)
 
 target_compile_features(Luau.Config PUBLIC cxx_std_17)
 target_include_directories(Luau.Config PUBLIC Config/include)
@@ -173,12 +173,12 @@ target_link_libraries(Luau.CodeGen PUBLIC Luau.Common)
 
 target_compile_features(Luau.VM PRIVATE cxx_std_17)
 target_include_directories(Luau.VM PUBLIC VM/include "${PACKAGE_INCLUDE_DIR}")
-target_link_libraries(Luau.VM PUBLIC Luau.Common)
+target_link_libraries(Luau.VM PUBLIC Luau.Common Luau.LSLBuiltins)
 
 # ServerLua: per-script execution engine shared with the script host
 target_compile_features(Luau.Executor PUBLIC cxx_std_17)
 target_include_directories(Luau.Executor PUBLIC Executor/include)
-target_link_libraries(Luau.Executor PUBLIC Luau.VM)
+target_link_libraries(Luau.Executor PUBLIC Luau.VM Luau.Bytecode Luau.LSLBuiltins)
 target_link_libraries(Luau.Executor PRIVATE Luau.VM.Internals)
 
 target_compile_features(Luau.Require PUBLIC cxx_std_17)
@@ -321,7 +321,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux|Darwin|iOS")
     target_link_libraries(osthreads INTERFACE "-lpthread")
 endif ()
 
-# ServerLua: We use threads internally, library consumers need pthreads if applciable.
+# ServerLua: We use threads internally, library consumers need pthreads if applicable.
 target_link_libraries(Luau.Executor PUBLIC osthreads)
 # ServerLua: POSIX timers live in librt on glibc < 2.34, a stub elsewhere
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")

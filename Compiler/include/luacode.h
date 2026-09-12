@@ -87,3 +87,6 @@ LUACODE_API void luau_set_compile_constant_vector(lua_CompileConstant* constant,
 LUACODE_API void luau_set_compile_constant_vectord(lua_CompileConstant* constant, double x, double y, double z, double w);
 LUACODE_API void luau_set_compile_constant_string(lua_CompileConstant* constant, const char* s, size_t l);
 
+// ServerLua: libraryMemberConstantCb that folds the LSL constants from the loaded builtins.txt
+LUACODE_API void luauSL_lookup_constant_cb(const char* library, const char* member, lua_CompileConstant* constant);
+

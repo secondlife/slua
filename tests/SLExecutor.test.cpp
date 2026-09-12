@@ -9,9 +9,12 @@
 #include "llsl.h"
 
 #include "Luau/Compiler.h"
+#include "Luau/LSLBuiltins.h"
+#include "Luau/ParseResult.h"
 
 #include "doctest.h"
 #include "ScopedFlags.h"
+#include "SLExecutorFixture.h"
 
 // For the handler thread's stack and CallInfo capacities, which the API surface
 // has no reason to expose
@@ -28,312 +31,38 @@
 #include <string>
 #include <vector>
 
+using namespace Luau;
 using namespace Luau::Executor;
 
 LUAU_FASTFLAG(SLuaEagerWeakClear)
 
-// A virtual quanta clock that advances by clock_step on every reading. The
-// quanta clock takes no lua_State, so the fake finds its host through
-// `current`: last constructed wins, and no test steps the clock while two
-// hosts are alive.
-struct FakeQuantaClock
+// Wraps bytes the caller supplies, which no compiler need have produced, and
+// can declare a charged size the payload doesn't match. Tests that just want a
+// working asset use compileTestAsset() instead.
+static TestAsset makeAsset(const std::string& bytecode, uint32_t charged = 0)
 {
-    double clock = 0.0;
-    double clock_step = 0.0;
+    BytecodeHeader header;
+    header.chargedBytecodeSize = charged;
 
-    FakeQuantaClock()
-        : previous(current)
-    {
-        current = this;
-    }
-
-    ~FakeQuantaClock()
-    {
-        current = previous;
-    }
-
-    FakeQuantaClock(const FakeQuantaClock&) = delete;
-    FakeQuantaClock& operator=(const FakeQuantaClock&) = delete;
-
-    static double read()
-    {
-        LUAU_ASSERT(current != nullptr);
-        current->clock += current->clock_step;
-        return current->clock;
-    }
-
-private:
-    FakeQuantaClock* previous;
-    static FakeQuantaClock* current;
-};
-
-FakeQuantaClock* FakeQuantaClock::current = nullptr;
-
-// Provisioner with deterministic fakes: the virtual quanta clock above, plus
-// capture of print output and dynamic handler registrations.
-struct TestProvisioner : Provisioner<>, FakeQuantaClock
-{
-    // The script-visible stopwatch LLTimers schedules against. Deliberately
-    // separate from the quanta clock above, which advances on every reading.
-    double script_clock = 0.0;
-    double last_timer_interval = -1.0;
-    std::vector<std::string> printed;
-    std::vector<std::string> registrations;
-
-    // Subclasses pass their own callbacks, composed off makeCallbacks()
-    explicit TestProvisioner(const HostCallbacks& callbacks = makeCallbacks())
-        : Provisioner<>(callbacks)
-    {
-    }
-
-    static HostCallbacks makeCallbacks()
-    {
-        HostCallbacks callbacks;
-        callbacks.clockProvider = script_clock_provider;
-        callbacks.performanceClockProvider = script_clock_provider;
-        callbacks.setTimerEventCb = set_timer_event;
-        callbacks.eventHandlerRegistrationCb = handler_registration;
-        callbacks.quantaClockProvider = FakeQuantaClock::read;
-        // The fake clock only moves when the test says, no use for a watchdog thread
-        callbacks.interruptInstallPolicy = InterruptInstallPolicy::Resident;
-        callbacks.populateEnvironment = populate_environment;
-        return callbacks;
-    }
-
-    static void populate_environment(IEnvironment& environment, lua_State* L)
-    {
-        lua_pushcfunction(L, capture_print, "capture_print");
-        lua_setglobal(L, "print");
-
-        lua_pushcfunction(L, lua_break, "preempt");
-        lua_setglobal(L, "preempt");
-
-        lua_pushcfunction(L, jump_clock, "jump_clock");
-        lua_setglobal(L, "jump_clock");
-
-        lua_pushcfunction(L, gc_count, "gc_count");
-        lua_setglobal(L, "gc_count");
-    }
-
-    static double script_clock_provider(lua_State* L)
-    {
-        return TestProvisioner::of(L).script_clock;
-    }
-
-    // In real usage this would schedule a timer event with the sim; here we
-    // just record what the VM asked for and drive ticks by hand.
-    static void set_timer_event(lua_State* L, double interval)
-    {
-        TestProvisioner::of(L).last_timer_interval = interval;
-    }
-
-    // Recovers the host the way a real host C callback has to: from the
-    // lua_State the VM handed it.
-    static TestProvisioner& of(lua_State* L)
-    {
-        Script* executor = Script::fromLuaState(L);
-        LUAU_ASSERT(executor != nullptr);
-        return static_cast<TestProvisioner&>(executor->getProvisioner());
-    }
-
-    // An engine pause the executor has no bracket for: time passes with no
-    // exclusion banked, as if the host got descheduled mid-execution.
-    static int jump_clock(lua_State* L)
-    {
-        of(L).clock += luaL_checknumber(L, 1);
-        return 0;
-    }
-
-    static int capture_print(lua_State* L)
-    {
-        TestProvisioner::of(L).printed.emplace_back(luaL_checkstring(L, 1));
-        return 0;
-    }
-
-    // Heap size in KB as the script sees it mid-window
-    static int gc_count(lua_State* L)
-    {
-        lua_pushnumber(L, lua_gc(L, LUA_GCCOUNT, 0));
-        return 1;
-    }
-
-    static bool handler_registration(lua_State* L, const char* event_name, bool registered)
-    {
-        TestProvisioner::of(L).registrations.push_back(std::string(registered ? "+" : "-") + event_name);
-        return true;
-    }
-};
-
-static ImageConfig makeImageConfig(const std::string& bytecode, bool is_lsl = false, uint32_t api_version = 0)
-{
-    ImageConfig config;
-    config.bytecode = bytecode.data();
-    config.bytecodeSize = bytecode.size();
-    config.chargedBytecodeSize = bytecode.size();
-    config.isLSL = is_lsl;
-    config.apiVersion = api_version;
-    config.chunkname = is_lsl ? "=lsl_script" : "=lua_script";
-    config.name = "test_script";
-    return config;
+    TestAsset asset;
+    writeBytecodeHeader(asset.bytes, header);
+    asset.bytes += bytecode;
+    return asset;
 }
-
-static ScriptConfig makeScriptConfig()
-{
-    ScriptConfig config;
-    config.scriptId = "test_script";
-    return config;
-}
-
-// One-line drivers for a single call inside its own run window.
-static RunResult dispatchRaw(Script& exec, int lsl_state, const char* event_name, PushArgsFn push_args = nullptr, void* ctx = nullptr, double quanta = 1.0)
-{
-    RunWindow window(exec, quanta);
-    return exec.callEventHandler(lsl_state, event_name, push_args, ctx);
-}
-
-static RunResult resumeRaw(Script& exec, double quanta = 1.0)
-{
-    RunWindow window(exec, quanta);
-    return exec.resumeEventHandler();
-}
-
-static RunResult dispatch(Script& exec, int lsl_state, const char* event_name, HandlerRunStatus expect = HandlerRunStatus::Ok,
-    PushArgsFn push_args = nullptr, void* ctx = nullptr, double quanta = 1.0)
-{
-    RunResult result = dispatchRaw(exec, lsl_state, event_name, push_args, ctx, quanta);
-    CAPTURE(event_name);
-    REQUIRE(result.status == expect);
-    return result;
-}
-
-static RunResult dispatch(Script& exec, const char* event_name, HandlerRunStatus expect = HandlerRunStatus::Ok, PushArgsFn push_args = nullptr,
-    void* ctx = nullptr, double quanta = 1.0)
-{
-    return dispatch(exec, 0, event_name, expect, push_args, ctx, quanta);
-}
-
-static RunResult resume(Script& exec, double quanta = 1.0, HandlerRunStatus expect = HandlerRunStatus::Ok)
-{
-    RunResult result = resumeRaw(exec, quanta);
-    REQUIRE(result.status == expect);
-    return result;
-}
-
-// Runs the staged SLua main function (or a resumable handler) to completion,
-// opening a fresh run window before every resume.
-static RunResult resumeToCompletion(Script& exec, double quanta, HandlerRunStatus expect = HandlerRunStatus::Ok, int* preemptions = nullptr)
-{
-    RunResult result{HandlerRunStatus::Preempted, 0};
-    while (result.status == HandlerRunStatus::Preempted)
-    {
-        // Bank-and-zero like a real host would
-        exec.setSleep(0.0f);
-        result = resumeRaw(exec, quanta);
-        if (preemptions && result.status == HandlerRunStatus::Preempted)
-            ++(*preemptions);
-    }
-    REQUIRE(result.status == expect);
-    return result;
-}
-
-// Whole-log comparison for the host's capture vectors (printed, registrations)
-static void checkCapture(const std::vector<std::string>& actual, std::initializer_list<const char*> expected)
-{
-    REQUIRE(actual.size() == expected.size());
-    // A failed REQUIRE can't unwind under DOCTEST_CONFIG_NO_EXCEPTIONS, so
-    // don't walk past what was actually captured when the counts mismatch.
-    size_t index = 0;
-    for (const char* want : expected)
-    {
-        if (index >= actual.size())
-            break;
-        CAPTURE(index);
-        CHECK(actual[index] == want);
-        ++index;
-    }
-}
-
-// serializeState()/restoreState() with success asserted, for tests where the
-// round trip itself is not what's under test
-static std::string serialize(Script& exec)
-{
-    std::string payload;
-    REQUIRE(exec.serializeState(payload));
-    return payload;
-}
-
-static void restore(Script& exec, const std::string& payload)
-{
-    REQUIRE(exec.restoreState(payload.data(), payload.size()));
-}
-
-// Compiles source for the requested flavor
-static std::string compileSource(const char* source, bool is_lsl)
-{
-#ifdef LUAU_USE_TAILSLIDE
-    if (is_lsl)
-        return compileLSL(source);
-#endif
-    return Luau::compile(source);
-}
-
-// Bundles a TestProvisioner with the script it provisions, so tests can stand a
-// script up in one line (default 1:1:1 topology via provisionScript(); sharing
-// tests compose the factories directly). loadDefaultState()/reset()/
-// restoreState() stay explicit in the tests since lifecycle ordering is
-// usually part of what is under test.
-struct TestScript
-{
-    TestProvisioner host;
-    std::shared_ptr<Script> owned;
-    Script& exec;
-
-    explicit TestScript(const std::string& bytecode, bool is_lsl = false, uint32_t api_version = 0)
-        : owned(host.provisionScript(makeImageConfig(bytecode, is_lsl, api_version), makeScriptConfig()))
-        , exec(*owned)
-    {
-        REQUIRE(owned != nullptr);
-    }
-
-    // Compiles `source` first (with the LSL compiler when is_lsl)
-    explicit TestScript(const char* source, bool is_lsl = false, uint32_t api_version = 0)
-        : TestScript(compileSource(source, is_lsl), is_lsl, api_version)
-    {
-    }
-
-    // Initial load with the failure asserted, for tests not exercising it
-    void loadDefaultState()
-    {
-        REQUIRE(exec.loadDefaultState());
-    }
-
-    // reset() with the failure asserted, for tests not exercising reset itself
-    void reset()
-    {
-        REQUIRE(exec.reset());
-    }
-
-    // Load and run the SLua main function, which must complete in one window
-    void start()
-    {
-        loadDefaultState();
-        resume(exec);
-    }
-};
 
 // Builds an image the test expects to load
-static std::shared_ptr<IImage> makeImage(TestProvisioner& host, const std::shared_ptr<IEnvironment>& env, const std::string& bytecode)
+static std::shared_ptr<IImage> makeImage(TestProvisioner& host, const std::shared_ptr<IEnvironment>& env, const TestAsset& asset)
 {
-    std::shared_ptr<IImage> image = host.buildImage(env, makeImageConfig(bytecode));
+    std::shared_ptr<IImage> image = host.buildImage(env, asset);
     REQUIRE(image != nullptr);
     REQUIRE(image->isValid());
     return image;
 }
 
 // Same, in a fresh environment of its own
-static std::shared_ptr<IImage> makeImage(TestProvisioner& host, const std::string& bytecode)
+static std::shared_ptr<IImage> makeImage(TestProvisioner& host, const TestAsset& asset)
 {
-    return makeImage(host, host.createEnvironment(false, 0), bytecode);
+    return makeImage(host, host.createEnvironment(false, 0), asset);
 }
 
 // Instantiates a script on `image` and runs its main function to completion
@@ -346,11 +75,11 @@ static std::shared_ptr<Script> startScript(TestProvisioner& host, const std::sha
     return script;
 }
 
-// Runs `bytecode` to completion on a throwaway script and returns its
-// serialized payload; the restoreState() tests all start from one of these.
-static std::string donorPayload(const std::string& bytecode)
+// Runs `asset` to completion on a throwaway script and returns its serialized
+// payload; the restoreState() tests all start from one of these.
+static std::string donorPayload(const TestAsset& asset)
 {
-    TestScript donor(bytecode);
+    TestScript donor(asset);
     donor.start();
     return serialize(donor.exec);
 }
@@ -360,7 +89,7 @@ static std::string donorPayload(const std::string& bytecode)
 static void tickTimers(TestScript& ts, double script_time)
 {
     ts.host.script_clock = script_time;
-    RunResult result = dispatchRaw(ts.exec, 0, "timer");
+    RunResult result = dispatchRaw(ts.exec, LSLEvent::Timer);
     if (result.status == HandlerRunStatus::Preempted)
         resumeToCompletion(ts.exec, 1.0);
     else
@@ -382,28 +111,6 @@ constexpr bool kExactThreadSizing = true;
 constexpr bool kExactThreadSizing = false;
 #endif
 
-// Reads an integer global off a script's instance
-static int readIntGlobal(Script& script, const char* name)
-{
-    lua_State* instance = script.getInstanceState();
-    lua_getglobal(instance, name);
-    int value = lua_tointeger(instance, -1);
-    lua_pop(instance, 1);
-    return value;
-}
-
-// Every test runs under the SLua feature flags, and leaves the process-global
-// log hook unset for the next test
-struct SLuaFixture
-{
-    ScopedSLuaFlags slua_flags;
-
-    ~SLuaFixture()
-    {
-        logCallback() = nullptr;
-    }
-};
-
 TEST_SUITE_BEGIN("SLExecutor");
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid bytecode")
@@ -411,18 +118,36 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid bytecode")
     std::string bytecode = "definitely not luau bytecode";
     TestProvisioner host;
     std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
-    std::shared_ptr<IImage> image = host.buildImage(env, makeImageConfig(bytecode));
+    std::shared_ptr<IImage> image = host.buildImage(env, makeAsset(bytecode));
     CHECK_FALSE(image->isValid());
     // The load error is surfaced for the host's compile-error reporting
     CHECK_FALSE(image->getError().empty());
     CHECK(host.instantiateScript(image, makeScriptConfig()) == nullptr);
-    CHECK(host.provisionScript(makeImageConfig(bytecode), makeScriptConfig()) == nullptr);
+    CHECK(host.provisionScript(makeAsset(bytecode), makeScriptConfig()) == nullptr);
 
     // A failed load leaves the environment usable
-    std::string good = Luau::compile(R"(
+    makeImage(host, env, compileTestAsset(R"(
+        counter = 1
+    )"));
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor a failed compile never becomes an asset")
+{
+    // Throwing rather than returning something asset-shaped means there is
+    // nothing a caller could store by forgetting to check it
+    CHECK_THROWS_AS(
+        Luau::compileAssetOrThrow(R"(
+            local x = = 5
+        )"),
+        Luau::ParseErrors
+    );
+
+    BytecodeHeader parsed;
+    size_t bytecode_start = 0;
+    TestAsset good = compileTestAsset(R"(
         counter = 1
     )");
-    makeImage(host, env, good);
+    REQUIRE(readBytecodeHeader(good.bytes.data(), good.bytes.size(), parsed, bytecode_start));
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor log callback receives engine messages")
@@ -450,7 +175,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor log callback receives engine messages
 
     // A message with format arguments, attributed to the image's name
     std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
-    std::shared_ptr<IImage> image = host.buildImage(env, makeImageConfig("definitely not luau bytecode"));
+    std::shared_ptr<IImage> image = host.buildImage(env, makeAsset("definitely not luau bytecode"));
     REQUIRE_FALSE(image->isValid());
     REQUIRE(captured.size() == 2);
     CHECK(captured[1].level == LogLevel::Warn);
@@ -460,36 +185,40 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor log callback receives engine messages
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor provisioner topologies")
 {
-    std::string bytecode = Luau::compile(R"(
+    const char* source = R"(
         counter = 1
-    )");
+    )";
+    TestAsset asset = compileTestAsset(source);
 
     SUBCASE("cross-provisioner refusals")
     {
         TestProvisioner host;
         std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
-        std::shared_ptr<IImage> image = makeImage(host, env, bytecode);
+        std::shared_ptr<IImage> image = makeImage(host, env, asset);
 
         // A provisioner never builds into or instantiates from another
         // provisioner's tiers
         TestProvisioner other_host;
-        CHECK(other_host.buildImage(env, makeImageConfig(bytecode)) == nullptr);
+        CHECK(other_host.buildImage(env, asset) == nullptr);
         CHECK(other_host.instantiateScript(image, makeScriptConfig()) == nullptr);
 
-        // Nor does an image build into an environment of another flavor
-        CHECK(host.buildImage(env, makeImageConfig(bytecode, false, 1)) == nullptr);
+        // Nor does an image build into an environment of another flavor. The
+        // flavor is the asset's now, so that's a bad image rather than a refusal
+        std::shared_ptr<IImage> mismatched = host.buildImage(env, compileTestAsset(source, false, 1));
+        REQUIRE(mismatched != nullptr);
+        CHECK_FALSE(mismatched->isValid());
     }
 
     SUBCASE("one environment hosts multiple images")
     {
-        std::string bytecode2 = Luau::compile(R"(
+        TestAsset asset2 = compileTestAsset(R"(
             counter = 2
         )");
         TestProvisioner host;
         std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
         std::weak_ptr<IEnvironment> env_watch = env;
-        std::shared_ptr<IImage> image1 = makeImage(host, env, bytecode);
-        std::shared_ptr<IImage> image2 = makeImage(host, env, bytecode2);
+        std::shared_ptr<IImage> image1 = makeImage(host, env, asset);
+        std::shared_ptr<IImage> image2 = makeImage(host, env, asset2);
 
         // Drop the host's environment handle; the images keep it alive.
         // This is the cache pattern: retain weakly, lock-or-rebuild.
@@ -515,11 +244,11 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor provisioner topologies")
 
     SUBCASE("one image hosts multiple script instances")
     {
-        std::string mutable_bytecode = Luau::compile(R"(
+        TestAsset mutable_asset = compileTestAsset(R"(
             counter = (counter or 0) + 1
         )");
         TestProvisioner host;
-        std::shared_ptr<IImage> image = makeImage(host, mutable_bytecode);
+        std::shared_ptr<IImage> image = makeImage(host, mutable_asset);
         std::shared_ptr<Script> first = startScript(host, image);
         std::shared_ptr<Script> second = startScript(host, image);
 
@@ -535,7 +264,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor provisioner topologies")
     SUBCASE("serialize and restore between scripts sharing an environment")
     {
         TestProvisioner host;
-        std::shared_ptr<IImage> image = makeImage(host, bytecode);
+        std::shared_ptr<IImage> image = makeImage(host, asset);
         std::shared_ptr<Script> first = startScript(host, image);
 
         std::string payload = serialize(*first);
@@ -553,25 +282,40 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor provisioner topologies")
     SUBCASE("provisionScript builds a fresh environment per script")
     {
         TestProvisioner host;
-        std::shared_ptr<Script> first = host.provisionScript(makeImageConfig(bytecode), makeScriptConfig());
-        std::shared_ptr<Script> second = host.provisionScript(makeImageConfig(bytecode), makeScriptConfig());
+        std::shared_ptr<Script> first = host.provisionScript(asset, makeScriptConfig());
+        std::shared_ptr<Script> second = host.provisionScript(asset, makeScriptConfig());
         REQUIRE(first != nullptr);
         REQUIRE(second != nullptr);
         CHECK(&first->getEnvironment() != &second->getEnvironment());
     }
 }
 
-// A host that shares one image per distinct bytecode by composing the public
+// A host that shares one image per distinct asset by composing the public
 // factories; a real host would key on its asset identity instead.
 struct CachingTestHost : TestProvisioner
 {
     std::map<std::string, std::shared_ptr<IImage>> image_cache;
+    // One environment per flavor, chosen off the asset header the way a host
+    // has to before it can build an image
+    std::map<std::pair<bool, uint32_t>, std::shared_ptr<IEnvironment>> environment_cache;
 
-    std::shared_ptr<Script> provision(const std::string& bytecode)
+    std::shared_ptr<IEnvironment> environmentFor(const TestAsset& asset)
     {
-        std::shared_ptr<IImage>& image = image_cache[bytecode];
+        BytecodeHeader header;
+        size_t bytecode_start = 0;
+        REQUIRE(readBytecodeHeader(asset.bytes.data(), asset.bytes.size(), header, bytecode_start));
+
+        std::shared_ptr<IEnvironment>& environment = environment_cache[{header.isLSL, header.apiVersion}];
+        if (environment == nullptr)
+            environment = createEnvironment(header.isLSL, header.apiVersion);
+        return environment;
+    }
+
+    std::shared_ptr<Script> provision(const TestAsset& asset)
+    {
+        std::shared_ptr<IImage>& image = image_cache[asset.bytes];
         if (image == nullptr)
-            image = buildImage(createEnvironment(false, 0), makeImageConfig(bytecode));
+            image = buildImage(environmentFor(asset), asset);
         return instantiateScript(image, makeScriptConfig());
     }
 
@@ -597,17 +341,17 @@ struct CachingTestHost : TestProvisioner
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor host-side image caching")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         counter = (counter or 0) + 1
     )");
-    std::string bytecode2 = Luau::compile(R"(
+    TestAsset asset2 = compileTestAsset(R"(
         counter = 2
     )");
 
     CachingTestHost host;
-    std::shared_ptr<Script> first = host.provision(bytecode);
-    std::shared_ptr<Script> second = host.provision(bytecode);
-    std::shared_ptr<Script> other = host.provision(bytecode2);
+    std::shared_ptr<Script> first = host.provision(asset);
+    std::shared_ptr<Script> second = host.provision(asset);
+    std::shared_ptr<Script> other = host.provision(asset2);
     REQUIRE(first != nullptr);
     REQUIRE(second != nullptr);
     REQUIRE(other != nullptr);
@@ -618,7 +362,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor host-side image caching")
 
     // The cache owns its entries: releasing the scripts leaves the image
     // resident, and only the host's sweep drops it
-    std::weak_ptr<IImage> watch = host.image_cache[bytecode];
+    std::weak_ptr<IImage> watch = host.image_cache[asset.bytes];
     first.reset();
     second.reset();
     CHECK_FALSE(watch.expired());
@@ -626,16 +370,34 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor host-side image caching")
     CHECK(host.releaseUnusedImages() == 1);
     CHECK(watch.expired());
 
-    std::shared_ptr<Script> again = host.provision(bytecode);
+    std::shared_ptr<Script> again = host.provision(asset);
     REQUIRE(again != nullptr);
-    CHECK(host.image_cache.count(bytecode) == 1);
+    CHECK(host.image_cache.count(asset.bytes) == 1);
+
+#ifdef LUAU_USE_TAILSLIDE
+    // An asset of another flavor lands in its own environment, and the
+    // build refuses to put it anywhere else
+    TestAsset lsl = compileTestAsset(R"(
+        default {
+            state_entry() {}
+        }
+    )", true);
+    std::shared_ptr<Script> lsl_script = host.provision(lsl);
+    REQUIRE(lsl_script != nullptr);
+    CHECK(&lsl_script->getEnvironment() != &again->getEnvironment());
+    CHECK(host.environment_cache.size() == 2);
+
+    std::shared_ptr<IImage> misplaced = host.buildImage(host.environmentFor(asset), lsl);
+    REQUIRE(misplaced != nullptr);
+    CHECK_FALSE(misplaced->isValid());
+#endif
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor co-resident scripts account memory independently")
 {
     // Parks a large table in a global on demand, so one instance can grow
     // while its neighbour in the same VM sits idle
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         function LLEvents.moving_start()
             local hoard = {}
             for i = 1, 500 do
@@ -650,7 +412,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor co-resident scripts account memory in
     )");
 
     TestProvisioner host;
-    std::shared_ptr<IImage> image = makeImage(host, bytecode);
+    std::shared_ptr<IImage> image = makeImage(host, asset);
     std::shared_ptr<Script> first = startScript(host, image);
     std::shared_ptr<Script> second = startScript(host, image);
 
@@ -659,11 +421,11 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor co-resident scripts account memory in
 
     // Same image, so the bytecode is charged to both in full rather than split
     // between them, and two fresh instances of it start out level
-    CHECK(first_baseline >= (int)bytecode.size());
-    CHECK(second_baseline >= (int)bytecode.size());
+    CHECK(first_baseline >= (int)asset.chargedSize());
+    CHECK(second_baseline >= (int)asset.chargedSize());
     CHECK(first_baseline == second_baseline);
 
-    dispatch(*first, "moving_start");
+    dispatch(*first, LSLEvent::MovingStart);
 
     // The allocation lands on the script that made it
     CHECK(first->getUsedMemory() > first_baseline + 30000);
@@ -671,7 +433,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor co-resident scripts account memory in
     // ... and not on its neighbour. Running a handler on the idle script is
     // what dirties its cached size, so this is a real re-measurement of the
     // instance rather than the number read back above.
-    dispatch(*second, "moving_end");
+    dispatch(*second, LSLEvent::MovingEnd);
     CHECK(second->getUsedMemory() < second_baseline + 1000);
 
     // gcinfo() is the script-visible face of the same accounting: each script
@@ -683,20 +445,20 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor co-resident scripts account memory in
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor interleaves co-resident scripts")
 {
-    std::string slow_bytecode = Luau::compile(R"(
+    TestAsset slow_asset = compileTestAsset(R"(
         total = 0
         for i = 1, 20000 do
             total += i
         end
     )");
-    std::string quick_bytecode = Luau::compile(R"(
+    TestAsset quick_asset = compileTestAsset(R"(
         counter = 7
     )");
 
     TestProvisioner host;
     std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
-    std::shared_ptr<Script> slow = host.instantiateScript(makeImage(host, env, slow_bytecode), makeScriptConfig());
-    std::shared_ptr<Script> quick = host.instantiateScript(makeImage(host, env, quick_bytecode), makeScriptConfig());
+    std::shared_ptr<Script> slow = host.instantiateScript(makeImage(host, env, slow_asset), makeScriptConfig());
+    std::shared_ptr<Script> quick = host.instantiateScript(makeImage(host, env, quick_asset), makeScriptConfig());
     REQUIRE(slow != nullptr);
     REQUIRE(quick != nullptr);
     REQUIRE(slow->loadDefaultState());
@@ -732,12 +494,12 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor refuses to dispatch over a resumable 
     // dispatched on top of it is refused rather than run against its stack;
     // a host that cannot tell Refused apart from the other statuses cannot
     // assert on its own sequencing bugs.
-    dispatch(exec, "moving_start", HandlerRunStatus::Refused);
+    dispatch(exec, LSLEvent::MovingStart, HandlerRunStatus::Refused);
     CHECK(ts.host.printed.empty());
 
     resume(exec);
 
-    dispatch(exec, "moving_start");
+    dispatch(exec, LSLEvent::MovingStart);
     checkCapture(ts.host.printed, {"moving"});
 
     // Resuming when there is nothing to resume is the host's sequencing bug,
@@ -759,7 +521,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor abortHandler discards a resumable han
 
     // Preempt the handler mid-loop, then abort it instead of resuming
     ts.host.clock_step = 0.001;
-    dispatch(ts.exec, "moving_start", HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
+    dispatch(ts.exec, LSLEvent::MovingStart, HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
     REQUIRE(ts.exec.isHandlerActive());
 
     ts.host.clock_step = 0.0;
@@ -771,10 +533,201 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor abortHandler discards a resumable han
 
     // The aborted handler's tail never ran, and the thread is clean enough
     // to dispatch on again
-    RunResult rerun = dispatch(ts.exec, "moving_start");
+    RunResult rerun = dispatch(ts.exec, LSLEvent::MovingStart);
     // Main-function completion was already reported, never again
     CHECK_FALSE(rerun.mainFunctionCompleted);
     CHECK(readIntGlobal(ts.exec, "ran") == 102);
+}
+
+TEST_CASE("LSLEvents registry")
+{
+    // The enum's events are there before any builtins.txt is loaded
+    CHECK(lslEventIndex("state_entry") == LSLEvent::StateEntry);
+    CHECK(lslEventIndex("final_damage") == LSLEvent::FinalDamage);
+    CHECK(lslEventIndex("bogus") == 0);
+    CHECK(lslEventIndex(nullptr) == 0);
+    CHECK(std::string(lslEventName(LSLEvent::Timer)) == "timer");
+    CHECK(lslEventName(0) == nullptr);
+    CHECK(lslEventName(LSLEvent::KnownCount) == nullptr);
+    CHECK(LSLEventBit::StateEntry == 1);
+    CHECK(lslEventBit(0) == 0);
+    CHECK(lslEventBit(65) == 0);
+
+    // The embedded builtins.txt agrees with the enum
+    luauSL_init_global_builtins(nullptr);
+    CHECK(getLSLEventNames().size() >= (size_t)(LSLEvent::KnownCount - 1));
+    CHECK(lslEventIndex("timer") == LSLEvent::Timer);
+
+    // A file that moves a known event is refused, and the registry stands
+    std::vector<std::string> shuffled = getLSLEventNames();
+    std::swap(shuffled[0], shuffled[1]);
+    CHECK_FALSE(setLSLEventNames(shuffled));
+    CHECK(lslEventIndex("state_entry") == LSLEvent::StateEntry);
+
+    // One that appends is not, and the new event is reachable by index
+    std::vector<std::string> extended = getLSLEventNames();
+    extended.push_back("brand_new");
+    CHECK(setLSLEventNames(extended));
+    CHECK(lslEventIndex("brand_new") == (int)extended.size());
+    CHECK(std::string(lslEventName((int)extended.size())) == "brand_new");
+    luauSL_init_global_builtins(nullptr);
+    CHECK(lslEventIndex("brand_new") == 0);
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor handler registers")
+{
+    TestScript ts(R"(
+        function LLEvents.timer()
+            for i = 1, 100000 do end
+        end
+    )");
+    Script& exec = ts.exec;
+    CHECK(exec.getCurrentHandler() == 0);
+    CHECK(exec.getStickyHandler() == 0);
+
+    // The staged main is the state_entry handler in flight. For SLua that is
+    // literally what it is, so nothing is left pending behind it.
+    ts.loadDefaultState();
+    CHECK(exec.getCurrentHandler() == LSLEventBit::StateEntry);
+    CHECK(exec.getStickyHandler() == LSLEventBit::StateEntry);
+    CHECK(exec.getCurrentEvents() == 0);
+
+    resume(exec);
+    CHECK(exec.getCurrentHandler() == 0);
+    CHECK(exec.getStickyHandler() == LSLEventBit::StateEntry);
+
+    // A dispatch consumes its own bit from the host's pending events, and
+    // only its own
+    exec.setCurrentEvents(LSLEventBit::Timer | LSLEventBit::TouchStart);
+    ts.host.clock_step = 0.001;
+    dispatch(exec, LSLEvent::Timer, HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
+    CHECK(exec.getCurrentHandler() == LSLEventBit::Timer);
+    CHECK(exec.getStickyHandler() == LSLEventBit::Timer);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::TouchStart);
+
+    ts.host.clock_step = 0.0;
+    resumeToCompletion(exec, 1.0);
+    CHECK(exec.getCurrentHandler() == 0);
+    CHECK(exec.getStickyHandler() == LSLEventBit::Timer);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::TouchStart);
+
+    // Aborting clears the register the same as completing
+    ts.host.clock_step = 0.001;
+    dispatch(exec, LSLEvent::Timer, HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
+    ts.host.clock_step = 0.0;
+    exec.abortHandler();
+    CHECK(exec.getCurrentHandler() == 0);
+    CHECK(exec.getStickyHandler() == LSLEventBit::Timer);
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor handler registers survive a round trip")
+{
+    TestAsset asset = compileTestAsset(R"(
+        function LLEvents.timer()
+            for i = 1, 100000 do end
+        end
+    )");
+    TestScript first(asset);
+    first.start();
+    first.exec.setCurrentEvents(LSLEventBit::TouchStart);
+    first.host.clock_step = 0.001;
+    dispatch(first.exec, LSLEvent::Timer, HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
+    std::string payload = serialize(first.exec);
+
+    TestScript second(asset);
+    restore(second.exec, payload);
+    CHECK(second.exec.getCurrentHandler() == LSLEventBit::Timer);
+    CHECK(second.exec.getStickyHandler() == LSLEventBit::Timer);
+    CHECK(second.exec.getCurrentEvents() == LSLEventBit::TouchStart);
+
+    resumeToCompletion(second.exec, 1.0);
+    CHECK(second.exec.getCurrentHandler() == 0);
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor SLua handler set follows registrations")
+{
+    TestAsset asset = compileTestAsset(R"(
+        local function handler() end
+        LLEvents:on("touch_start", handler)
+        LLEvents:on("timer", handler)
+        LLEvents:off("touch_start", handler)
+    )");
+    TestScript first(asset);
+    // Nothing to know until an instance exists
+    CHECK_FALSE(first.exec.eventHandlersKnown());
+    first.loadDefaultState();
+    CHECK(first.exec.getEventHandlers() == 0);
+    // Still not: main may register more before it finishes
+    CHECK_FALSE(first.exec.eventHandlersKnown());
+
+    resume(first.exec);
+    CHECK(first.exec.getEventHandlers() == LSLEventBit::Timer);
+    CHECK(first.exec.eventHandlersKnown());
+
+    // Registrations happen at runtime, so nothing but the payload can rebuild
+    // the register
+    std::string payload = serialize(first.exec);
+    TestScript second(asset);
+    restore(second.exec, payload);
+    CHECK(second.exec.getEventHandlers() == LSLEventBit::Timer);
+    CHECK(second.exec.eventHandlersKnown());
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor value-bearing yield from a handler faults")
+{
+    // Preemption never yields, so a yield carrying values off the handler
+    // thread can only be the script's own coroutine.yield, and those are
+    // reserved for the engine
+    TestScript ts(R"(
+        function LLEvents.moving_start()
+            coroutine.yield(1)
+            print("unreachable")
+        end
+    )");
+    ts.start();
+
+    dispatch(ts.exec, LSLEvent::MovingStart, HandlerRunStatus::Fault);
+    CHECK(ts.exec.getFaultKind() == FaultKind::UnexpectedYield);
+    CHECK_FALSE(ts.exec.isHandlerActive());
+    CHECK(ts.host.printed.empty());
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor faulted script refuses every handler")
+{
+    TestAsset asset = compileTestAsset(R"(
+        function LLEvents.moving_start()
+            print("moved")
+        end
+        error("boom")
+    )");
+
+    SUBCASE("script fault")
+    {
+        TestScript ts(asset);
+        ts.loadDefaultState();
+        resume(ts.exec, 1.0, HandlerRunStatus::Fault);
+
+        // The handler was registered before the death, and still never runs
+        dispatch(ts.exec, LSLEvent::MovingStart, HandlerRunStatus::Fault);
+        CHECK(ts.exec.resumeEventHandler().status == HandlerRunStatus::Fault);
+        CHECK(ts.host.printed.empty());
+        CHECK(ts.exec.getCurrentHandler() == 0);
+    }
+
+    SUBCASE("host fault")
+    {
+        TestScript ts(R"(
+            function LLEvents.moving_start()
+                print("moved")
+            end
+        )");
+        ts.start();
+        ts.exec.setFault(FaultKind::Runtime, "killed by host");
+
+        dispatch(ts.exec, LSLEvent::MovingStart, HandlerRunStatus::Fault);
+        CHECK(ts.host.printed.empty());
+        CHECK(ts.exec.getCurrentHandler() == 0);
+    }
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor yield-due is scoped to the run window")
@@ -798,7 +751,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor yield-due is scoped to the run window
     // window is only bounded by the flag under test
     exec.beginRunWindow(1.0);
     exec.setForceYield(true);
-    REQUIRE(exec.callEventHandler(0, "moving_start", nullptr).status == HandlerRunStatus::Preempted);
+    REQUIRE(exec.callEventHandler(LSLEvent::MovingStart, nullptr).status == HandlerRunStatus::Preempted);
     CHECK(exec.isYieldDue());
 
     // Finishing that handler and running another one in the same window leaves
@@ -806,7 +759,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor yield-due is scoped to the run window
     exec.setForceYield(false);
     REQUIRE(exec.resumeEventHandler().status == HandlerRunStatus::Ok);
     CHECK(exec.isYieldDue());
-    REQUIRE(exec.callEventHandler(0, "moving_end", nullptr).status == HandlerRunStatus::Ok);
+    REQUIRE(exec.callEventHandler(LSLEvent::MovingEnd, nullptr).status == HandlerRunStatus::Ok);
     CHECK(exec.isYieldDue());
 
     // The flag survives the window's close
@@ -842,32 +795,35 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor carries host context and the charged 
     int host_object = 42;
     TestProvisioner host;
 
-    ImageConfig image_config = makeImageConfig(bytecode);
-    // The host charges the whole asset, headers included, not just the slice it
-    // handed over to be loaded
-    image_config.chargedBytecodeSize = bytecode.size() + 4096;
+    // The asset declares a charged size unrelated to what it actually carries,
+    // so the engine could swap the bytecode without moving reported memory
+    TestAsset asset = makeAsset(bytecode, (uint32_t)(bytecode.size() + 4096));
 
     ScriptConfig script_config = makeScriptConfig();
     script_config.hostContext = &host_object;
     script_config.memoryLimit = 64 * 1024;
 
-    std::shared_ptr<Script> script = host.provisionScript(image_config, script_config);
+    std::shared_ptr<Script> script = host.provisionScript(asset, script_config);
     REQUIRE(script != nullptr);
     CHECK(script->getHostContext() == &host_object);
     CHECK(script->getMemoryLimit() == 64 * 1024);
 
+    // The declared size is what gets billed, not the bytecode's own length
+    REQUIRE(asset.chargedSize() == bytecode.size() + 4096);
+    REQUIRE(asset.chargedSize() != asset.bytecodeSize());
+
     // The charge applies before an instance exists and after it does
-    CHECK(script->getUsedMemory() >= (int)(bytecode.size() + 4096));
+    CHECK(script->getUsedMemory() >= (int)asset.chargedSize());
     REQUIRE(script->loadDefaultState());
     resume(*script);
-    CHECK(script->getUsedMemory() >= (int)(bytecode.size() + 4096));
+    CHECK(script->getUsedMemory() >= (int)asset.chargedSize());
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor weak references die before OoM")
 {
     ScopedFastFlag eager_weak_clear{FFlag::SLuaEagerWeakClear, true};
 
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         local weak = setmetatable({}, { __mode = "kv" })
         local tab1 = table.create(6000, 1)
         weak[1] = tab1
@@ -883,7 +839,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor weak references die before OoM")
     // limit together; one plus the base state comfortably can.
     script_config.memoryLimit = 150000;
 
-    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(bytecode), script_config);
+    std::shared_ptr<Script> script = host.provisionScript(asset, script_config);
     REQUIRE(script != nullptr);
     REQUIRE(script->loadDefaultState());
 
@@ -1318,7 +1274,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog preempts a busy script")
     {
         INFO("policy ", (int)policy);
         TestProvisioner host{deadlineCallbacks(policy)};
-        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+        std::shared_ptr<Script> script = host.provisionScript(compileTestAsset(kBusyLoop), makeScriptConfig());
         REQUIRE(script != nullptr);
         REQUIRE(script->loadDefaultState());
 
@@ -1339,7 +1295,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog honors a mid-window sleep")
     {
         INFO("policy ", (int)policy);
         TestProvisioner host{deadlineCallbacks(policy)};
-        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+        std::shared_ptr<Script> script = host.provisionScript(compileTestAsset(kBusyLoop), makeScriptConfig());
         REQUIRE(script != nullptr);
         REQUIRE(script->loadDefaultState());
 
@@ -1361,12 +1317,12 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor watchdog uninstalls a withdrawn force
     {
         INFO("policy ", (int)policy);
         TestProvisioner host{deadlineCallbacks(policy)};
-        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(R"(
+        std::shared_ptr<Script> script = host.provisionScript(compileTestAsset(R"(
             local total = 0
             for i = 1, 1000 do
                 total += i
             end
-        )")), makeScriptConfig());
+        )"), makeScriptConfig());
         REQUIRE(script != nullptr);
         REQUIRE(script->loadDefaultState());
 
@@ -1396,7 +1352,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor deadline installers honor the host fi
         // first safepoint yields.
         callbacks.interruptFireLead = 1.0;
         TestProvisioner host{callbacks};
-        std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+        std::shared_ptr<Script> script = host.provisionScript(compileTestAsset(kBusyLoop), makeScriptConfig());
         REQUIRE(script != nullptr);
         REQUIRE(script->loadDefaultState());
 
@@ -1413,7 +1369,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor deadline installers honor the host fi
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor signal installer handles a deadline that is already due")
 {
     TestProvisioner host{deadlineCallbacks(InterruptInstallPolicy::Signal)};
-    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(Luau::compile(kBusyLoop)), makeScriptConfig());
+    std::shared_ptr<Script> script = host.provisionScript(compileTestAsset(kBusyLoop), makeScriptConfig());
     REQUIRE(script != nullptr);
     REQUIRE(script->loadDefaultState());
 
@@ -1430,7 +1386,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor signal installer handles a deadline t
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         local parts = {}
         for i = 1, 400 do
             parts[i] = string.rep("x", 100) .. tostring(i)
@@ -1439,14 +1395,14 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit")
         print("allocated")
     )");
 
-    TestScript ts(bytecode);
+    TestScript ts(asset);
     ts.loadDefaultState();
     Script& exec = ts.exec;
 
     SUBCASE("allocations under the limit succeed and are measured")
     {
         int baseline = exec.getUsedMemory();
-        CHECK(baseline >= (int)bytecode.size());
+        CHECK(baseline >= (int)asset.chargedSize());
 
         resume(exec);
 
@@ -1497,7 +1453,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LLEvents dispatch")
     checkCapture(ts.host.registrations, {"+link_message"});
 
     // The engine counts what the callback pushed rather than being told
-    dispatch(ts.exec, "link_message", HandlerRunStatus::Ok, [](lua_State* handler, void*) {
+    dispatch(ts.exec, LSLEvent::LinkMessage, HandlerRunStatus::Ok, [](lua_State* handler, void*) {
         luaSL_pushnativeinteger(handler, 7);
         lua_pushstring(handler, "hello");
         luaSL_pushnativeinteger(handler, -3);
@@ -1528,7 +1484,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor pushes args outside a resume")
     {
         RunWindow window(ts.exec, 1.0);
         ts.exec.setForceYield(true);
-        result = ts.exec.callEventHandler(0, "dataserver", [](lua_State* handler, void*) {
+        result = ts.exec.callEventHandler(LSLEvent::Dataserver, [](lua_State* handler, void*) {
             luaSL_pushuuidstring(handler, "8d4a1e26-3f2b-4c7d-9a15-6e0b3c8f2d41");
             lua_pushstring(handler, "payload");
         });
@@ -1679,7 +1635,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor out of memory during event dispatch")
 
         // Leave barely any headroom, so allocations during dispatch fail
         exec.setMemoryLimitUnsafe(exec.getUsedMemory() + 128);
-        dispatch(exec, "touch_start", HandlerRunStatus::Fault);
+        dispatch(exec, LSLEvent::TouchStart, HandlerRunStatus::Fault);
         CHECK(exec.getFaultKind() == FaultKind::OutOfMemory);
         CHECK(ts.host.printed.empty());
     }
@@ -1689,22 +1645,22 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor out of memory during event dispatch")
         // Tearing the handler thread down resets it, and that reset runs
         // between handlers with no protected frame around it. A restored
         // thread must not need an allocation to get back to the reset state.
-        std::string bytecode = Luau::compile(R"(
+        TestAsset asset = compileTestAsset(R"(
             held = buffer.create(1024 * 100)
             LLEvents:on("touch_start", function() print("HANDLER RAN") end)
         )");
-        TestScript first(bytecode);
+        TestScript first(asset);
         first.start();
 
         std::string payload = serialize(first.exec);
 
-        TestScript ts(bytecode);
+        TestScript ts(asset);
         restore(ts.exec, payload);
         Script& exec = ts.exec;
         REQUIRE(exec.getUsedMemory() > 1024 * 100);
 
         exec.setMemoryLimitUnsafe(exec.getUsedMemory() + 128);
-        dispatch(exec, "touch_start", HandlerRunStatus::Fault);
+        dispatch(exec, LSLEvent::TouchStart, HandlerRunStatus::Fault);
         CHECK(exec.getFaultKind() == FaultKind::OutOfMemory);
         CHECK(ts.host.printed.empty());
     }
@@ -1721,7 +1677,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor out of memory during event dispatch")
 
         // Enough headroom for handler setup, nowhere near enough for the argument
         exec.setMemoryLimitUnsafe(exec.getUsedMemory() + 2048);
-        dispatch(exec, "dataserver", HandlerRunStatus::Fault, [](lua_State* handler, void*) {
+        dispatch(exec, LSLEvent::Dataserver, HandlerRunStatus::Fault, [](lua_State* handler, void*) {
             std::string huge(1024 * 100, 'x');
             lua_pushlstring(handler, huge.data(), huge.size());
         });
@@ -1754,16 +1710,16 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor unserializable global is refused with
 
 // Size of the payload a `counter = 1` script serializes to. Update it when the
 // wire format moves; a change nobody meant to make is the thing worth catching.
-constexpr size_t kExpectedDonorPayloadSize = 514;
+constexpr size_t kExpectedDonorPayloadSize = 634;
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         counter = 1
     )");
 
-    std::string payload = donorPayload(bytecode);
-    TestScript second(bytecode);
+    std::string payload = donorPayload(asset);
+    TestScript second(asset);
 
     SUBCASE("corrupt payload is refused without exploding")
     {
@@ -1779,7 +1735,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         // a state coherent enough to serialize, or is refused cleanly, leaving
         // the script faulted with nothing to serialize.
         size_t refused = 0;
-        auto scratch = std::make_unique<TestScript>(bytecode);
+        auto scratch = std::make_unique<TestScript>(asset);
         for (size_t offset = 0; offset < payload.size(); ++offset)
         {
             CAPTURE(offset);
@@ -1791,8 +1747,8 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
             {
                 CHECK(scratch->exec.serializeState(after));
                 // A successful restore leaves a live instance, and restoring
-                // over one is refused, so start over
-                scratch = std::make_unique<TestScript>(bytecode);
+                // over one trips restoreState()'s assert, so start over
+                scratch = std::make_unique<TestScript>(asset);
             }
             else
             {
@@ -1814,9 +1770,19 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         bad_magic[0] = 'B';
         CHECK_FALSE(second.exec.restoreState(bad_magic.data(), bad_magic.size()));
 
-        std::string bad_version = payload;
-        bad_version[4] = (char)(kScriptStateFingerprint.version + 99);
-        CHECK_FALSE(second.exec.restoreState(bad_version.data(), bad_version.size()));
+        // The core section's major follows the magic, the class's own follows
+        // the class tag
+        std::string bad_core_version = payload;
+        bad_core_version[4] = (char)(kScriptStateFingerprint.major + 99);
+        CHECK_FALSE(second.exec.restoreState(bad_core_version.data(), bad_core_version.size()));
+
+        std::string bad_class_tag = payload;
+        bad_class_tag[12] = 'B';
+        CHECK_FALSE(second.exec.restoreState(bad_class_tag.data(), bad_class_tag.size()));
+
+        std::string bad_class_version = payload;
+        bad_class_version[16] = (char)(kScriptStateFingerprint.major + 99);
+        CHECK_FALSE(second.exec.restoreState(bad_class_version.data(), bad_class_version.size()));
 
         CHECK_FALSE(second.exec.restoreState("", 0));
         for (size_t len : {size_t(4), size_t(8), size_t(16), payload.size() / 2, payload.size() - 1})
@@ -1839,28 +1805,19 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         CHECK(readIntGlobal(second.exec, "counter") == 1);
     }
 
-    SUBCASE("restore over a live instance is refused")
-    {
-        // A live instance means the caller would be implicitly discarding a
-        // running script; that sequencing is a host bug, so it is refused
-        second.loadDefaultState();
-        CHECK_FALSE(second.exec.restoreState(payload.data(), payload.size()));
-        CHECK(second.exec.getFaultKind() == FaultKind::Runtime);
-
-        // The refusal leaves the live instance untouched and runnable
-        second.exec.clearFault();
-        resume(second.exec);
-    }
+    // Restoring (or loading the default state) over a live instance is a host
+    // sequencing bug and asserts rather than being refused, so there is no
+    // subcase for it here.
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor sleep and fault survive a round trip")
 {
     // The payload carries the script instance plus the sleep and fault it was
     // holding, so the host stores one opaque blob and cannot drop half of it.
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         counter = 1
     )");
-    TestScript first(bytecode);
+    TestScript first(asset);
     first.start();
 
     first.exec.setSleep(0.25f);
@@ -1868,7 +1825,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor sleep and fault survive a round trip"
 
     std::string payload = serialize(first.exec);
 
-    TestScript second(bytecode);
+    TestScript second(asset);
     REQUIRE(second.exec.getSleep() == 0.0f);
     REQUIRE(second.exec.getFaultKind() == FaultKind::None);
 
@@ -1881,16 +1838,17 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor sleep and fault survive a round trip"
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor persistence envelope validation")
 {
-    std::string bytecode = Luau::compile(R"(
+    const char* source = R"(
         counter = 1
-    )");
+    )";
+    TestAsset asset = compileTestAsset(source);
 
     SUBCASE("a state from another flavor is refused")
     {
         // Caught in the envelope rather than somewhere inside Ares
-        std::string payload = donorPayload(bytecode);
+        std::string payload = donorPayload(asset);
 
-        TestScript other(bytecode, false, 1);
+        TestScript other(compileTestAsset(source, false, 1));
         CHECK_FALSE(other.exec.restoreState(payload.data(), payload.size()));
         CHECK(other.exec.getFaultKind() == FaultKind::Runtime);
         CHECK_FALSE(other.exec.hasInstance());
@@ -1898,14 +1856,14 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor persistence envelope validation")
 
     SUBCASE("the persisted traceback is capped")
     {
-        TestScript first(bytecode);
+        TestScript first(asset);
         first.start();
         std::string huge_trace(kMaxPersistedFaultLen * 4, 'x');
         first.exec.setFault(FaultKind::Runtime, "runtime error", huge_trace.c_str());
 
         std::string payload = serialize(first.exec);
 
-        TestScript second(bytecode);
+        TestScript second(asset);
         restore(second.exec, payload);
         CHECK(second.exec.getExtendedFaultString().size() == kMaxPersistedFaultLen);
     }
@@ -1913,10 +1871,10 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor persistence envelope validation")
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit survives a round trip")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         counter = 1
     )");
-    TestScript first(bytecode);
+    TestScript first(asset);
     first.start();
 
     // The limit drifts at runtime (llSetMemoryLimit), so the payload must
@@ -1927,7 +1885,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit survives a round trip")
 
     std::string payload = serialize(first.exec);
 
-    TestScript second(bytecode);
+    TestScript second(asset);
     REQUIRE(second.exec.getMemoryLimit() == kDefaultMemoryLimit);
     restore(second.exec, payload);
     CHECK(second.exec.getMemoryLimit() == kLoweredLimit);
@@ -1936,7 +1894,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit survives a round trip")
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round trip")
 {
     // Make sure we don't muck up CallInfo arrays with our serialization.
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         function LLEvents.moving_start()
             local function deep(n)
                 if n > 0 then
@@ -1953,7 +1911,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
 
     SUBCASE("serialized idle between handlers")
     {
-        TestScript first(bytecode);
+        TestScript first(asset);
         first.start();
 
         lua_State* donor = handlerThread(first.exec);
@@ -1971,7 +1929,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
 
         std::string payload = serialize(first.exec);
 
-        TestScript second(bytecode);
+        TestScript second(asset);
         restore(second.exec, payload);
 
         lua_State* restored = handlerThread(second.exec);
@@ -1981,10 +1939,10 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
 
     SUBCASE("serialized while preempted mid-handler")
     {
-        TestScript first(bytecode);
+        TestScript first(asset);
         first.start();
 
-        dispatch(first.exec, "moving_start", HandlerRunStatus::Preempted);
+        dispatch(first.exec, LSLEvent::MovingStart, HandlerRunStatus::Preempted);
 
         lua_State* donor = handlerThread(first.exec);
         const int size_ci = donor->size_ci;
@@ -2004,7 +1962,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor thread capacities survive a round tri
 
         std::string payload = serialize(first.exec);
 
-        TestScript second(bytecode);
+        TestScript second(asset);
         restore(second.exec, payload);
 
         lua_State* restored = handlerThread(second.exec);
@@ -2034,7 +1992,7 @@ public:
     }
 
 protected:
-    StateFingerprint getStateFingerprint() const override { return {{'S', 'T', 'F', 'L'}, 1}; }
+    StateFingerprint getStateFingerprint() const override { return {{'S', 'T', 'F', 'L'}, 1, 0}; }
 
     bool serializeExtra(ByteWriter& writer) const override
     {
@@ -2057,6 +2015,37 @@ private:
     }
 };
 
+// The same host class one release later: one field appended to its section,
+// minor bumped. Payloads cross between the two in both directions.
+class NewerStatefulScript : public StatefulScript
+{
+public:
+    using StatefulScript::StatefulScript;
+
+    int32_t newer = 0;
+
+protected:
+    StateFingerprint getStateFingerprint() const override { return {{'S', 'T', 'F', 'L'}, 1, 1}; }
+
+    bool serializeExtra(ByteWriter& writer) const override
+    {
+        StatefulScript::serializeExtra(writer);
+        writer.writeS32(newer);
+        return true;
+    }
+
+    bool restoreExtra(ByteReader& reader) override
+    {
+        if (!StatefulScript::restoreExtra(reader))
+            return false;
+        // Appended after 1.0, so a 1.0 payload simply doesn't carry it
+        if (reader.remaining >= sizeof(int32_t))
+            return reader.readS32(newer);
+        newer = -1;
+        return true;
+    }
+};
+
 class StatefulEnvironment : public Environment
 {
 public:
@@ -2074,23 +2063,24 @@ class StatefulImage : public Image
 public:
     StatefulImage(std::shared_ptr<IEnvironment> environment, const ImageConfig& config)
         : Image(std::move(environment), config)
-        , raw_bytecode_size(config.bytecodeSize)
+        , raw_asset_size(config.assetSize)
     {
     }
 
     // Image only retains the charged size, not what was actually handed to it
-    size_t raw_bytecode_size = 0;
+    size_t raw_asset_size = 0;
 };
 
 // Replaces every tier. TestProvisioner's callbacks recover it by downcasting
 // getProvisioner() to itself, so a provisioner of other types needs its own.
-struct StatefulProvisioner : Provisioner<StatefulScript>, FakeQuantaClock
+template<class S>
+struct StatefulProvisionerT : Provisioner<S>, FakeQuantaClock
 {
     int environments_made = 0;
     int images_made = 0;
 
-    StatefulProvisioner()
-        : Provisioner<StatefulScript>(makeCallbacks())
+    StatefulProvisionerT()
+        : Provisioner<S>(makeCallbacks())
     {
     }
 
@@ -2104,14 +2094,14 @@ struct StatefulProvisioner : Provisioner<StatefulScript>, FakeQuantaClock
 
     // The only place the downcast happens, since everything this provisioner
     // mints comes through makeScript()
-    std::shared_ptr<StatefulScript> provision(const std::string& bytecode)
+    std::shared_ptr<S> provision(const TestAsset& asset)
     {
-        return std::static_pointer_cast<StatefulScript>(provisionScript(makeImageConfig(bytecode), makeScriptConfig()));
+        return std::static_pointer_cast<S>(this->provisionScript(asset, makeScriptConfig()));
     }
 
-    std::shared_ptr<StatefulScript> start(const std::string& bytecode)
+    std::shared_ptr<S> start(const TestAsset& asset)
     {
-        std::shared_ptr<StatefulScript> script = provision(bytecode);
+        std::shared_ptr<S> script = provision(asset);
         REQUIRE(script != nullptr);
         REQUIRE(script->loadDefaultState());
         resume(*script);
@@ -2132,11 +2122,13 @@ protected:
     }
 };
 
+using StatefulProvisioner = StatefulProvisionerT<StatefulScript>;
+
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass state survives a round trip")
 {
     // Long enough to take a loop back-edge interrupt, short enough to finish
     // inside one window
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         local total = 0
         for i = 1, 10000 do
             total += i
@@ -2145,14 +2137,14 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass state survives a round trip"
     )");
 
     StatefulProvisioner host;
-    std::shared_ptr<StatefulScript> first = host.start(bytecode);
+    std::shared_ptr<StatefulScript> first = host.start(asset);
 
     // Every tier is recoverable as the host's own type without the engine
     // knowing any of them exist
     CHECK(host.environments_made == 1);
     CHECK(host.images_made == 1);
     CHECK(static_cast<StatefulEnvironment&>(first->getEnvironment()).flavor == "lua");
-    CHECK(static_cast<StatefulImage&>(first->getImage()).raw_bytecode_size == bytecode.size());
+    CHECK(static_cast<StatefulImage&>(first->getImage()).raw_asset_size > asset.bytecodeSize());
     // Chaining to ours left the run window intact, so the script still finished
     CHECK(first->interrupts > 0);
 
@@ -2163,7 +2155,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass state survives a round trip"
 
     // The subclass's fields ride in the same payload as the instance, so the
     // host cannot store one without the other
-    std::shared_ptr<StatefulScript> second = host.provision(bytecode);
+    std::shared_ptr<StatefulScript> second = host.provision(asset);
     REQUIRE(second != nullptr);
     REQUIRE(second->counter == 0);
 
@@ -2175,31 +2167,118 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass state survives a round trip"
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor refuses a payload from another script class")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         counter = 1
     )");
 
     StatefulProvisioner host;
-    std::string stateful_payload = serialize(*host.start(bytecode));
-    std::string plain_payload = donorPayload(bytecode);
+    std::string stateful_payload = serialize(*host.start(asset));
+    std::string plain_payload = donorPayload(asset);
 
     // The fingerprint at the head of the payload says whose it is, so neither
     // class gets far enough to fork an instance out of the other's state
-    TestScript plain(bytecode);
+    TestScript plain(asset);
     CHECK_FALSE(plain.exec.restoreState(stateful_payload.data(), stateful_payload.size()));
     CHECK(plain.exec.getFaultKind() == FaultKind::Runtime);
     CHECK_FALSE(plain.exec.hasInstance());
 
-    std::shared_ptr<StatefulScript> stateful = host.provision(bytecode);
+    std::shared_ptr<StatefulScript> stateful = host.provision(asset);
     REQUIRE(stateful != nullptr);
     CHECK_FALSE(stateful->restoreState(plain_payload.data(), plain_payload.size()));
     CHECK(stateful->getFaultKind() == FaultKind::Runtime);
     CHECK_FALSE(stateful->hasInstance());
 }
 
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass payloads cross minor versions")
+{
+    TestAsset asset = compileTestAsset(R"(
+        counter = 1
+    )");
+
+    StatefulProvisioner older_host;
+    StatefulProvisionerT<NewerStatefulScript> newer_host;
+
+    SUBCASE("an older build skips the field a newer one appended")
+    {
+        std::shared_ptr<NewerStatefulScript> newer = newer_host.start(asset);
+        newer->counter = 42;
+        newer->label = "held";
+        newer->newer = 7;
+        std::string payload = serialize(*newer);
+
+        std::shared_ptr<StatefulScript> older = older_host.provision(asset);
+        REQUIRE(older != nullptr);
+        restore(*older, payload);
+        CHECK(older->counter == 42);
+        CHECK(older->label == "held");
+        CHECK(readIntGlobal(*older, "counter") == 1);
+
+        // ...and what it writes back is a 1.0 payload the newer build still loads
+        std::string rewritten = serialize(*older);
+        std::shared_ptr<NewerStatefulScript> again = newer_host.provision(asset);
+        REQUIRE(again != nullptr);
+        restore(*again, rewritten);
+        CHECK(again->counter == 42);
+        CHECK(again->newer == -1);
+    }
+
+    SUBCASE("a newer build defaults the field an older one never wrote")
+    {
+        std::shared_ptr<StatefulScript> older = older_host.start(asset);
+        older->counter = 5;
+        std::string payload = serialize(*older);
+
+        std::shared_ptr<NewerStatefulScript> newer = newer_host.provision(asset);
+        REQUIRE(newer != nullptr);
+        restore(*newer, payload);
+        CHECK(newer->counter == 5);
+        CHECK(newer->newer == -1);
+        CHECK(readIntGlobal(*newer, "counter") == 1);
+    }
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor ares records with unknown trailing bytes restore")
+{
+    TestAsset asset = compileTestAsset(R"(
+        counter = 1
+        names = {"a", "b", c = {nested = true}}
+        local captured = 10
+        function bump()
+            captured += 1
+            return captured
+        end
+        function LLEvents.timer()
+            counter += bump()
+        end
+    )");
+
+    TestScript first(asset);
+    first.start();
+
+    // The writer pads every ares record with bytes this reader has never seen,
+    // as a newer engine appending fields would
+    lua_State* instance = first.exec.getInstanceState();
+    lua_pushunsigned(instance, 5);
+    eris_set_setting(instance, "testpad", -1);
+    lua_pop(instance, 1);
+
+    std::string payload = serialize(first.exec);
+
+    TestScript second(asset);
+    restore(second.exec, payload);
+    CHECK(second.exec.getFaultKind() == FaultKind::None);
+    CHECK(readIntGlobal(second.exec, "counter") == 1);
+
+    dispatch(second.exec, LSLEvent::Timer);
+    CHECK(readIntGlobal(second.exec, "counter") == 12);
+
+    std::string again;
+    CHECK(second.exec.serializeState(again));
+}
+
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor main function completion")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         local total = 0
         for i = 1, 100000 do
             total += i
@@ -2207,7 +2286,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor main function completion")
         done = total
     )");
 
-    TestScript first(bytecode);
+    TestScript first(asset);
     first.loadDefaultState();
     // The staged main function has not run yet
     CHECK_FALSE(first.exec.isMainFunctionComplete());
@@ -2222,7 +2301,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor main function completion")
 
     // The flag travels with the payload: a restored mid-main instance is
     // still incomplete and only flips once the main finishes there
-    TestScript second(bytecode);
+    TestScript second(asset);
     restore(second.exec, payload);
     CHECK_FALSE(second.exec.isMainFunctionComplete());
 
@@ -2233,7 +2312,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor main function completion")
 
     // A payload from a completed main restores with the flag already set
     std::string done_payload = serialize(second.exec);
-    TestScript third(bytecode);
+    TestScript third(asset);
     CHECK_FALSE(third.exec.isMainFunctionComplete());
     restore(third.exec, done_payload);
     CHECK(third.exec.isMainFunctionComplete());
@@ -2306,12 +2385,12 @@ struct KillingTestHost : TestProvisioner
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor host kill aborts the handler")
 {
-    std::string bytecode = Luau::compile(R"(
+    TestAsset asset = compileTestAsset(R"(
         pcall(host_kill)
         print("still alive")
     )");
     KillingTestHost host;
-    std::shared_ptr<Script> script = host.provisionScript(makeImageConfig(bytecode), makeScriptConfig());
+    std::shared_ptr<Script> script = host.provisionScript(asset, makeScriptConfig());
     REQUIRE(script != nullptr);
     REQUIRE(script->loadDefaultState());
 
@@ -2409,23 +2488,190 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor hides engine threads from coroutine.r
     CHECK(readIntGlobal(script.exec, "in_coro") == 1);
 }
 
-TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor failed LSL constructor leaves no instance")
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor faulting LSL constructor")
 {
     // Compiled LSL should never error during construction, but the engine
-    // cannot assume the bytecode is well-behaved. A failed load must not leave
-    // a live instance behind: restoreState() is documented as valid after a
-    // failed load, and refuses to run over a live instance.
-    std::string bytecode = Luau::compile(R"(
+    // cannot assume the bytecode is well-behaved. The constructor is staged
+    // like any main function, so its death is an ordinary handler fault: the
+    // instance stays, faulted, and main reports complete so the host stops
+    // waiting on it.
+    TestAsset asset = compileTestAsset(R"(
         error("constructor boom")
     )");
-    TestScript ts(bytecode, true);
+    TestScript ts(asset);
+    ts.loadDefaultState();
+    CHECK_FALSE(ts.exec.isMainFunctionComplete());
 
-    CHECK_FALSE(ts.exec.loadDefaultState());
+    resume(ts.exec, 1.0, HandlerRunStatus::Fault);
     CHECK(ts.exec.getFaultKind() == FaultKind::Runtime);
-    CHECK(!ts.exec.hasInstance());
+    CHECK(ts.exec.hasInstance());
+    CHECK(ts.exec.isMainFunctionComplete());
+    CHECK_FALSE(ts.exec.isHandlerActive());
+}
+
+TEST_CASE("BytecodeHeader round trip")
+{
+    BytecodeHeader header;
+    header.isLSL = true;
+    header.apiVersion = 3;
+    header.stateHandlerMasks = {0x5, 0x8000000000000001ull};
+    header.chargedBytecodeSize = 4096;
+
+    std::string asset;
+    writeBytecodeHeader(asset, header);
+    const std::string bytecode = "not really bytecode";
+    asset += bytecode;
+
+    BytecodeHeader parsed;
+    size_t bytecode_start = 0;
+    REQUIRE(readBytecodeHeader(asset.data(), asset.size(), parsed, bytecode_start));
+    CHECK(parsed.isLSL);
+    CHECK(parsed.apiVersion == 3);
+    CHECK(parsed.stateHandlerMasks == header.stateHandlerMasks);
+    CHECK(parsed.chargedBytecodeSize == 4096);
+    CHECK(asset.substr(bytecode_start) == bytecode);
+
+    SUBCASE("SLua carries no masks")
+    {
+        BytecodeHeader slua;
+        std::string slua_asset;
+        writeBytecodeHeader(slua_asset, slua);
+        BytecodeHeader parsed_slua;
+        REQUIRE(readBytecodeHeader(slua_asset.data(), slua_asset.size(), parsed_slua, bytecode_start));
+        CHECK_FALSE(parsed_slua.isLSL);
+        CHECK(parsed_slua.stateHandlerMasks.empty());
+        CHECK(bytecode_start == slua_asset.size());
+    }
+
+    SUBCASE("bytes a newer writer appends are skipped")
+    {
+        // Grow the section by seven junk bytes, the way a newer minor would
+        std::string padded;
+        writeBytecodeHeader(padded, header);
+        size_t section_end = padded.size();
+        padded += "\xA5\xA5\xA5\xA5\xA5\xA5\xA5";
+        padded[12] = (char)(uint8_t)(section_end - 16 + 7);
+        padded += bytecode;
+        BytecodeHeader parsed_padded;
+        REQUIRE(readBytecodeHeader(padded.data(), padded.size(), parsed_padded, bytecode_start));
+        CHECK(parsed_padded.stateHandlerMasks == header.stateHandlerMasks);
+        CHECK(padded.substr(bytecode_start) == bytecode);
+    }
+
+    SUBCASE("malformed headers are refused")
+    {
+        // Layout: tag at 0, major at 4, minor at 8, section length at 12,
+        // is_lsl at 16, api_version at 17, num_states at 21
+        std::string bad_tag = asset;
+        bad_tag[0] = 'B';
+        CHECK_FALSE(readBytecodeHeader(bad_tag.data(), bad_tag.size(), parsed, bytecode_start));
+
+        std::string bad_major = asset;
+        bad_major[4] = (char)(kBytecodeHeaderFingerprint.major + 1);
+        CHECK_FALSE(readBytecodeHeader(bad_major.data(), bad_major.size(), parsed, bytecode_start));
+
+        std::string long_section = asset;
+        long_section[15] = (char)0x7F;
+        CHECK_FALSE(readBytecodeHeader(long_section.data(), long_section.size(), parsed, bytecode_start));
+
+        std::string many_states = asset;
+        many_states[24] = (char)0x7F;
+        CHECK_FALSE(readBytecodeHeader(many_states.data(), many_states.size(), parsed, bytecode_start));
+
+        for (size_t len : {size_t(0), size_t(4), size_t(12), size_t(16), size_t(25), size_t(40)})
+            CHECK_FALSE(readBytecodeHeader(asset.data(), len, parsed, bytecode_start));
+    }
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor image reads its flavor off the asset")
+{
+    std::string bytecode = Luau::compile(R"(
+        counter = 1
+    )");
+    TestProvisioner host;
+
+    SUBCASE("an unreadable header is a bad image, not a crash")
+    {
+        std::shared_ptr<IEnvironment> env = host.createEnvironment(false, 0);
+
+        TestAsset asset = makeAsset(bytecode);
+
+        // Anything past the header is a bytecode question, not a header one, so
+        // the parse itself says where to stop cutting
+        BytecodeHeader parsed;
+        size_t header_len = 0;
+        REQUIRE(readBytecodeHeader(asset.bytes.data(), asset.bytes.size(), parsed, header_len));
+
+        for (size_t len = 0; len < header_len; ++len)
+        {
+            CAPTURE(len);
+            ImageConfig config = asset;
+            config.assetSize = len;
+
+            std::shared_ptr<IImage> image = host.buildImage(env, config);
+            REQUIRE(image != nullptr);
+            CHECK_FALSE(image->isValid());
+        }
+
+        // And provisionScript() refuses outright, since it can't even pick an
+        // environment without the header
+        ImageConfig truncated = asset;
+        truncated.assetSize = 8;
+        CHECK(host.provisionScript(truncated, makeScriptConfig()) == nullptr);
+    }
+
+    SUBCASE("a zero charged size charges the bytecode, not the asset")
+    {
+        std::shared_ptr<IImage> honest = host.buildImage(host.createEnvironment(false, 0), makeAsset(bytecode));
+        REQUIRE(honest != nullptr);
+        REQUIRE(honest->isValid());
+        // Header growth must never move this number
+        CHECK(honest->getChargedBytecodeSize() == bytecode.size());
+
+        std::shared_ptr<IImage> declared = host.buildImage(host.createEnvironment(false, 0), makeAsset(bytecode, 4096));
+        REQUIRE(declared != nullptr);
+        REQUIRE(declared->isValid());
+        CHECK(declared->getChargedBytecodeSize() == 4096);
+    }
 }
 
 #ifdef LUAU_USE_TAILSLIDE
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL handler masks reach the image")
+{
+    TestAsset asset = compileTestAsset(R"(
+        default {
+            state_entry() {
+                print("default");
+            }
+        }
+        state busy {
+            state_entry() {
+                print("busy");
+            }
+            touch_start(integer num) {
+                print("touched");
+            }
+        }
+        state idle {
+            timer() {
+                print("tick");
+            }
+        }
+    )", true);
+
+    TestScript ts(asset);
+
+    // One mask per state, in state order, so a host can decide what to
+    // dispatch without standing an instance up first. Bit (index - 1), index
+    // being the event's position in builtins.txt: state_entry 1, touch_start 3,
+    // timer 12.
+    const std::vector<uint64_t>& masks = ts.exec.getImage().getStateHandlerMasks();
+    REQUIRE(masks.size() == 3);
+    CHECK(masks[0] == 0x1);
+    CHECK(masks[1] == 0x5);
+    CHECK(masks[2] == 0x800);
+}
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL lifecycle and reset")
 {
@@ -2445,23 +2691,44 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL lifecycle and reset")
     ts.loadDefaultState();
     Script& exec = ts.exec;
 
-    CHECK(exec.hasLSLEventHandler(0, "state_entry"));
-    CHECK_FALSE(exec.hasLSLEventHandler(0, "touch_start"));
+    // The constructor is staged like the SLua main, not run at load, and
+    // nothing can be dispatched over it. Unlike SLua's main it is not the
+    // state_entry handler, so that one is still pending behind it.
+    CHECK(exec.isHandlerActive());
+    CHECK_FALSE(exec.isMainFunctionComplete());
+    CHECK(exec.getCurrentHandler() == LSLEventBit::StateEntry);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::StateEntry);
+    // The asset says what the state handles, so there is nothing to wait for
+    CHECK(exec.eventHandlersKnown());
+    CHECK(exec.getEventHandlers() == LSLEventBit::StateEntry);
+    dispatch(exec, LSLEvent::StateEntry, HandlerRunStatus::Refused);
+    RunResult constructed = resume(exec);
+    CHECK(constructed.mainFunctionCompleted);
+    CHECK(exec.isMainFunctionComplete());
+    CHECK_FALSE(exec.isHandlerActive());
+    CHECK(exec.getCurrentHandler() == 0);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::StateEntry);
+
     // An event with no handler behind it reports that nothing ran, rather than
     // looking like a handler that completed
-    dispatch(exec, "touch_start", HandlerRunStatus::NotRun);
-    // The LSL constructor already ran during reset; no handler is staged
-    CHECK_FALSE(exec.isHandlerActive());
-    CHECK(exec.isMainFunctionComplete());
+    dispatch(exec, LSLEvent::TouchStart, HandlerRunStatus::NotRun);
+    CHECK(exec.getCurrentHandler() == 0);
+    CHECK(exec.getStickyHandler() == LSLEventBit::TouchStart);
 
-    dispatch(exec, "state_entry");
+    dispatch(exec, LSLEvent::StateEntry);
+    CHECK(exec.getCurrentEvents() == 0);
 
     // Globals persist between handler invocations of the same instance
-    dispatch(exec, "state_entry");
+    dispatch(exec, LSLEvent::StateEntry);
 
-    // A reset re-forks a pristine instance and reruns the constructor
+    // A reset re-forks a pristine instance and stages the constructor again,
+    // with the registers back at their defaults
     ts.reset();
-    dispatch(exec, "state_entry");
+    CHECK(exec.getCurrentHandler() == LSLEventBit::StateEntry);
+    CHECK(exec.getStickyHandler() == LSLEventBit::StateEntry);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::StateEntry);
+    resume(exec);
+    dispatch(exec, LSLEvent::StateEntry);
 
     checkCapture(ts.host.printed, {"six", "other", "six"});
 }
@@ -2473,6 +2740,88 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL state change")
             state_entry() {
                 state other;
             }
+            state_exit() {
+                print("leaving");
+            }
+        }
+        state other {
+            state_entry() {
+                print("in_other");
+            }
+            timer() {
+            }
+        }
+    )", true);
+    ts.start();
+    Script& exec = ts.exec;
+
+    RunResult result = dispatch(exec, LSLEvent::StateEntry, HandlerRunStatus::StateChange);
+    REQUIRE(result.newState == 1);
+    CHECK_FALSE(exec.isHandlerActive());
+    CHECK(exec.getCurrentHandler() == 0);
+
+    // The change is recorded but not committed, and the departing state's
+    // state_exit is pending because it has one
+    CHECK(exec.isStateChangePending());
+    CHECK(exec.getCurrentState() == 0);
+    CHECK(exec.getNextState() == 1);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::StateExit);
+    CHECK(exec.getEventHandlers() == (LSLEventBit::StateEntry | LSLEventBit::StateExit));
+
+    dispatch(exec, LSLEvent::StateExit);
+    CHECK(exec.getCurrentEvents() == 0);
+
+    // Committing swaps in the new state's handlers with its state_entry pending
+    CHECK(exec.nextState() == (LSLEventBit::StateEntry | LSLEventBit::Timer));
+    CHECK_FALSE(exec.isStateChangePending());
+    CHECK(exec.getCurrentState() == 1);
+    CHECK(exec.getCurrentEvents() == LSLEventBit::StateEntry);
+    CHECK(exec.getEventHandlers() == (LSLEventBit::StateEntry | LSLEventBit::Timer));
+
+    dispatch(exec, LSLEvent::StateEntry);
+    CHECK(exec.getCurrentEvents() == 0);
+    checkCapture(ts.host.printed, {"leaving", "in_other"});
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL state change with no state_exit")
+{
+    TestScript ts(R"(
+        default {
+            state_entry() {
+                state other;
+            }
+        }
+        state other {
+            timer() {
+                print("in_other");
+            }
+        }
+    )", true);
+    ts.start();
+    Script& exec = ts.exec;
+
+    // Nothing pends for a handler the departing state lacks
+    dispatch(exec, LSLEvent::StateEntry, HandlerRunStatus::StateChange);
+    CHECK(exec.isStateChangePending());
+    CHECK(exec.getCurrentEvents() == 0);
+
+    // Nor does state_entry pend for a state that doesn't handle it
+    CHECK(exec.nextState() == LSLEventBit::Timer);
+    CHECK(exec.getCurrentEvents() == 0);
+    dispatch(exec, LSLEvent::Timer);
+    checkCapture(ts.host.printed, {"in_other"});
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor state change survives serialization")
+{
+    TestAsset asset = compileTestAsset(R"(
+        default {
+            state_entry() {
+                state other;
+            }
+            state_exit() {
+                print("leaving");
+            }
         }
         state other {
             state_entry() {
@@ -2480,56 +2829,48 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL state change")
             }
         }
     )", true);
-    ts.loadDefaultState();
-    Script& exec = ts.exec;
 
-    RunResult result = dispatch(exec, "state_entry", HandlerRunStatus::StateChange);
-    CHECK(result.newState != 0);
-    CHECK_FALSE(exec.isHandlerActive());
-
-    // State register bookkeeping is the host's job; dispatch into the new state
-    REQUIRE(exec.hasLSLEventHandler(result.newState, "state_entry"));
-    dispatch(exec, result.newState, "state_entry");
-    checkCapture(ts.host.printed, {"in_other"});
-}
-
-TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor state change survives serialization")
-{
-    std::string bytecode = compileLSL(R"(
-        default {
-            state_entry() {
-                state other;
-            }
-        }
-        state other {
-            state_entry() {
-                print("in_other");
-            }
-        }
-    )");
-
-    TestScript first(bytecode, true);
-    first.loadDefaultState();
-
-    RunResult result = dispatch(first.exec, "state_entry", HandlerRunStatus::StateChange);
-    int new_state = result.newState;
-
-    // The host owns the state registers, so it serializes with the pending
-    // change recorded on its side and dispatches into the new state after
-    // restoring.
+    TestScript first(asset);
+    first.start();
+    dispatch(first.exec, LSLEvent::StateEntry, HandlerRunStatus::StateChange);
     std::string payload = serialize(first.exec);
 
-    TestScript second(bytecode, true);
-    restore(second.exec, payload);
+    SUBCASE("the uncommitted change restores intact")
+    {
+        TestScript second(asset);
+        restore(second.exec, payload);
+        Script& exec = second.exec;
+        CHECK(exec.isStateChangePending());
+        CHECK(exec.getCurrentState() == 0);
+        CHECK(exec.getNextState() == 1);
+        CHECK(exec.getCurrentEvents() == LSLEventBit::StateExit);
 
-    REQUIRE(second.exec.hasLSLEventHandler(new_state, "state_entry"));
-    dispatch(second.exec, new_state, "state_entry");
-    checkCapture(second.host.printed, {"in_other"});
+        dispatch(exec, LSLEvent::StateExit);
+        exec.nextState();
+        dispatch(exec, LSLEvent::StateEntry);
+        checkCapture(second.host.printed, {"leaving", "in_other"});
+    }
+
+    SUBCASE("a state the asset lacks is refused")
+    {
+        // Bytecode can be swapped behind a script's back; a payload heading
+        // into a state the replacement doesn't have is caught before the fork
+        TestScript fewer_states(compileTestAsset(R"(
+            default {
+                state_entry() {
+                    print("only state");
+                }
+            }
+        )", true));
+        CHECK_FALSE(fewer_states.exec.restoreState(payload.data(), payload.size()));
+        CHECK(fewer_states.exec.getFaultKind() != FaultKind::None);
+        CHECK_FALSE(fewer_states.exec.hasInstance());
+    }
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor serialize mid-handler roundtrip")
 {
-    std::string bytecode = compileLSL(R"(
+    TestAsset asset = compileTestAsset(R"(
         default {
             state_entry() {
                 integer i = 0;
@@ -2539,14 +2880,14 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor serialize mid-handler roundtrip")
                 print("done");
             }
         }
-    )");
+    )", true);
 
-    TestScript first(bytecode, true);
-    first.loadDefaultState();
+    TestScript first(asset);
+    first.start();
 
     // Preempt the handler mid-loop
     first.host.clock_step = 0.001;
-    dispatch(first.exec, "state_entry", HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
+    dispatch(first.exec, LSLEvent::StateEntry, HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
     REQUIRE(first.exec.isHandlerActive());
     CHECK(first.host.printed.empty());
 
@@ -2555,7 +2896,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor serialize mid-handler roundtrip")
 
     // Rehydrate the suspended handler in a second engine built from the same
     // bytecode and run it to completion there
-    TestScript second(bytecode, true);
+    TestScript second(asset);
     restore(second.exec, payload);
     REQUIRE(second.exec.isHandlerActive());
 

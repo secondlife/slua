@@ -2,6 +2,7 @@
 #include "luacode.h"
 
 #include "Luau/Compiler.h"
+#include "Luau/LSLBuiltins.h" // ServerLua
 
 #include <string.h>
 
@@ -61,4 +62,38 @@ void luau_set_compile_constant_vectord(lua_CompileConstant* constant, double x, 
 void luau_set_compile_constant_string(lua_CompileConstant* constant, const char* s, size_t l)
 {
     Luau::setCompileConstantString(constant, s, l);
+}
+
+// ServerLua: constant folder hook for the LSL builtins
+void luauSL_lookup_constant_cb(const char* library, const char* member, lua_CompileConstant* constant)
+{
+    // We only touch _globals_
+    if (library != nullptr)
+        return;
+
+    const Luau::SLConstant* sl_constant = Luau::luauSL_find_constant(member);
+    if (sl_constant == nullptr)
+        return;
+
+    switch (sl_constant->type)
+    {
+    case Luau::SLConstantType::String:
+        luau_set_compile_constant_string(constant, sl_constant->valueString, sl_constant->stringLength);
+        break;
+    case Luau::SLConstantType::Integer:
+        luau_set_compile_constant_number(constant, (double)sl_constant->valueInteger);
+        break;
+    case Luau::SLConstantType::Float:
+        luau_set_compile_constant_number(constant, sl_constant->valueNumber);
+        break;
+    case Luau::SLConstantType::Vector:
+    {
+        const auto& vec = sl_constant->valueVector;
+        luau_set_compile_constant_vector(constant, vec[0], vec[1], vec[2], 0.0f);
+        break;
+    }
+    default:
+        // Can't set these as compile-time constants.
+        break;
+    }
 }

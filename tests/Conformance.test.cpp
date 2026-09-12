@@ -1281,6 +1281,30 @@ TEST_CASE("Ares")
     runConformance("ares_errors.lua");
 }
 
+// Makes every persist in L's VM append junk inside each length-prefixed record,
+// standing in for fields a newer writer would have added
+static void setAresTestPadding(lua_State* L, unsigned padding)
+{
+    lua_pushunsigned(L, padding);
+    eris_set_setting(L, "testpad", -1);
+    lua_pop(L, 1);
+}
+
+TEST_CASE("Ares padded")
+{
+    ScopedFastFlag luauYieldIter{FFlag::LuauYieldIter2, true};
+
+    // Same scripts as "Ares", but every record the writer emits carries bytes
+    // the reader has never heard of. Round trips have to come out identical.
+    runConformance("ares.lua", [](lua_State* L) {
+        setupVectorHelpers(L);
+        setAresTestPadding(L, 7);
+    });
+    runConformance("ares_closures.lua", [](lua_State* L) { setAresTestPadding(L, 7); });
+    runConformance("ares_coros.lua", [](lua_State* L) { setAresTestPadding(L, 1); });
+    runConformance("ares_iterators.lua", [](lua_State* L) { setAresTestPadding(L, 64); });
+}
+
 static std::string getConformanceTestSource(const std::string &name) {
     std::string path = __FILE__;
     path.erase(path.find_last_of("\\/"));
@@ -1296,7 +1320,11 @@ static std::string getConformanceTestSource(const std::string &name) {
     return source;
 }
 
-TEST_CASE("Ares forkserver")
+// Runs ares_multirun.lua through the forkserver 4 times, serializing at every
+// yield and resuming from the serialized form. With `padding` set the writer
+// stuffs junk into every record. `on_serialized`, if given, sees each
+// serialized state before it is forked from.
+static void runForkserverRoundTrips(unsigned padding, void (*on_serialized)(lua_State* Lforker, const std::string& state) = nullptr)
 {
     std::string source = getConformanceTestSource("ares_multirun.lua");
     StateRef globalState(luaL_newstate(), lua_close);
@@ -1336,6 +1364,9 @@ TEST_CASE("Ares forkserver")
     eris_register_perms(GL, true);
     eris_register_perms(GL, false);
 
+    if (padding)
+        setAresTestPadding(GL, padding);
+
     // Spawn a new thread to load our script into
     lua_State* L = lua_newthread(GL);
     luaL_sandboxthread(L);
@@ -1369,6 +1400,14 @@ TEST_CASE("Ares forkserver")
             // serialized string is now on the Lforker stack
             eris_serialize_thread(Lforker, Lchild);
 
+            if (on_serialized)
+            {
+                size_t len = 0;
+                const char* data = lua_tolstring(Lforker, -1, &len);
+                REQUIRE(data != nullptr);
+                on_serialized(Lforker, std::string(data, len));
+            }
+
             // Pop the original thread
             lua_pop(GL, 1);
 
@@ -1393,6 +1432,47 @@ TEST_CASE("Ares forkserver")
 
     extern void luaC_validate(lua_State * L); // internal function, declared in lgc.h - not exposed via lua.h
     luaC_validate(GL);
+}
+
+TEST_CASE("Ares forkserver")
+{
+    runForkserverRoundTrips(0);
+}
+
+TEST_CASE("Ares forkserver padded")
+{
+    // Every record (header, objects, call frames) carries bytes this
+    // reader doesn't know; the script still resumes and finishes
+    runForkserverRoundTrips(7);
+}
+
+TEST_CASE("Ares truncated")
+{
+    // A state cut short anywhere, or with bytes after its root object, is
+    // refused with an error string and leaves the forker's stack as it found it
+    runForkserverRoundTrips(0, [](lua_State* Lforker, const std::string& state) {
+        REQUIRE(state.size() > 32);
+        // Every prefix once the states are small, a stride once they aren't
+        const size_t stride = state.size() < 4096 ? 1 : 7;
+        for (size_t len = 0; len < state.size(); len += stride)
+        {
+            CAPTURE(len);
+            int top = lua_gettop(Lforker);
+            lua_pushlstring(Lforker, state.data(), len);
+            REQUIRE(eris_fork_thread(Lforker, false, 2) == nullptr);
+            REQUIRE(lua_isstring(Lforker, -1));
+            lua_pop(Lforker, 1);
+            CHECK_EQ(lua_gettop(Lforker), top);
+        }
+
+        int top = lua_gettop(Lforker);
+        std::string trailing = state + "\xff";
+        lua_pushlstring(Lforker, trailing.data(), trailing.size());
+        REQUIRE(eris_fork_thread(Lforker, false, 2) == nullptr);
+        REQUIRE(lua_isstring(Lforker, -1));
+        lua_pop(Lforker, 1);
+        CHECK_EQ(lua_gettop(Lforker), top);
+    });
 }
 
 TEST_CASE("Ares Bad deserialize state")

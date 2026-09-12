@@ -4,6 +4,7 @@ target_sources(Luau.Common PRIVATE
     Common/include/Luau/Bytecode.h
     Common/include/Luau/BytecodeUtils.h
     Common/include/Luau/BytecodeWire.h
+    Common/include/Luau/ByteStream.h
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
     Common/include/Luau/HashUtil.h
@@ -47,6 +48,7 @@ target_sources(Luau.Bytecode PRIVATE
     Bytecode/include/Luau/BytecodeBuilder.h
     Bytecode/include/Luau/BytecodeCallInliner.h
     Bytecode/include/Luau/BytecodeGraph.h
+    Bytecode/include/Luau/BytecodeHeader.h
     Bytecode/include/Luau/BytecodeOps.h
     Bytecode/include/Luau/BytecodeValidation.h
     Bytecode/include/Luau/Sccp.h
@@ -55,6 +57,7 @@ target_sources(Luau.Bytecode PRIVATE
     Bytecode/src/BytecodeGraph.cpp
     Bytecode/src/BytecodeGraphParser.h
     Bytecode/src/BytecodeGraphSerializer.h
+    Bytecode/src/BytecodeHeader.cpp
     Bytecode/src/Sccp.cpp
 )
 
@@ -493,7 +496,6 @@ target_sources(Luau.VM PRIVATE
 
 # ServerLua: Luau.Executor Sources
 target_sources(Luau.Executor PRIVATE
-    Executor/include/Luau/ByteStream.h
     Executor/include/Luau/Executor.h
     Executor/include/Luau/Script.h
 
@@ -680,7 +682,9 @@ if(TARGET Luau.Conformance)
         tests/IrLowering.test.cpp
         tests/SharedCodeAllocator.test.cpp
         tests/SLConformance.test.cpp
+        tests/SLExecutorFixture.h
         tests/SLExecutor.test.cpp
+        tests/SLGoldenFixtures.test.cpp
         tests/main.cpp)
 
     if (LUAU_USE_TAILSLIDE)

@@ -14,6 +14,7 @@
 #include "llsl.h"
 #include "mono_floats.h"
 #include "Luau/Bytecode.h"
+#include "Luau/LSLBuiltins.h"
 #include "lllevents.h"
 #include "llltimers.h"
 #include "llprim.h"
@@ -1880,4 +1881,42 @@ int luaopen_sl(lua_State* L, int expose_internal_funcs)
 
     LUAU_ASSERT(lua_gettop(L) == top);
     return 1;
+}
+
+void luaSL_set_constant_globals(lua_State* L)
+{
+    for (const auto& item : Luau::luauSL_constants())
+    {
+        switch (item.second.type)
+        {
+        case Luau::SLConstantType::Quaternion:
+        {
+            const auto& quat = item.second.valueQuat;
+            luaSL_pushquaternion(L, quat[0], quat[1], quat[2], quat[3]);
+            break;
+        }
+        case Luau::SLConstantType::Key:
+            luaSL_pushuuidlstring(L, item.second.valueString, item.second.stringLength);
+            break;
+        case Luau::SLConstantType::String:
+            lua_pushlstring(L, item.second.valueString, item.second.stringLength);
+            break;
+        case Luau::SLConstantType::Integer:
+            lua_pushnumber(L, (double)item.second.valueInteger);
+            break;
+        case Luau::SLConstantType::Float:
+            // We specifically truncate to 32-bit precision
+            lua_pushnumber(L, (float)item.second.valueNumber);
+            break;
+        case Luau::SLConstantType::Vector:
+        {
+            const auto& vec = item.second.valueVector;
+            lua_pushvector(L, vec[0], vec[1], vec[2]);
+            break;
+        }
+        default:
+            continue;
+        }
+        lua_setglobal(L, item.first.c_str());
+    }
 }

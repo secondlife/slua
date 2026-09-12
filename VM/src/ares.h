@@ -39,36 +39,7 @@ THE SOFTWARE.
 */
 
 /**
- * This provides an interface to Eris' persist functionality for writing in
- * an arbitrary way, using a writer.
- *
- * When called, the stack in 'L' must look like this:
- * 1: perms:table
- * 2: value:any
- *
- * 'writer' is the writer stream used to store all data.
- *
- * [-0, +0, e]
- */
-LUA_API void eris_dump(lua_State* L, std::ostream *writer);
-
-/**
- * This provides an interface to Eris' unpersist functionality for reading
- * in an arbitrary way, using a reader.
- *
- * When called, the stack in 'L' must look like this:
- * 1: perms:table
- *
- * 'reader' is the reader stream used to read all data
- *
- * The result of the operation will be pushed onto the stack.
- *
- * [-0, +1, e]
- */
-LUA_API void eris_undump(lua_State* L, std::istream *reader);
-
-/**
- * This is a stack-based alternative to eris_dump.
+ * Persists a value to a string on the stack.
  *
  * It expects the perms table at the specified index 'perms' and the value to
  * persist at the specified index 'value'. It will push the resulting string
@@ -79,7 +50,7 @@ LUA_API void eris_undump(lua_State* L, std::istream *reader);
 LUA_API int eris_persist(lua_State* L, int perms, int value);
 
 /**
- * This is a stack-based alternative to eris_undump.
+ * Unpersists a value from a string on the stack.
  *
  * It expects the perms table at the specified index 'perms' and the string
  * containing persisted data at the specified index 'value'. It will push the

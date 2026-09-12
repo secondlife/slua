@@ -5374,6 +5374,27 @@ std::string compile(const std::string& source, const CompileOptions& options, co
     }
 }
 
+// ServerLua: asset-returning counterpart to compileOrThrow()
+std::string compileAssetOrThrow(
+    const std::string& source,
+    uint32_t apiVersion,
+    const CompileOptions& options,
+    const ParseOptions& parseOptions,
+    BytecodeEncoder* encoder
+)
+{
+    BytecodeBuilder bcb(encoder);
+    compileOrThrow(bcb, source, options, parseOptions);
+
+    BytecodeHeader header;
+    header.apiVersion = apiVersion;
+
+    std::string asset;
+    writeBytecodeHeader(asset, header);
+    asset += bcb.getBytecode();
+    return asset;
+}
+
 void setCompileConstantNil(CompileConstant* constant)
 {
     Compile::Constant* target = reinterpret_cast<Compile::Constant*>(constant);

@@ -81,6 +81,8 @@ LUA_API int luaSL_pushuuidstring(lua_State *L, const char *str);
 LUA_API int luaSL_pushuuidbytes(lua_State *L, const uint8_t *bytes);
 LUA_API int luaSL_pushquaternion(lua_State *L, double x, double y, double z, double s);
 LUA_API int luaSL_pushdetectedevent(lua_State *L, int index, bool valid, bool can_change_damage);
+// Pushes every constant from the loaded builtins.txt onto _G
+LUA_API void luaSL_set_constant_globals(lua_State *L);
 LUA_API int luaSL_createeventmanager(lua_State *L);
 LUA_API int luaSL_createtimermanager(lua_State *L);
 LUA_API const char *luaSL_checkuuid(lua_State *L, int num_arg, bool * compressed);
