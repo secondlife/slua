@@ -205,10 +205,12 @@ protected:
 
     // Durable subclass state, written in its own length-prefixed section after
     // our own fields. Only append to it; the reader gets a ByteReader bounded
-    // to the section and may leave trailing bytes it doesn't know unread. A
-    // subclass partway down a hierarchy chains to its base before its own.
+    // to the section and may leave trailing bytes it doesn't know unread, and
+    // `major`/`minor` are what the payload's getStateFingerprint() said, so a
+    // reader can tell an older writer from a truncated section. A subclass
+    // partway down a hierarchy chains to its base before its own.
     virtual bool serializeExtra(ByteWriter&) const { return true; }
-    virtual bool restoreExtra(ByteReader&) { return true; }
+    virtual bool restoreExtra(ByteReader&, uint32_t major, uint32_t minor) { return true; }
 
     static void interruptHandler(lua_State* L, int gc);
     static int memoryLimitCallback(lua_State* L, size_t osize, size_t nsize);

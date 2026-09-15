@@ -845,8 +845,8 @@ bool Script::restoreState(const char* data, size_t len)
         return false;
     }
 
-    // Subclass state comes last
-    if (!restoreExtra(extra))
+    // Subclass state comes last, with the class fingerprint's version
+    if (!restoreExtra(extra, major, minor))
     {
         logWarn(logSource(), "Script state's trailing section is unusable");
         setFault(FaultKind::Runtime, "invalid script state");

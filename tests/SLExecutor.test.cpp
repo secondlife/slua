@@ -2001,7 +2001,10 @@ protected:
         return true;
     }
 
-    bool restoreExtra(ByteReader& reader) override { return reader.readS32(counter) && reader.readString(label); }
+    bool restoreExtra(ByteReader& reader, uint32_t major, uint32_t minor) override
+    {
+        return reader.readS32(counter) && reader.readString(label);
+    }
 
 private:
     static void counting_interrupt(lua_State* L, int gc)
@@ -2034,12 +2037,12 @@ protected:
         return true;
     }
 
-    bool restoreExtra(ByteReader& reader) override
+    bool restoreExtra(ByteReader& reader, uint32_t major, uint32_t minor) override
     {
-        if (!StatefulScript::restoreExtra(reader))
+        if (!StatefulScript::restoreExtra(reader, major, minor))
             return false;
-        // Appended after 1.0, so a 1.0 payload simply doesn't carry it
-        if (reader.remaining >= sizeof(int32_t))
+        // Appended in 1.1, so a 1.0 payload simply doesn't carry it
+        if (minor >= 1)
             return reader.readS32(newer);
         newer = -1;
         return true;
