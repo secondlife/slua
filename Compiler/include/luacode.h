@@ -76,6 +76,12 @@ LUACODE_API char* luau_compile(const char* source, size_t size, lua_CompileOptio
 // compile LSL source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
 LUACODE_API char* luau_lsl_compile(const char* source, size_t size, size_t* outsize, bool *is_error);
 
+// ServerLua: like luau_compile, but the result is a complete asset, a BytecodeHeader followed by the bytecode
+LUACODE_API char* luau_compile_asset(const char* source, size_t size, lua_CompileOptions* options, uint32_t api_version, size_t* outsize);
+
+// ServerLua: like luau_lsl_compile, but the result is a complete asset with the state handler masks in its header
+LUACODE_API char* luau_lsl_compile_asset(const char* source, size_t size, uint32_t api_version, size_t* outsize, bool *is_error);
+
 // when libraryMemberConstantCb is called, these methods can be used to set a value of the opaque lua_CompileConstant struct
 // vector component 'w' is not visible to VM runtime configured with LUA_VECTOR_SIZE == 3, but can affect constant folding during compilation
 // string storage must outlive the invocation of 'luau_compile' which used the callback

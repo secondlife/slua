@@ -2363,3 +2363,40 @@ char* luau_lsl_compile(const char* source, size_t size, size_t* outsize, bool *i
     *outsize = result.size();
     return copy;
 }
+
+char* luau_lsl_compile_asset(const char* source, size_t size, uint32_t api_version, size_t* outsize, bool *is_error)
+{
+    *outsize = 0;
+    std::string result;
+    try
+    {
+        result = compileLSLAssetOrThrow(std::string(source, size), api_version);
+        *is_error = false;
+    }
+    catch(Luau::ParseErrors &e)
+    {
+        std::string msg = ": Parse Errors:";
+        for (const Luau::ParseError &error : e.getErrors()) {
+            msg += Luau::format("\nLine %d: %s", error.getLocation().begin.line, error.what());
+        }
+
+        result = msg;
+        *is_error = true;
+    }
+    catch(Luau::CompileError &e)
+    {
+        // Users of this function expect only a single error message
+        std::string error = Luau::format(":%d: %s", e.getLocation().begin.line, e.what());
+
+        result = error;
+        *is_error = true;
+    }
+
+    char* copy = static_cast<char*>(malloc(result.size()));
+    if (!copy)
+        return nullptr;
+
+    memcpy(copy, result.data(), result.size());
+    *outsize = result.size();
+    return copy;
+}

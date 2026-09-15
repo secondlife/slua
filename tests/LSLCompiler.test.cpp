@@ -4,8 +4,12 @@
 #include "Luau/LSLBuiltins.h"
 #include "Luau/Compiler.h"
 #include "Luau/ParseResult.h"
+#include "luacode.h"
 
 #include "doctest.h"
+
+#include <cstdlib>
+#include <cstring>
 
 using namespace Luau;
 
@@ -52,6 +56,42 @@ state two {
     REQUIRE(info.stateHandlerMasks.size() == 2);
     CHECK(info.stateHandlerMasks[0] == LSLEventBit::StateExit);
     CHECK(info.stateHandlerMasks[1] == (LSLEventBit::StateEntry | LSLEventBit::MovingStart));
+}
+
+TEST_CASE("LSLCompileAssetCAPI")
+{
+    const char* source = R"(
+default {
+    state_entry() {}
+    timer() {}
+}
+state two {
+    touch_start(integer n) {}
+}
+)";
+    size_t size = 0;
+    bool is_error = true;
+    char* asset = luau_lsl_compile_asset(source, strlen(source), 7, &size, &is_error);
+    REQUIRE(asset != nullptr);
+    CHECK_FALSE(is_error);
+
+    BytecodeHeader header;
+    size_t bytecode_start = 0;
+    REQUIRE(readBytecodeHeader(asset, size, header, bytecode_start));
+    CHECK(header.isLSL);
+    CHECK(header.apiVersion == 7);
+    REQUIRE(header.stateHandlerMasks.size() == 2);
+    CHECK(header.stateHandlerMasks[0] == (LSLEventBit::StateEntry | LSLEventBit::Timer));
+    CHECK(header.stateHandlerMasks[1] == LSLEventBit::TouchStart);
+    CHECK(bytecode_start < size);
+    free(asset);
+
+    const char* broken = "default { state_entry() { integer x = undeclared_var; } }";
+    char* error = luau_lsl_compile_asset(broken, strlen(broken), 0, &size, &is_error);
+    REQUIRE(error != nullptr);
+    CHECK(is_error);
+    CHECK(std::string(error, size).find("undeclared_var") != std::string::npos);
+    free(error);
 }
 
 TEST_CASE("SingleError")

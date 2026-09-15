@@ -1269,6 +1269,34 @@ static std::vector<Luau::CodeGen::FunctionBytecodeSummary> analyzeFile(const cha
 
 TEST_SUITE_BEGIN("Conformance");
 
+TEST_CASE("CompileAssetCAPI")
+{
+    const std::string source = "return 1";
+    size_t size = 0;
+    char* asset = luau_compile_asset(source.data(), source.size(), nullptr, 3, &size);
+    REQUIRE(asset != nullptr);
+    REQUIRE(size > 0);
+    CHECK(asset[0] != '\0');
+
+    Luau::BytecodeHeader header;
+    size_t bytecode_start = 0;
+    REQUIRE(Luau::readBytecodeHeader(asset, size, header, bytecode_start));
+    CHECK_FALSE(header.isLSL);
+    CHECK(header.apiVersion == 3);
+    CHECK(header.stateHandlerMasks.empty());
+    CHECK(bytecode_start < size);
+    free(asset);
+
+    // A failed compile keeps luau_compile's encoding: a leading NUL then the message
+    const std::string broken = "return +";
+    char* error = luau_compile_asset(broken.data(), broken.size(), nullptr, 0, &size);
+    REQUIRE(error != nullptr);
+    REQUIRE(size > 1);
+    CHECK(error[0] == '\0');
+    CHECK(std::string(error + 1, size - 1).rfind(":1:", 0) == 0);
+    free(error);
+}
+
 TEST_CASE("Ares")
 {
     // ServerLua: iterator yield + persist tests require the yieldable FORGLOOP path
