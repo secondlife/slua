@@ -313,12 +313,12 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures")
     // Every state file this build is expected to load. Collected before the
     // subcases so the skips don't each cost a run of the body.
     std::vector<std::string> loadable;
-    REQUIRE(traverseDirectory(dir, [&](const std::string& path) {
+    auto collect = [&](const std::string& path)
+    {
         if (!hasFileExtension(path, {".state"}))
             return;
 
         const std::string name = fileStem(path);
-        CAPTURE(name);
 
 #ifndef LUAU_USE_TAILSLIDE
         // No LSL compiler in this build, so those scenarios can't run
@@ -328,7 +328,8 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures")
 #endif
 
         loadable.push_back(path);
-    }));
+    };
+    REQUIRE(traverseDirectory(dir, collect));
     REQUIRE_FALSE(loadable.empty());
 
     // A subcase each, so a scenario that breaks says which one it was rather
