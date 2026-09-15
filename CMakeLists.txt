@@ -378,7 +378,7 @@ if(LUAU_BUILD_TESTS)
     target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luau.Conformance PRIVATE extern VM/src "${PACKAGE_INCLUDE_DIR}")
     target_link_directories(Luau.Conformance PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Bytecode Luau.Inliner Luau.Compiler Luau.CodeGen Luau.VM Luau.Executor Luau.LSLBuiltins "${TAILSLIDE_LIBRARY}")
+    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Bytecode Luau.Inliner Luau.Compiler Luau.CodeGen Luau.VM Luau.Executor Luau.LSLBuiltins Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
 
     if(CMAKE_SYSTEM_NAME MATCHES "Android|iOS")
         set(LUAU_CONFORMANCE_SOURCE_DIR "Client/Luau/tests/conformance")

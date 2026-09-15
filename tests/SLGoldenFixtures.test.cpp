@@ -10,13 +10,13 @@
 // verify against it, so a state written by an older build has to keep working.
 #include "SLExecutorFixture.h"
 
+#include "Luau/FileUtils.h"
 #include "Luau/ParseResult.h"
 
 #include "doctest.h"
 
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -176,14 +176,14 @@ static std::string goldenFixtureBase(const GoldenScenario& scenario)
            std::to_string(ARES_FORMAT_MAJOR) + "." + std::to_string(ARES_FORMAT_MINOR) + "-" + scenario.name;
 }
 
-static std::string readBinaryFile(const std::filesystem::path& path)
+static std::string readBinaryFile(const std::string& path)
 {
     std::ifstream stream(path, std::ios::binary);
     REQUIRE(stream);
     return std::string(std::istreambuf_iterator<char>(stream), {});
 }
 
-static void writeBinaryFile(const std::filesystem::path& path, const std::string& data)
+static void writeBinaryFile(const std::string& path, const std::string& data)
 {
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     REQUIRE(stream);
@@ -191,10 +191,15 @@ static void writeBinaryFile(const std::filesystem::path& path, const std::string
     REQUIRE(stream);
 }
 
-// Pulls the two majors back out of an `execA.B-aresC.D-<name>` stem
-static bool parseGoldenFixtureMajors(const std::string& stem, uint32_t& exec_major, uint32_t& ares_major)
+// The file name without its directory or final extension
+static std::string fileStem(const std::string& path)
 {
-    return sscanf(stem.c_str(), "exec%u.%*u-ares%u.", &exec_major, &ares_major) == 2;
+    size_t start = path.find_last_of("/\\");
+    start = start == std::string::npos ? 0 : start + 1;
+    size_t dot = path.rfind('.');
+    if (dot == std::string::npos || dot < start)
+        dot = path.size();
+    return path.substr(start, dot - start);
 }
 
 // The scenario a fixture belongs to, from the name its stem ends with
@@ -226,9 +231,9 @@ static bool isLSLScenario(std::string_view name)
 // Compiling is the one place a bad source throws, and doctest is built without
 // exceptions (tests/main.cpp), so letting that escape would abort the run
 // instead of saying which file is wrong.
-static bool compileGoldenScenario(const std::filesystem::path& dir, const GoldenScenario& scenario, TestAsset& asset)
+static bool compileGoldenScenario(const std::string& dir, const GoldenScenario& scenario, TestAsset& asset)
 {
-    const std::filesystem::path source = dir / scenario.name;
+    const std::string source = dir + "/" + scenario.name;
     const std::string text = readBinaryFile(source);
     try
     {
@@ -237,14 +242,14 @@ static bool compileGoldenScenario(const std::filesystem::path& dir, const Golden
     }
     catch (const ParseErrors& e)
     {
-        std::string message = source.string();
+        std::string message = source;
         for (const ParseError& error : e.getErrors())
             message += "\n  " + std::to_string(error.getLocation().begin.line + 1) + ": " + error.what();
         FAIL_CHECK(message);
     }
     catch (const CompileError& e)
     {
-        std::string message = source.string();
+        std::string message = source;
         message += "\n  " + std::to_string(e.getLocation().begin.line + 1) + ": " + e.what();
         FAIL_CHECK(message);
     }
@@ -252,7 +257,7 @@ static bool compileGoldenScenario(const std::filesystem::path& dir, const Golden
 }
 
 // Drives a fresh script into the scenario's resting state and serializes it
-static void writeGoldenFixture(const std::filesystem::path& dir, const GoldenScenario& scenario)
+static void writeGoldenFixture(const std::string& dir, const GoldenScenario& scenario)
 {
     TestAsset asset;
     if (!compileGoldenScenario(dir, scenario, asset))
@@ -261,9 +266,9 @@ static void writeGoldenFixture(const std::filesystem::path& dir, const GoldenSce
     TestScript ts(asset);
     scenario.arrange(ts);
 
-    std::string base = goldenFixtureBase(scenario);
-    writeBinaryFile(dir / (base + ".sluac"), asset.bytes);
-    writeBinaryFile(dir / (base + ".state"), serialize(ts.exec));
+    std::string base = dir + "/" + goldenFixtureBase(scenario);
+    writeBinaryFile(base + ".sluac", asset.bytes);
+    writeBinaryFile(base + ".state", serialize(ts.exec));
 }
 
 TEST_SUITE_BEGIN("SLExecutor");
@@ -277,8 +282,9 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures regenerate")
     if (std::getenv("LUAU_REGENERATE_FIXTURES") == nullptr)
         return;
 
-    const std::filesystem::path dir = goldenFixtureDir();
-    std::filesystem::create_directories(dir);
+    const std::string dir = goldenFixtureDir();
+    // The fixtures live in the source tree, so there is nothing to create
+    REQUIRE(isDirectory(dir));
 
     for (const GoldenScenario& scenario : kGoldenScenarios)
     {
@@ -291,57 +297,49 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures regenerate")
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures")
 {
-    const std::filesystem::path dir = goldenFixtureDir();
+    const std::string dir = goldenFixtureDir();
 
-    REQUIRE(std::filesystem::is_directory(dir));
+    REQUIRE(isDirectory(dir));
 
     // Verify we _do_ have a dump on the current version for each scenario.
     for (const GoldenScenario& scenario : kGoldenScenarios)
     {
-        const std::string base = goldenFixtureBase(scenario);
+        const std::string base = dir + "/" + goldenFixtureBase(scenario);
         CAPTURE(base);
-        REQUIRE(std::filesystem::exists(dir / (base + ".state")));
-        REQUIRE(std::filesystem::exists(dir / (base + ".sluac")));
+        REQUIRE(isFile(base + ".state"));
+        REQUIRE(isFile(base + ".sluac"));
     }
 
     // Every state file this build is expected to load. Collected before the
     // subcases so the skips don't each cost a run of the body.
-    std::vector<std::filesystem::path> loadable;
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(dir))
-    {
-        if (entry.path().extension() != ".state")
-            continue;
+    std::vector<std::string> loadable;
+    REQUIRE(traverseDirectory(dir, [&](const std::string& path) {
+        if (!hasFileExtension(path, {".state"}))
+            return;
 
-        // Ares majors back to ARES_MIN_SUPPORTED_MAJOR still load
-        uint32_t exec_major = 0;
-        uint32_t ares_major = 0;
-        const std::string name = entry.path().stem().string();
+        const std::string name = fileStem(path);
         CAPTURE(name);
-        REQUIRE(parseGoldenFixtureMajors(name, exec_major, ares_major));
-        if (exec_major != kScriptStateFingerprint.major || ares_major < ARES_MIN_SUPPORTED_MAJOR)
-            continue;
 
 #ifndef LUAU_USE_TAILSLIDE
         // No LSL compiler in this build, so those scenarios can't run
         const GoldenScenario* scenario = findGoldenScenario(name);
         if (scenario != nullptr && isLSLScenario(scenario->name))
-            continue;
+            return;
 #endif
 
-        loadable.push_back(entry.path());
-    }
+        loadable.push_back(path);
+    }));
     REQUIRE_FALSE(loadable.empty());
 
     // A subcase each, so a scenario that breaks says which one it was rather
     // than taking the rest of them down with it.
-    for (const std::filesystem::path& state_path : loadable)
+    for (const std::string& state_path : loadable)
     {
-        const std::string name = state_path.stem().string();
+        const std::string name = fileStem(state_path);
         SUBCASE(name.c_str())
         {
-            std::filesystem::path asset_path = state_path;
-            asset_path.replace_extension(".sluac");
-            REQUIRE(std::filesystem::exists(asset_path));
+            const std::string asset_path = state_path.substr(0, state_path.size() - 6) + ".sluac";
+            REQUIRE(isFile(asset_path));
 
             // The committed asset says what flavor it is, so the filename
             // doesn't have to, and it goes in whole the way a host would hand
