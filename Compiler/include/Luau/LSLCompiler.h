@@ -52,6 +52,11 @@ protected:
     LuauSymbolMap *_mSymData = nullptr;
     uint32_t _mTopFuncID = 0;
     uint32_t _mTopStateID = 0;
+    // One handled-events mask per state, indexed by state number
+    std::vector<uint64_t> _mStateMasks;
+
+public:
+    const std::vector<uint64_t> &getStateMasks() const { return _mStateMasks; }
 };
 
 
@@ -142,7 +147,17 @@ public:
 
 }
 
-void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source);
-std::string compileLSL(const std::string &source);
+// What the compiler learned about a script beyond its bytecode
+struct LSLScriptInfo {
+    // One mask per state, indexed by state number. Bit (index - 1) is set for
+    // each event the state handles, index being the event's 1-based position
+    // in builtins.txt, which Tailslide records on the event symbol.
+    std::vector<uint64_t> stateHandlerMasks;
+};
+
+void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source, LSLScriptInfo *info = nullptr);
+std::string compileLSL(const std::string &source, LSLScriptInfo *info = nullptr);
+
+std::string compileLSLAssetOrThrow(const std::string &source, uint32_t apiVersion = 0);
 
 #endif // LUAU_LSLCOMPILER_H

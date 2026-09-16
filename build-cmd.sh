@@ -43,7 +43,10 @@ pushd "$top"
     cp -v luacode.h "$stage/include/luau/"
     popd
     cp -rv "Common/include/Luau" "$stage/include/luau/"
-    cp -v "Executor/include/Luau/Executor.h" "Executor/include/Luau/Script.h" "Executor/include/Luau/ByteStream.h" "$stage/include/luau/Luau/"
+    # The executor's public headers, and what they include from other libraries
+    cp -v "Executor/include/Luau/Executor.h" "Executor/include/Luau/Script.h" "$stage/include/luau/Luau/"
+    cp -v "Bytecode/include/Luau/BytecodeHeader.h" "$stage/include/luau/Luau/"
+    cp -v "LSLBuiltins/include/Luau/LSLBuiltins.h" "$stage/include/luau/Luau/"
 
     # Don't litter the source directory with build artifacts
     mkdir -p "$stage/build"
@@ -81,6 +84,7 @@ pushd "$top"
             cp -v "Release/Luau.Config.lib" "$stage/lib/release/"
             cp -v "Release/Luau.VM.lib" "$stage/lib/release/"
             cp -v "Release/Luau.Executor.lib" "$stage/lib/release/"
+            cp -v "Release/Luau.LSLBuiltins.lib" "$stage/lib/release/"
             cp -v "Release/Luau.Common.lib" "$stage/lib/release/"
 
             cp -v Release/slua.exe "$stage/bin/"
@@ -110,6 +114,7 @@ pushd "$top"
             cp -v "libLuau.Config.a" "$stage/lib/release"
             cp -v "libLuau.VM.a" "$stage/lib/release"
             cp -v "libLuau.Executor.a" "$stage/lib/release"
+            cp -v "libLuau.LSLBuiltins.a" "$stage/lib/release"
 
             cp -v "slua" "$stage/bin/"
             cp -v "slua-harness" "$stage/bin/"

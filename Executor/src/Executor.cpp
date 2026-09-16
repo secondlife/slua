@@ -152,9 +152,6 @@ lua_State* Environment::openVM()
 
 Image::Image(std::shared_ptr<IEnvironment> environment, const ImageConfig& config)
     : mEnvironment(std::move(environment))
-    , mIsLSL(config.isLSL)
-    , mAPIVersion(config.apiVersion)
-    , mChargedBytecodeSize(config.chargedBytecodeSize)
     , mName(config.name ? config.name : "")
 {
 }
@@ -171,11 +168,36 @@ void Image::build(const ImageConfig& config)
 {
     lua_State* L = mEnvironment->getBaseState();
 
-    if (config.bytecode == nullptr || config.bytecodeSize == 0)
+    size_t bytecode_start = 0;
+    if (!readBytecodeHeader(config.asset, config.assetSize, mHeader, bytecode_start))
+    {
+        mError = "Invalid asset header";
+        logWarn(logSource(), "%s", mError.c_str());
+        return;
+    }
+
+    // Both come off the header now, so this catches a caller that built the
+    // environment from something other than this asset
+    if (mEnvironment->isLSL() != mHeader.isLSL || mEnvironment->getAPIVersion() != mHeader.apiVersion)
+    {
+        mError = "Asset flavor does not match the environment";
+        logWarn(logSource(), "%s", mError.c_str());
+        return;
+    }
+
+    const char* bytecode = config.asset + bytecode_start;
+    const size_t bytecode_size = config.assetSize - bytecode_start;
+    if (bytecode_size == 0)
     {
         mError = "Invalid bytecode";
         return;
     }
+
+    // A charged size of zero means the asset has nothing to hide, so the real
+    // bytecode length stands. Never the asset length: growing the header would
+    // otherwise move every script's reported memory.
+    mChargedBytecodeSize = mHeader.chargedBytecodeSize != 0 ? mHeader.chargedBytecodeSize : bytecode_size;
+
     LUAU_ASSERT(lua_gettop(L) == 0);
 
     // Make sure we create the thread with a user memcat!
@@ -193,7 +215,7 @@ void Image::build(const ImageConfig& config)
         // This works out because even if things are interned cross-script, we know which
         // user memcat objects should be considered "free" for the user, generally constants.
         MemcatGuard guard{clone_base, kUserMemcat};
-        result = luau_load(clone_base, config.chunkname ? config.chunkname : "=lua_script", config.bytecode, config.bytecodeSize, 0);
+        result = luau_load(clone_base, mHeader.isLSL ? "=lsl_script" : "=lua_script", bytecode, bytecode_size, 0);
     }
     if (result != 0)
     {

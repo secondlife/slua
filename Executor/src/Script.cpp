@@ -1,4 +1,5 @@
 #include "Luau/Script.h"
+#include "Luau/LSLBuiltins.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -198,6 +199,8 @@ bool Script::reset()
     // Whatever was running is forfeit, so we always satisfy loadDefaultState()'s
     // "no live instance" precondition.
     mInstance = Instance();
+    // A reset also puts the memory limit back to the default, like
+    // llResetScript(). A first load keeps whatever the host configured.
     mMemoryLimit = kDefaultMemoryLimit;
 
     return loadDefaultState();
@@ -205,14 +208,8 @@ bool Script::reset()
 
 bool Script::loadDefaultState()
 {
-    LUAU_ASSERT(!mInExecution);
-
-    if (mInstance)
-    {
-        logWarn(logSource(), "Refusing to load the default state over a live script instance");
-        setFault(FaultKind::Runtime, "invalid script state");
-        return false;
-    }
+    // Loading over a live instance is a host sequencing bug, not a script state
+    LUAU_ASSERT_ALWAYS(!mInExecution && !mInstance);
 
     mMaxPossibleSize = 0;
     mExactSize = 0;
@@ -222,9 +219,7 @@ bool Script::loadDefaultState()
     mMandatoryDeadline = 0.0;
     mExcludedTime = 0.0;
     mSleep = 0.0f;
-    // in LSL we treat the main function as complete, since it runs
-    // while loading the image.
-    mMainFunctionComplete = mIsLSL;
+    mMainFunctionComplete = false;
     clearFault();
 
     // Alright, let's fork off a new instance
@@ -235,6 +230,16 @@ bool Script::loadDefaultState()
         return false;
     }
     lua_State* instance = mInstance.thread();
+
+    mCurrentState = 0;
+    mNextState = 0;
+    mCurrentHandler = LSLEventBit::StateEntry;
+    mStickyHandler = LSLEventBit::StateEntry;
+    // For LSL, we need to let it know that `state_entry()`
+    // is pending, because we abuse `state_entry`'s handler
+    // flag to also mean "in the main function".
+    mCurrentEvents = mIsLSL ? LSLEventBit::StateEntry : 0;
+    mEventHandlers = stateHandlerMask(0);
 
     // Attach the LLEvents/LLTimers managers for SLua
     if (!mIsLSL)
@@ -251,42 +256,12 @@ bool Script::loadDefaultState()
         lua_setglobal(instance, LLTIMERS_GLOBAL_NAME);
     }
 
-    if (mIsLSL)
-    {
-        // Let the "constructor" run for trivial LSL scripts
-        int status;
-        {
-            ExecutionScope script_scope(this);
-            // Make sure allocs are attributed to the user script
-            MemcatGuard guard{instance, kUserMemcat};
-            status = safe_lua_resume(instance, nullptr, 0);
-        }
-
-        // If the constructor failed or yielded... something terrible happened.
-        if (status != LUA_OK)
-        {
-            setLuaFaultFromStatus(instance, status);
-            // This is most likely to happen if someone induces OoMs due to list construction in the constructor.
-            logWarn(logSource(), "LSL constructor failed somehow?");
-            mInstance = Instance();
-            return false;
-        }
-
-        // Create persistent handler thread. Stack is empty after constructor.
-        lua_newthread(instance);
-        LUAU_ASSERT(lua_getmemcat(lua_tothread(instance, 1)) == kUserMemcat);
-    }
-    else
-    {
-        // Create persistent handler thread and move the main function onto it.
-        // The main function may define locals that handlers close over, but that's fine:
-        // lua_resetthread calls luaF_close which migrates open upvalues to heap-allocated
-        // copies, so handler closures in LLEvents/globals continue to work.
-        lua_newthread(instance);
-        lua_insert(instance, 1);
-        LUAU_ASSERT(lua_getmemcat(lua_tothread(instance, 1)) == kUserMemcat);
-        lua_xmove(instance, lua_tothread(instance, 1), 1);
-    }
+    // Create the persistent handler thread and stage the main function on it,
+    // to be run as the first handler.
+    lua_newthread(instance);
+    lua_insert(instance, 1);
+    LUAU_ASSERT(lua_getmemcat(lua_tothread(instance, 1)) == kUserMemcat);
+    lua_xmove(instance, lua_tothread(instance, 1), 1);
 
     LUAU_ASSERT(lua_gettop(instance) == 1);
     return true;
@@ -351,13 +326,24 @@ void Script::setForceYield(bool force)
         mInterruptInstaller->installNow();
 }
 
-RunResult Script::callEventHandler(int lsl_state, const char* event_name, PushArgsFn pushArgs, void* push_args_ctx)
+RunResult Script::callEventHandler(int event_index, PushArgsFn pushArgs, void* push_args_ctx)
 {
+    if (mFaultKind != FaultKind::None)
+    {
+        logWarn(logSource(), "Refusing to run event %d handler on a faulted script", event_index);
+        return {HandlerRunStatus::Fault, 0};
+    }
     if (isHandlerActive())
     {
-        logWarn(logSource(), "Ignoring call to %s handler while another handler is resumable", event_name);
+        logWarn(logSource(), "Ignoring call to event %d handler while another handler is resumable", event_index);
         return {HandlerRunStatus::Refused, 0};
     }
+    const char* event_name = lslEventName(event_index);
+    LUAU_ASSERT_ALWAYS(event_name != nullptr);
+
+    auto event_bit = lslEventBit(event_index);
+    mStickyHandler = mCurrentHandler = event_bit;
+    mCurrentEvents &= ~event_bit;
 
     // Track the new thread as mHandlerState and make sure it's cleaned up correctly
     HandlerScope handler_scope(this, true);
@@ -376,7 +362,7 @@ RunResult Script::callEventHandler(int lsl_state, const char* event_name, PushAr
         }
         else
         {
-            pushEventHandlerFunction(mHandlerState, lsl_state, event_name);
+            pushEventHandlerFunction(mHandlerState, event_name);
         }
 
         if (!lua_isfunction(mHandlerState, 1))
@@ -438,6 +424,11 @@ RunResult Script::callEventHandler(int lsl_state, const char* event_name, PushAr
 
 RunResult Script::resumeEventHandler()
 {
+    if (mFaultKind != FaultKind::None)
+    {
+        logWarn(logSource(), "Refusing to resume a handler on a faulted script");
+        return {HandlerRunStatus::Fault, 0};
+    }
     // Resuming a reset handler thread would hand lua_resume an empty stack
     if (!isHandlerActive())
     {
@@ -546,7 +537,7 @@ RunResult Script::handleEventHandlerStatus(int status)
             return {HandlerRunStatus::Fault, 0};
         }
         // Report the completion on the transition only, so the host acts on
-        // it exactly once. LSL starts out complete and never reports.
+        // it exactly once.
         bool first_completion = !mMainFunctionComplete;
         mMainFunctionComplete = true;
         destroyHandlerThread();
@@ -558,21 +549,34 @@ RunResult Script::handleEventHandlerStatus(int status)
             destroyHandlerThread();
             return {HandlerRunStatus::Fault, 0};
         }
+        // Preemption goes through lua_break, so a yield is either LSL's state
+        // change or the script's own coroutine.yield on the handler thread
         if (mIsLSL && lua_gettop(mHandlerState) == 1)
         {
             // Just yielded a new state number, mark this handler finished.
-            // Setting the next state register and state_exit queueing are the
-            // host's job.
+            // The host commits the change with nextState() once any
+            // state_exit has run.
             int isnum = 0;
             int new_state = (int)lua_tounsignedx(mHandlerState, 1, &isnum);
-            if (!isnum)
+            if (!isnum || new_state < 0 || (size_t)new_state >= mImage->getStateHandlerMasks().size())
             {
                 setFault(FaultKind::Runtime, "invalid state change");
                 destroyHandlerThread();
                 return {HandlerRunStatus::Fault, 0};
             }
             destroyHandlerThread();
+            // The departing state's state_exit runs first, if it has one
+            mNextState = new_state;
+            if (mEventHandlers & LSLEventBit::StateExit)
+                mCurrentEvents |= LSLEventBit::StateExit;
             return {HandlerRunStatus::StateChange, new_state};
+        }
+        if (lua_gettop(mHandlerState) > 0)
+        {
+            // Value-bearing yields are reserved for the engine's own use
+            setFault(FaultKind::UnexpectedYield, "unexpected yield");
+            destroyHandlerThread();
+            return {HandlerRunStatus::Fault, 0};
         }
         return {HandlerRunStatus::Preempted, 0};
     case LUA_BREAK:
@@ -595,6 +599,7 @@ void Script::destroyHandlerThread()
     LUAU_ASSERT(lua_gettop(instance) == 1 && lua_tothread(instance, 1) == mHandlerState);
     lua_resetthread(lua_tothread(instance, 1));
     mHandlerState = nullptr;
+    mCurrentHandler = 0;
 }
 
 void Script::abortHandler()
@@ -603,9 +608,38 @@ void Script::abortHandler()
     if (!isHandlerActive())
         return;
     lua_resetthread(lua_tothread(mInstance.thread(), 1));
+    mCurrentHandler = 0;
 }
 
-void Script::pushEventHandlerFunction(lua_State* L, int lsl_state, const char* event_name)
+uint64_t Script::stateHandlerMask(int state) const
+{
+    if (!mIsLSL)
+        return 0;
+    const std::vector<uint64_t>& masks = mImage->getStateHandlerMasks();
+    if (state < 0 || (size_t)state >= masks.size())
+        return 0;
+    return masks[state];
+}
+
+void Script::setEventHandlers(uint64_t handlers)
+{
+    // The asset header is authoritative for LSL
+    LUAU_ASSERT(!mIsLSL);
+    mEventHandlers = handlers;
+}
+
+uint64_t Script::nextState()
+{
+    LUAU_ASSERT(mIsLSL);
+    LUAU_ASSERT(!mInExecution);
+    mCurrentState = mNextState;
+    mEventHandlers = stateHandlerMask(mCurrentState);
+    // A state without state_entry has nothing pending
+    mCurrentEvents = LSLEventBit::StateEntry & mEventHandlers;
+    return mEventHandlers;
+}
+
+void Script::pushEventHandlerFunction(lua_State* L, const char* event_name)
 {
     LUAU_ASSERT(mIsLSL);
 
@@ -614,23 +648,8 @@ void Script::pushEventHandlerFunction(lua_State* L, int lsl_state, const char* e
 
     // Figure out what the function name for this handler should be
     char eh_global_name[256] = {0};
-    snprintf(eh_global_name, sizeof(eh_global_name), "_e%d/%s", lsl_state, event_name);
+    snprintf(eh_global_name, sizeof(eh_global_name), "_e%d/%s", mCurrentState, event_name);
     lua_getglobal(L, eh_global_name);
-}
-
-bool Script::hasLSLEventHandler(int lsl_state, const char* event_name)
-{
-    if (!mInstance)
-        return false;
-
-    if (!mIsLSL)
-        return false;
-
-    lua_State* instance = mInstance.thread();
-    pushEventHandlerFunction(instance, lsl_state, event_name);
-    bool has_handler = lua_isfunction(instance, -1);
-    lua_pop(instance, 1);
-    return has_handler;
 }
 
 bool Script::serializeState(std::string& out)
@@ -649,8 +668,17 @@ bool Script::serializeState(std::string& out)
     const StateFingerprint fingerprint = getStateFingerprint();
 
     ByteWriter writer{out};
+    // Our fingerprint leads as the family magic, so a tool that only knows
+    // the base layout can read the core section of any subclass's payload.
+    // The concrete class's fingerprint follows and says whose payload it is.
+    writer.writeBytes(kScriptStateFingerprint.tag, sizeof(kScriptStateFingerprint.tag));
+    writer.writeU32(kScriptStateFingerprint.major);
+    writer.writeU32(kScriptStateFingerprint.minor);
     writer.writeBytes(fingerprint.tag, sizeof(fingerprint.tag));
-    writer.writeU32(fingerprint.version);
+    writer.writeU32(fingerprint.major);
+    writer.writeU32(fingerprint.minor);
+
+    size_t core = writer.beginSection();
     writer.writeF32(mSleep);
     // The limit drifts at runtime (llSetMemoryLimit), so it is engine state
     // the payload must carry
@@ -659,24 +687,37 @@ bool Script::serializeState(std::string& out)
     writer.writeString(mFaultString);
     writer.writeString(mExtendedFaultString.data(), std::min(mExtendedFaultString.size(), kMaxPersistedFaultLen));
     writer.writeU8((uint8_t)mMainFunctionComplete);
-    writer.writeString(ares_blob);
-
     // The image flavor this state came off, so restoring it into the wrong
     // image fails here rather than somewhere inside Ares
     writer.writeU8((uint8_t)mIsLSL);
     writer.writeU32(mAPIVersion);
+    writer.writeS32(mCurrentState);
+    writer.writeS32(mNextState);
+    writer.writeU64(mCurrentHandler);
+    writer.writeU64(mStickyHandler);
+    writer.writeU64(mCurrentEvents);
+    writer.writeU64(mEventHandlers);
+    // New core fields go here, and bump kScriptStateFingerprint.minor
+    writer.endSection(core);
 
-    return serializeExtra(writer);
+    writer.writeString(ares_blob);
+
+    size_t extra = writer.beginSection();
+    if (!serializeExtra(writer))
+        return false;
+    writer.endSection(extra);
+    return true;
 }
 
 bool Script::restoreState(const char* data, size_t len)
 {
-    LUAU_ASSERT(!mInExecution && !mInstance);
+    LUAU_ASSERT_ALWAYS(!mInExecution && !mInstance);
 
     // Parse the whole payload before touching anything, so a bad one leaves
     // us exactly as we were
     ByteReader reader{data, len};
-    uint32_t version = 0;
+    uint32_t major = 0;
+    uint32_t minor = 0;
     float sleep = 0.0f;
     uint32_t memory_limit = 0;
     uint8_t fault_kind = 0;
@@ -686,21 +727,41 @@ bool Script::restoreState(const char* data, size_t len)
     std::string ares_blob;
     uint8_t is_lsl = 0;
     uint32_t api_version = 0;
+    int32_t current_state = 0;
+    int32_t next_state = 0;
+    uint64_t current_handler = 0;
+    uint64_t sticky_handler = 0;
+    uint64_t current_events = 0;
+    uint64_t event_handlers = 0;
+    ByteReader core{nullptr, 0};
+    ByteReader extra{nullptr, 0};
 
     const StateFingerprint fingerprint = getStateFingerprint();
 
     char tag[sizeof(fingerprint.tag)];
-    if (!reader.readBytes(tag, sizeof(tag)) || memcmp(tag, fingerprint.tag, sizeof(tag)) != 0)
+    if (!reader.readBytes(tag, sizeof(tag)) || memcmp(tag, kScriptStateFingerprint.tag, sizeof(tag)) != 0)
     {
         logWarn(logSource(), "Script state has no recognisable header");
         setFault(FaultKind::Runtime, "invalid script state");
         return false;
     }
-    // Payloads from older builds still load. ones from a newer build we can
-    // only refuse, since we don't know what moved.
-    if (!reader.readU32(version) || version > fingerprint.version)
+    // Minor mismatch is allowed, but major needs the explicit addition of a new code path.
+    if (!reader.readU32(major) || !reader.readU32(minor) || major != kScriptStateFingerprint.major)
     {
-        logWarn(logSource(), "Unsupported script state version %u", version);
+        logWarn(logSource(), "Unsupported script state version %u.%u", major, minor);
+        setFault(FaultKind::Runtime, "invalid script state");
+        return false;
+    }
+    // A payload meant for another class is refused here, before anything is forked
+    if (!reader.readBytes(tag, sizeof(tag)) || memcmp(tag, fingerprint.tag, sizeof(tag)) != 0)
+    {
+        logWarn(logSource(), "Script state belongs to another script class");
+        setFault(FaultKind::Runtime, "invalid script state");
+        return false;
+    }
+    if (!reader.readU32(major) || !reader.readU32(minor) || major != fingerprint.major)
+    {
+        logWarn(logSource(), "Unsupported script extra state version %u.%u", major, minor);
         setFault(FaultKind::Runtime, "invalid script state");
         return false;
     }
@@ -716,15 +777,33 @@ bool Script::restoreState(const char* data, size_t len)
         } \
     } while (false)
 
-    READ_OR_BAIL(reader.readF32(sleep));
-    READ_OR_BAIL(reader.readU32(memory_limit));
-    READ_OR_BAIL(reader.readU8(fault_kind));
-    READ_OR_BAIL(reader.readString(fault_string));
-    READ_OR_BAIL(reader.readString(extended_fault_string));
-    READ_OR_BAIL(reader.readU8(main_function_complete));
+    READ_OR_BAIL(reader.readSection(core));
+    READ_OR_BAIL(core.readF32(sleep));
+    READ_OR_BAIL(core.readU32(memory_limit));
+    READ_OR_BAIL(core.readU8(fault_kind));
+    READ_OR_BAIL(core.readString(fault_string));
+    READ_OR_BAIL(core.readString(extended_fault_string));
+    READ_OR_BAIL(core.readU8(main_function_complete));
+    READ_OR_BAIL(core.readU8(is_lsl));
+    READ_OR_BAIL(core.readU32(api_version));
+    READ_OR_BAIL(core.readS32(current_state));
+    READ_OR_BAIL(core.readS32(next_state));
+    READ_OR_BAIL(core.readU64(current_handler));
+    READ_OR_BAIL(core.readU64(sticky_handler));
+    READ_OR_BAIL(core.readU64(current_events));
+    READ_OR_BAIL(core.readU64(event_handlers));
+    // Fields appended after minor 0 are read here only if the section has them
+
     READ_OR_BAIL(reader.readString(ares_blob));
-    READ_OR_BAIL(reader.readU8(is_lsl));
-    READ_OR_BAIL(reader.readU32(api_version));
+
+    READ_OR_BAIL(reader.readSection(extra));
+
+    if (!reader.atEnd())
+    {
+        logWarn(logSource(), "Script state has trailing bytes");
+        setFault(FaultKind::Runtime, "invalid script state");
+        return false;
+    }
 
 #undef READ_OR_BAIL
     if ((is_lsl != 0) != mIsLSL || api_version != mAPIVersion)
@@ -741,6 +820,15 @@ bool Script::restoreState(const char* data, size_t len)
         return false;
     }
 
+    // SLua has no states, LSL's have to exist in the asset
+    const int num_states = mIsLSL ? (int)mImage->getStateHandlerMasks().size() : 1;
+    if (current_state < 0 || current_state >= num_states || next_state < 0 || next_state >= num_states)
+    {
+        logWarn(logSource(), "Script state names an LSL state the asset lacks (%d -> %d)", current_state, next_state);
+        setFault(FaultKind::Runtime, "invalid script state");
+        return false;
+    }
+
     mInstance = mImage->forkInstance(this, &ares_blob);
     if (!mInstance)
     {
@@ -748,9 +836,17 @@ bool Script::restoreState(const char* data, size_t len)
         return false;
     }
 
-    // Subclass state comes last, once there's a live instance for it to key off.
-    // Anything left over means we didn't understand the whole payload.
-    if (!restoreExtra(reader) || reader.remaining != 0)
+    // Check our homework RE: handler registration.
+    if (isHandlerActive() != (current_handler != 0))
+    {
+        logWarn(logSource(), "Script state's handler register disagrees with its handler thread");
+        setFault(FaultKind::Runtime, "invalid script state");
+        mInstance = Instance();
+        return false;
+    }
+
+    // Subclass state comes last, with the class fingerprint's version
+    if (!restoreExtra(extra, major, minor))
     {
         logWarn(logSource(), "Script state's trailing section is unusable");
         setFault(FaultKind::Runtime, "invalid script state");
@@ -764,6 +860,14 @@ bool Script::restoreState(const char* data, size_t len)
     mFaultString = fault_string;
     mExtendedFaultString = extended_fault_string;
     mMainFunctionComplete = main_function_complete != 0;
+    mCurrentState = current_state;
+    mNextState = next_state;
+    mCurrentHandler = current_handler;
+    mStickyHandler = sticky_handler;
+    mCurrentEvents = current_events;
+    // Bytecode may be swapped behind a script's back, so LSL's handler set
+    // comes off the asset it is actually running rather than the payload
+    mEventHandlers = mIsLSL ? stateHandlerMask(mCurrentState) : event_handlers;
     mMaxPossibleSize = 0;
     mExactSize = 0;
     mExactSizeDirty = true;

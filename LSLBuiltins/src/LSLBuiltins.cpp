@@ -3,43 +3,53 @@
 #include <sstream>
 #include <fstream>
 #include <regex>
+#include <iterator>
 #include <list>
 #include <unordered_map>
+#include <vector>
 
 #include "Luau/Common.h"
-#include "lua.h"
-#include "llsl.h"
-#include "luacode.h"
+#include "Luau/LSLBuiltins.h"
 
 #include "builtins_embedded.h"
 
-static const std::unordered_map<std::string, LSLIType> sTypeNameToType = {
-    {"void", LSLIType::LST_NULL},
-    {"integer", LSLIType::LST_INTEGER},
-    {"float", LSLIType::LST_FLOATINGPOINT},
-    {"string", LSLIType::LST_STRING},
-    {"key", LSLIType::LST_KEY},
-    {"vector", LSLIType::LST_VECTOR},
-    {"rotation", LSLIType::LST_QUATERNION},
-    {"list", LSLIType::LST_LIST},
-};
+using Luau::SLConstant;
+using Luau::SLConstantType;
 
-struct SLConstant
-{
-    LSLIType type = LSLIType::LST_ERROR;
-    size_t stringLength = 0;
-
-    union
-    {
-        int32_t valueInteger;
-        double valueNumber;
-        float valueVector[3];
-        float valueQuat[4];
-        const char* valueString = nullptr; // length stored in stringLength
-    };
+static const std::unordered_map<std::string, SLConstantType> sTypeNameToType = {
+    {"void", SLConstantType::Void},
+    {"integer", SLConstantType::Integer},
+    {"float", SLConstantType::Float},
+    {"string", SLConstantType::String},
+    {"key", SLConstantType::Key},
+    {"vector", SLConstantType::Vector},
+    {"rotation", SLConstantType::Quaternion},
+    {"list", SLConstantType::List},
 };
 
 static std::unordered_map<std::string, SLConstant> sSLConstants = {};
+
+static const char* const kKnownEventNames[] = {
+#define LUAU_LSL_EVENT_NAME(name, str) str,
+    LUAU_LSL_EVENTS(LUAU_LSL_EVENT_NAME)
+#undef LUAU_LSL_EVENT_NAME
+};
+static_assert(std::size(kKnownEventNames) == Luau::LSLEvent::KnownCount - 1);
+
+// Starts out as the enum's events, replaced by whatever builtins.txt lists
+static std::vector<std::string> sLSLEventNames(std::begin(kKnownEventNames), std::end(kKnownEventNames));
+
+static std::unordered_map<std::string, int> index_event_names(const std::vector<std::string>& names)
+{
+    std::unordered_map<std::string, int> indices;
+    for (size_t i = 0; i < names.size(); ++i)
+        indices.emplace(names[i], (int)i + 1);
+    return indices;
+}
+
+// Normally I don't sanction use of statics like this, but I don't give a flexi about plumbing
+// this through correctly everywhere.
+static std::unordered_map<std::string, int> sLSLEventIndices = index_event_names(sLSLEventNames);
 // This holds the allocations for the strings in the SLConstant instances
 // We use a list because we don't want the values moving around in memory like a vector would do.
 static std::list<std::string> sSLConstantStrings = {};
@@ -47,7 +57,7 @@ static std::list<std::string> sSLConstantStrings = {};
 static const std::regex UUID_REGEX = std::regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", std::regex::icase);
 
 
-LSLIType str_to_type(const std::string& str)
+static SLConstantType str_to_type(const std::string& str)
 {
     auto type_iter = sTypeNameToType.find(str);
     if (type_iter != sTypeNameToType.end())
@@ -60,6 +70,7 @@ LSLIType str_to_type(const std::string& str)
 // Helper to parse builtins from any input stream
 static void parse_builtins(std::istream& stream, const char* source_name)
 {
+    std::vector<std::string> events;
     std::string line;
     while (std::getline(stream, line))
     {
@@ -70,6 +81,21 @@ static void parse_builtins(std::istream& stream, const char* source_name)
         std::string line_type;
         std::istringstream iss(line);
         iss >> line_type;
+
+        if (line_type == "event")
+        {
+            // `event name( args )`, and the file's order is the event's number
+            std::string rest = line.substr(iss.tellg());
+            size_t name_start = rest.find_first_not_of(" \t");
+            size_t name_end = rest.find_first_of(" \t(", name_start);
+            if (name_start == std::string::npos || name_end == std::string::npos)
+            {
+                fprintf(stderr, "error parsing %s: %s\n", source_name, line.c_str());
+                exit(EXIT_FAILURE);
+            }
+            events.push_back(rest.substr(name_start, name_end - name_start));
+            continue;
+        }
 
         if (line_type != "const")
             continue;
@@ -92,7 +118,7 @@ static void parse_builtins(std::istream& stream, const char* source_name)
         value = value.erase(value.find_last_not_of(" \n\r\t") + 1);
         value = value.erase(0, value.find_first_not_of(" \n\r\t"));
 
-        LSLIType const_type = str_to_type(ret_type);
+        SLConstantType const_type = str_to_type(ret_type);
         SLConstant const_item;
         const_item.type = const_type;
 
@@ -105,7 +131,7 @@ CONST_PARSE_FAIL(); \
 
         switch (const_type)
         {
-        case LSLIType::LST_INTEGER:
+        case SLConstantType::Integer:
         {
             int32_t const_val;
             CONST_SSCANF(1, "%d", &const_val);
@@ -117,14 +143,14 @@ CONST_PARSE_FAIL(); \
             const_item.valueInteger = (double)const_val;
             break;
         }
-        case LSLIType::LST_FLOATINGPOINT:
+        case SLConstantType::Float:
         {
             float const_val;
             CONST_SSCANF(1, "%f", &const_val);
             const_item.valueNumber = const_val;
             break;
         }
-        case LSLIType::LST_VECTOR:
+        case SLConstantType::Vector:
         {
             float x, y, z;
             CONST_SSCANF(3, "<%f, %f, %f>", &x, &y, &z);
@@ -133,7 +159,7 @@ CONST_PARSE_FAIL(); \
             const_item.valueVector[2] = z;
             break;
         }
-        case LSLIType::LST_QUATERNION:
+        case SLConstantType::Quaternion:
         {
             float x, y, z, w;
             CONST_SSCANF(4, "<%f, %f, %f, %f>", &x, &y, &z, &w);
@@ -143,8 +169,8 @@ CONST_PARSE_FAIL(); \
             const_item.valueQuat[3] = w;
             break;
         }
-        case LSLIType::LST_STRING:
-        case LSLIType::LST_KEY:
+        case SLConstantType::String:
+        case SLConstantType::Key:
         {
             if (value[0] != '"' || value[value.length() - 1] != '"')
             {
@@ -171,7 +197,7 @@ CONST_PARSE_FAIL(); \
             if (std::regex_match(const_val, UUID_REGEX))
             {
                 // This is something the sim would treat as a UUID constant even though it's a string in LSL.
-                const_item.type = LSLIType::LST_KEY;
+                const_item.type = SLConstantType::Key;
             }
             const auto &stored_str = sSLConstantStrings.emplace_back(const_val);
             const_item.stringLength = stored_str.length();
@@ -185,6 +211,14 @@ CONST_PARSE_FAIL(); \
     }
 #undef CONST_PARSE_FAIL
 #undef CONST_SSCANF
+
+    // The engine numbers events off this list, and assumes the ones it knows
+    // sit where its enum says
+    if (!events.empty() && !Luau::setLSLEventNames(events))
+    {
+        fprintf(stderr, "%s: events are not in the order LSLBuiltins.h expects\n", source_name);
+        exit(EXIT_FAILURE);
+    }
 }
 
 // Called once at startup, not thread-safe.
@@ -214,75 +248,49 @@ void luauSL_init_global_builtins(const char* builtins_file)
     }
 }
 
-void luauSL_lookup_constant_cb(const char* library, const char* member, lua_CompileConstant* constant)
+bool Luau::setLSLEventNames(const std::vector<std::string>& names)
 {
-    // We only touch _globals_
-    if (library != nullptr)
-        return;
-
-    const auto &const_iter = sSLConstants.find(member);
-    if (const_iter != sSLConstants.end())
+    if (names.size() < std::size(kKnownEventNames))
+        return false;
+    for (size_t i = 0; i < std::size(kKnownEventNames); ++i)
     {
-        const auto &sl_constant = const_iter->second;
-        switch (sl_constant.type)
-        {
-        case LSLIType::LST_STRING:
-            luau_set_compile_constant_string(constant, sl_constant.valueString, sl_constant.stringLength);
-            break;
-        case LSLIType::LST_INTEGER:
-            luau_set_compile_constant_number(constant, (double)sl_constant.valueInteger);
-            break;
-        case LSLIType::LST_FLOATINGPOINT:
-            luau_set_compile_constant_number(constant, sl_constant.valueNumber);
-            break;
-        case LSLIType::LST_VECTOR:
-        {
-            const auto &vec = sl_constant.valueVector;
-            luau_set_compile_constant_vector(constant, vec[0], vec[1], vec[2], 0.0f);
-            break;
-        }
-        default:
-            // Can't set these as compile-time constants.
-            break;
-        }
+        if (names[i] != kKnownEventNames[i])
+            return false;
     }
+    sLSLEventNames = names;
+    sLSLEventIndices = index_event_names(names);
+    return true;
 }
 
-void luaSL_set_constant_globals(lua_State *L)
+const std::vector<std::string>& Luau::getLSLEventNames()
 {
-    // Push constants onto _G.
-    for (const auto &item : sSLConstants)
-    {
-        switch(item.second.type)
-        {
-        case LSLIType::LST_QUATERNION:
-        {
-            const auto &quat = item.second.valueQuat;
-            luaSL_pushquaternion(L, quat[0], quat[1], quat[2], quat[3]);
-            break;
-        }
-        case LSLIType::LST_KEY:
-            luaSL_pushuuidlstring(L, item.second.valueString, item.second.stringLength);
-            break;
-        case LSLIType::LST_STRING:
-            lua_pushlstring(L, item.second.valueString, item.second.stringLength);
-            break;
-        case LSLIType::LST_INTEGER:
-            lua_pushnumber(L, (double)item.second.valueInteger);
-            break;
-        case LSLIType::LST_FLOATINGPOINT:
-            // We specifically truncate to 32-bit precision
-            lua_pushnumber(L, (float)item.second.valueNumber);
-            break;
-        case LSLIType::LST_VECTOR:
-        {
-            const auto &vec = item.second.valueVector;
-            lua_pushvector(L, vec[0], vec[1], vec[2]);
-            break;
-        }
-        default:
-            continue;
-        }
-        lua_setglobal(L, item.first.c_str());
-    }
+    return sLSLEventNames;
+}
+
+int Luau::lslEventIndex(const char* name)
+{
+    if (name == nullptr)
+        return 0;
+    const auto& found = sLSLEventIndices.find(name);
+    return found != sLSLEventIndices.end() ? found->second : 0;
+}
+
+const char* Luau::lslEventName(int index)
+{
+    if (index < 1 || (size_t)index > sLSLEventNames.size())
+        return nullptr;
+    return sLSLEventNames[index - 1].c_str();
+}
+
+const std::unordered_map<std::string, SLConstant>& Luau::luauSL_constants()
+{
+    return sSLConstants;
+}
+
+const SLConstant* Luau::luauSL_find_constant(const char* name)
+{
+    if (name == nullptr)
+        return nullptr;
+    const auto& const_iter = sSLConstants.find(name);
+    return const_iter != sSLConstants.end() ? &const_iter->second : nullptr;
 }

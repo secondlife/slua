@@ -785,6 +785,15 @@ static void populateperms(lua_State *L, bool forUnpersist)
 #undef eris_persist_base_cont
 #undef eris_persist_cont
 
+// Ares stream format version. A reader accepts any minor under a major it
+// supports: fields are only ever appended to length-prefixed records, so a
+// newer minor's extra bytes are skipped and an older minor's missing ones
+// default. The major moves only for a change that can't be expressed that way,
+// and the reader keeps every major back to ARES_MIN_SUPPORTED_MAJOR readable.
+#define ARES_FORMAT_MAJOR 6
+#define ARES_FORMAT_MINOR 0
+#define ARES_MIN_SUPPORTED_MAJOR 6
+
 LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
 
 // `threaddata`, when set, is stamped as the threaddata of every thread in the
@@ -793,25 +802,9 @@ LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
 LUA_API lua_State *eris_fork_thread(lua_State *Lforker, uint8_t default_state, uint8_t memcat, void *threaddata = nullptr);
 LUA_API int eris_serialize_thread(lua_State *Lforker, lua_State *L);
 LUA_API void eris_set_compile_func(void (*compile_func)(lua_State*, int));
-LUA_API void eris_dump(lua_State* L, std::ostream *writer);
 LUA_API void eris_set_setting(lua_State *L, const char *name, int value);
 LUA_API void eris_populate_perms(lua_State *L, bool for_unpersist);
 LUA_API void eris_register_perms(lua_State *L, bool for_unpersist);
-
-/**
- * This provides an interface to Eris' unpersist functionality for reading
- * in an arbitrary way, using a reader.
- *
- * When called, the stack in 'L' must look like this:
- * 1: perms:table
- *
- * 'reader' is the reader stream used to read all data
- *
- * The result of the operation will be pushed onto the stack.
- *
- * [-0, +1, e]
- */
-LUA_API void eris_undump(lua_State* L, std::istream *reader);
 
 /*
 ** {======================================================================
@@ -906,7 +899,6 @@ struct lua_Callbacks
 
     void (*onallocate)(lua_State* L, size_t osize, size_t nsize); // gets called when memory is allocated
     // gets called before memory is allocated, return non-zero to fail the alloc. Only called for allocs in user memcats.
-    // ServerLua: called even while the GC is paused (GCthreshold == SIZE_MAX), so gate on your own state if that matters.
     int (*beforeallocate)(lua_State* L, size_t osize, size_t nsize);
 };
 typedef struct lua_Callbacks lua_Callbacks;

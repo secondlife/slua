@@ -2,6 +2,7 @@
 #include "Luau/CodeGenOptions.h"
 #include "lua.h"
 #include "lualib.h"
+#include "luacode.h"
 
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"

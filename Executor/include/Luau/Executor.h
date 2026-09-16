@@ -2,10 +2,14 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "lua.h"
+
+#include "Luau/BytecodeHeader.h"
 
 namespace Luau
 {
@@ -19,14 +23,6 @@ constexpr int kUserMemcat = LUA_FIRST_USER_MEMCAT;
 // Default (and normal maximum) per-script memory limit
 constexpr int kDefaultMemoryLimit = 1024 * 128;
 
-// Identifies which class a persisted payload belongs to, and which layout it
-// used. Bump `version` whenever that class's fields change.
-struct StateFingerprint
-{
-    char tag[4];
-    uint32_t version;
-};
-
 // Log levels for LogCallback
 enum class LogLevel : uint8_t
 {
@@ -39,17 +35,11 @@ enum class LogLevel : uint8_t
 // Parameters that define the sealed image consumed by buildImage()
 struct ImageConfig
 {
-    // Luau bytecode with any host asset header already stripped off
-    const char* bytecode = nullptr;
-    size_t bytecodeSize = 0;
-    bool isLSL = false;
-    uint32_t apiVersion = 0;
-    // We want to leave open the possibility that we can change bytecode behind
-    // people's backs for upgrading reasons. Keep around the amount we want to
-    // actually "charge" them for the bytecode size for memory accounting purposes
-    // so this doesn't break scripts.
-    size_t chargedBytecodeSize = 0;
-    const char* chunkname = "=lua_script";
+    // The stored asset: a BytecodeHeader followed by the Luau bytecode. The
+    // flavor, API version and charged size all come off the header, so there
+    // is only ever one source for them.
+    const char* asset = nullptr;
+    size_t assetSize = 0;
     // Identifier used in build log messages. Probably an asset UUID.
     const char* name = "";
 };
@@ -88,6 +78,7 @@ inline LogCallback& logCallback()
 void logDebug(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logInfo(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 void logWarn(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
+void logError(const char* source, const char* fmt, ...) LUA_PRINTF_ATTR(2, 3);
 
 // Monotonic seconds for the per-safepoint elapsed check, which is the one
 // place clock cost shows up in throughput. Nothing else reads it.
@@ -361,6 +352,10 @@ public:
     virtual bool isLSL() const = 0;
     virtual uint32_t getAPIVersion() const = 0;
 
+    // The asset's per-state handler masks, for deciding what to dispatch.
+    // Empty for SLua, which registers its handlers at runtime instead.
+    virtual const std::vector<uint64_t>& getStateHandlerMasks() const = 0;
+
     // Forks off an instance using the forkserver, either with the default
     // state blob, or a provided one if we're resuming.
     virtual Instance forkInstance(lua_SLRuntimeState* owner, const std::string* blob = nullptr) = 0;
@@ -394,8 +389,9 @@ public:
     const std::string& getName() const override { return mName; }
     IEnvironment& getEnvironment() const override { return *mEnvironment; }
     IProvisioner& getProvisioner() const override { return mEnvironment->getProvisioner(); }
-    bool isLSL() const override { return mIsLSL; }
-    uint32_t getAPIVersion() const override { return mAPIVersion; }
+    bool isLSL() const override { return mHeader.isLSL; }
+    uint32_t getAPIVersion() const override { return mHeader.apiVersion; }
+    const std::vector<uint64_t>& getStateHandlerMasks() const override { return mHeader.stateHandlerMasks; }
 
     Instance forkInstance(lua_SLRuntimeState* owner, const std::string* blob) override;
     bool serializeInstance(const Instance& instance, std::string& out) override;
@@ -417,8 +413,8 @@ private:
     // Keeps the environment alive for as long as the image exists
     std::shared_ptr<IEnvironment> mEnvironment;
 
-    bool mIsLSL = false;
-    uint32_t mAPIVersion = 0;
+    // Parsed off the front of the asset by build()
+    BytecodeHeader mHeader;
 
     // Ares forkserver thread holding the pristine post-load snapshot,
     // anchored in the environment's registry
@@ -493,11 +489,6 @@ public:
             logWarn(config.name ? config.name : "", "Refusing to build image in an environment provisioned elsewhere");
             return nullptr;
         }
-        if (environment->isLSL() != config.isLSL || environment->getAPIVersion() != config.apiVersion)
-        {
-            logWarn(config.name ? config.name : "", "Refusing to build image in an environment of a different flavor");
-            return nullptr;
-        }
 
         std::shared_ptr<Image> image = makeImage(std::move(environment), config);
         image->build(config);
@@ -523,7 +514,17 @@ public:
     // Convenience method so you don't have to do the above manually.
     std::shared_ptr<Script> provisionScript(const ImageConfig& image_config, const ScriptConfig& script_config)
     {
-        std::shared_ptr<IImage> image = buildImage(createEnvironment(image_config.isLSL, image_config.apiVersion), image_config);
+        // The environment has to be picked before the image exists, so the
+        // header gets read here too rather than only inside Image::build()
+        BytecodeHeader header;
+        size_t bytecode_start = 0;
+        if (!readBytecodeHeader(image_config.asset, image_config.assetSize, header, bytecode_start))
+        {
+            logWarn(image_config.name ? image_config.name : "", "Refusing to provision a script with no readable asset header");
+            return nullptr;
+        }
+
+        std::shared_ptr<IImage> image = buildImage(createEnvironment(header.isLSL, header.apiVersion), image_config);
         if (image == nullptr)
             return nullptr;
 

@@ -5,10 +5,10 @@
 #include "Luau/Common.h"
 #include "lua.h"
 #include "lualib.h"
+#include "luacode.h"
 
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
-#include "Luau/LSLBuiltins.h"
 #include "Luau/Parser.h"
 #include "Luau/TimeTrace.h"
 #include "Luau/Counters.h"
@@ -43,6 +43,7 @@
 #endif
 
 #include "llsl.h"
+#include "Luau/LSLBuiltins.h"
 #ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
 #endif

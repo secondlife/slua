@@ -1,14 +1,98 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/LSLCompiler.h"
 #include "Luau/BytecodeBuilder.h"
+#include "Luau/LSLBuiltins.h"
 #include "Luau/Compiler.h"
 #include "Luau/ParseResult.h"
+#include "luacode.h"
 
 #include "doctest.h"
+
+#include <cstdlib>
+#include <cstring>
 
 using namespace Luau;
 
 TEST_SUITE_BEGIN("LSLCompiler");
+
+TEST_CASE("StateHandlerMasks")
+{
+    LSLScriptInfo info;
+    compileLSL(R"(
+default {
+    state_entry() {}
+    touch_start(integer n) {}
+    timer() {}
+}
+state two {
+    state_entry() {}
+    listen(integer c, string nm, key id, string m) {}
+}
+)", &info);
+
+    // Bits follow builtins.txt order, which is the server's enum: state_entry
+    // is 1, touch_start 3, timer 12, listen 13
+    auto bit = [](int index) { return (uint64_t)1 << (index - 1); };
+    REQUIRE(info.stateHandlerMasks.size() == 2);
+    CHECK(info.stateHandlerMasks[0] == (bit(1) | bit(3) | bit(12)));
+    CHECK(info.stateHandlerMasks[1] == (bit(1) | bit(13)));
+}
+
+TEST_CASE("StateEventBits")
+{
+    // The runtime numbers events off LSLBuiltins.h, but Tailslide's numbering
+    // is what actually lands in the masks
+    LSLScriptInfo info;
+    compileLSL(R"(
+default {
+    state_exit() {}
+}
+state two {
+    state_entry() {}
+    moving_start() {}
+}
+)", &info);
+
+    REQUIRE(info.stateHandlerMasks.size() == 2);
+    CHECK(info.stateHandlerMasks[0] == LSLEventBit::StateExit);
+    CHECK(info.stateHandlerMasks[1] == (LSLEventBit::StateEntry | LSLEventBit::MovingStart));
+}
+
+TEST_CASE("LSLCompileAssetCAPI")
+{
+    const char* source = R"(
+default {
+    state_entry() {}
+    timer() {}
+}
+state two {
+    touch_start(integer n) {}
+}
+)";
+    size_t size = 0;
+    bool is_error = true;
+    char* asset = luau_lsl_compile_asset(source, strlen(source), 7, &size, &is_error);
+    REQUIRE(asset != nullptr);
+    CHECK_FALSE(is_error);
+
+    BytecodeHeader header;
+    size_t bytecode_start = 0;
+    REQUIRE(readBytecodeHeader(asset, size, header, bytecode_start));
+    CHECK(header.isLSL);
+    CHECK(header.apiVersion == 7);
+    REQUIRE(header.stateHandlerMasks.size() == 2);
+    CHECK(header.stateHandlerMasks[0] == (LSLEventBit::StateEntry | LSLEventBit::Timer));
+    CHECK(header.stateHandlerMasks[1] == LSLEventBit::TouchStart);
+    CHECK(bytecode_start < size);
+    free(asset);
+
+    const char* broken = "default { state_entry() { integer x = undeclared_var; } }";
+    char* error = luau_lsl_compile_asset(broken, strlen(broken), 0, &size, &is_error);
+    REQUIRE(error != nullptr);
+    CHECK(is_error);
+    CHECK(std::string(error, size).find("undeclared_var") != std::string::npos);
+    free(error);
+}
 
 TEST_CASE("SingleError")
 {

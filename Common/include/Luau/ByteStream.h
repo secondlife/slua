@@ -1,6 +1,7 @@
 // ServerLua: little-endian bytestream primitives for the wrappers we place
-// around ares-serialized state. I regret some of my design decisions here
-// and this probably should not need to be part of the public API.
+// around ares-serialized state and in front of bytecode. I regret some of my
+// design decisions here and this probably should not need to be part of the
+// public API.
 #pragma once
 
 #include <cstdint>
@@ -9,8 +10,20 @@
 
 namespace Luau
 {
-namespace Executor
+
+// Identifies which class a persisted payload belongs to, and which layout it
+// used. A reader refuses a different `major` and accepts any `minor`: fields
+// are only ever appended inside length-prefixed sections, so a newer minor's
+// extra bytes are skipped. Bump `minor` for an append, `major` for anything
+// that can't be expressed as one.
+struct StateFingerprint
 {
+    // A FOURCC, so the head of a payload reads as text in a dump
+    char tag[4];
+    uint32_t major;
+    uint32_t minor;
+};
+static_assert(sizeof(StateFingerprint::tag) == 4);
 
 struct ByteWriter
 {
@@ -56,6 +69,23 @@ struct ByteWriter
     }
 
     void writeString(const std::string& value) { writeString(value.data(), value.size()); }
+
+    // Length-prefixed section. Reserve the length, write the body, then patch
+    // it in. Readers skip whatever they don't understand at the end of a
+    // section, so fields may be appended to one without breaking older readers.
+    size_t beginSection()
+    {
+        size_t at = out.size();
+        writeU32(0);
+        return at;
+    }
+
+    void endSection(size_t at)
+    {
+        uint32_t len = (uint32_t)(out.size() - at - 4);
+        for (int i = 0; i < 4; ++i)
+            out[at + i] = (char)(uint8_t)(len >> (i * 8));
+    }
 };
 
 struct ByteReader
@@ -131,7 +161,20 @@ struct ByteReader
         remaining -= len;
         return true;
     }
+
+    // Hands back a reader bounded to the next section and steps over it
+    bool readSection(ByteReader& section)
+    {
+        uint32_t len;
+        if (!readU32(len) || len > remaining)
+            return false;
+        section = ByteReader{data, len};
+        data += len;
+        remaining -= len;
+        return true;
+    }
+
+    bool atEnd() const { return remaining == 0; }
 };
 
-} // namespace Executor
 } // namespace Luau

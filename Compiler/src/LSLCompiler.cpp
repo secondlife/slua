@@ -3,6 +3,7 @@
 #include "Luau/LSLCompiler.h"
 
 #include "Luau/Compiler.h"
+#include "Luau/LSLBuiltins.h"
 #include "Luau/ParseResult.h"
 
 #include <tailslide/tailslide.hh>
@@ -16,6 +17,9 @@ constexpr uint32_t kMaxRegisterCount = 255;
 constexpr uint32_t kMaxLocalCount = 200;
 constexpr uint32_t kMaxStringImportRef = 1024;
 // static const uint32_t kMaxInstructionCount = 1'000'000'000;
+
+// Masks are 64 bits wide, so an event index past this can't be represented
+constexpr int kMaxEventIndex = 64;
 
 static Luau::Location convertLoc(TailslideLType *loc)
 {
@@ -52,11 +56,27 @@ bool LuauResourceVisitor::visit(LSLState *state)
     if (_mTopStateID >= INT16_MAX)
         throw Luau::CompileError(convertLoc(state->getLoc()), "Too many states");
     getSymbolData(state->getSymbol())->index = (int16_t)_mTopStateID++;
+    _mStateMasks.push_back(0);
     return true;
 }
 
 bool LuauResourceVisitor::visit(LSLEventHandler *handler) {
     handleFuncLike(handler);
+
+    // Parented to a node list which is parented to the state, same as the
+    // name mangling
+    auto *state_sym = handler->getParent()->getParent()->getSymbol();
+    LUAU_ASSERT(state_sym != nullptr);
+    // Tailslide numbered the event by its position in builtins.txt
+    const char *event_name = handler->getSymbol()->getName();
+    int event_index = handler->getSymbol()->getEventIndex();
+    if (event_index <= 0 || event_index > kMaxEventIndex)
+        throw Luau::CompileError(convertLoc(handler->getLoc()), Luau::format("Event '%s' has no usable index", event_name).c_str());
+    // The runtime dispatches by the same number, so the two had better agree
+    // on which builtins.txt they read
+    if (Luau::lslEventIndex(event_name) != event_index)
+        throw Luau::CompileError(convertLoc(handler->getLoc()), Luau::format("Event '%s' is numbered %d by the compiler but %d by the runtime", event_name, event_index, Luau::lslEventIndex(event_name)).c_str());
+    _mStateMasks[getSymbolData(state_sym)->index] |= (uint64_t)1 << (event_index - 1);
     return false;
 }
 
@@ -2168,7 +2188,7 @@ void LuauVisitor::patchJumpOrThrow(size_t jumpLabel, size_t targetLabel)
 }
 
 
-void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source)
+void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source, LSLScriptInfo *info)
 {
     thread_local bool builtins_initialized = false;
     if (!builtins_initialized) {
@@ -2260,14 +2280,17 @@ void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source)
 
     LuauVisitor luauVisitor(&bcb, symbol_map);
     script->visit(&luauVisitor);
+
+    if (info != nullptr)
+        info->stateHandlerMasks = luauResourceVisitor.getStateMasks();
 }
 
-std::string compileLSL(const std::string &source)
+std::string compileLSL(const std::string &source, LSLScriptInfo *info)
 {
     Luau::BytecodeBuilder bcb;
     try
     {
-        compileLSLOrThrow(bcb, source);
+        compileLSLOrThrow(bcb, source, info);
         return bcb.getBytecode();
     }
     catch (Luau::ParseErrors &e)
@@ -2285,6 +2308,23 @@ std::string compileLSL(const std::string &source)
     }
 }
 
+std::string compileLSLAssetOrThrow(const std::string &source, uint32_t apiVersion)
+{
+    Luau::BytecodeBuilder bcb;
+    LSLScriptInfo info;
+    compileLSLOrThrow(bcb, source, &info);
+
+    Luau::BytecodeHeader header;
+    header.isLSL = true;
+    header.apiVersion = apiVersion;
+    header.stateHandlerMasks = std::move(info.stateHandlerMasks);
+
+    std::string asset;
+    Luau::writeBytecodeHeader(asset, header);
+    asset += bcb.getBytecode();
+    return asset;
+}
+
 char* luau_lsl_compile(const char* source, size_t size, size_t* outsize, bool *is_error)
 {
     *outsize = 0;
@@ -2294,6 +2334,43 @@ char* luau_lsl_compile(const char* source, size_t size, size_t* outsize, bool *i
     {
         compileLSLOrThrow(bcb, std::string(source, size));
         result = bcb.getBytecode();
+        *is_error = false;
+    }
+    catch(Luau::ParseErrors &e)
+    {
+        std::string msg = ": Parse Errors:";
+        for (const Luau::ParseError &error : e.getErrors()) {
+            msg += Luau::format("\nLine %d: %s", error.getLocation().begin.line, error.what());
+        }
+
+        result = msg;
+        *is_error = true;
+    }
+    catch(Luau::CompileError &e)
+    {
+        // Users of this function expect only a single error message
+        std::string error = Luau::format(":%d: %s", e.getLocation().begin.line, e.what());
+
+        result = error;
+        *is_error = true;
+    }
+
+    char* copy = static_cast<char*>(malloc(result.size()));
+    if (!copy)
+        return nullptr;
+
+    memcpy(copy, result.data(), result.size());
+    *outsize = result.size();
+    return copy;
+}
+
+char* luau_lsl_compile_asset(const char* source, size_t size, uint32_t api_version, size_t* outsize, bool *is_error)
+{
+    *outsize = 0;
+    std::string result;
+    try
+    {
+        result = compileLSLAssetOrThrow(std::string(source, size), api_version);
         *is_error = false;
     }
     catch(Luau::ParseErrors &e)

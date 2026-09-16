@@ -8,6 +8,7 @@
 
 #include "Luau/ByteStream.h"
 #include "Luau/Executor.h"
+#include "Luau/LSLBuiltins.h"
 
 namespace Luau
 {
@@ -50,10 +51,11 @@ struct RunResult
     bool mainFunctionCompleted = false;
 };
 
-// Payload format written by Script::serializeState(). The version covers the
-// whole layout, so a subclass that appends its own fields has to bump its own
-// fingerprint whenever this one moves.
-constexpr StateFingerprint kScriptStateFingerprint{{'E', 'X', 'E', 'C'}, 1};
+// Payload format written by Script::serializeState(). Leads every payload as
+// the family magic and versions the core section only; the concrete class's
+// fingerprint follows it and versions the extra section, so the two evolve
+// independently.
+constexpr StateFingerprint kScriptStateFingerprint{{'E', 'X', 'E', 'C'}, 2, 0};
 
 // We need to carry around the error messages in our state, but
 // the messages can be arbitrarily large. Cap them.
@@ -96,7 +98,8 @@ public:
     // True while a forked instance exists (reset()/restoreState() succeeded)
     bool hasInstance() const { return (bool)mInstance; }
 
-    // Forks the image's pristine default state into a fresh instance. Only
+    // Forks the image's pristine default state into a fresh instance and
+    // stages its main function as the first handler, for either flavor. Only
     // valid while no instance exists, same as restoreState().
     bool loadDefaultState();
 
@@ -122,11 +125,42 @@ public:
     // `LLScriptExecute` ptr.
     void *getHostContext() const { return mHostContext; }
 
-    // Call an event handler associated with the given state, works for both
-    // LSL and Lua.
-    RunResult callEventHandler(int lsl_state, const char* event_name, PushArgsFn pushArgs, void* push_args_ctx = nullptr);
+    // Call an event handler in the current state, works for both LSL and Lua.
+    // `event_index` is the event's number in the LSLBuiltins registry, which
+    // asserts on one it doesn't know.
+    RunResult callEventHandler(int event_index, PushArgsFn pushArgs, void* push_args_ctx = nullptr);
     // Resumes a previously preempted handler (or the staged SLua main function)
     RunResult resumeEventHandler();
+
+    // The indra registers, bitfields in the asset header's mask space (bit
+    // n - 1 for event n). The engine only ever interprets the state_entry and
+    // state_exit bits.
+    // Bit of the handler in flight, zero between handlers. The staged main
+    // function counts as state_entry for both flavors.
+    uint64_t getCurrentHandler() const { return mCurrentHandler; }
+    // Last non-zero value of the above, for attribution after the fact
+    uint64_t getStickyHandler() const { return mStickyHandler; }
+    // Events awaiting dispatch. The host ORs its queued events in; the engine
+    // only raises and clears the two state bits.
+    uint64_t getCurrentEvents() const { return mCurrentEvents; }
+    void setCurrentEvents(uint64_t events) { mCurrentEvents = events; }
+    // Events the current state handles. LSL takes it off the asset header;
+    // SLua is told by the host as handlers come and go.
+    uint64_t getEventHandlers() const { return mEventHandlers; }
+    void setEventHandlers(uint64_t handlers);
+    // False while the handler set may still grow, so the host should queue
+    // greedily rather than filter on getEventHandlers()
+    bool eventHandlersKnown() const { return hasInstance() && (mIsLSL || mMainFunctionComplete); }
+
+    // LSL state registers. A handler's `state` statement sets the next state;
+    // the host runs any state_exit, then commits with nextState().
+    int getCurrentState() const { return mCurrentState; }
+    int getNextState() const { return mNextState; }
+    bool isStateChangePending() const { return mCurrentState != mNextState; }
+    // Commits the pending change: the new state's handlers, with state_entry
+    // as the only pending event if the state handles it. Returns the new
+    // handler set.
+    uint64_t nextState();
     // True when the handler thread holds a resumable in-progress handler
     bool isHandlerActive() const;
     // Discards a resumable in-progress handler without completing it, so a
@@ -135,9 +169,6 @@ public:
     void abortHandler();
 
     bool isMainFunctionComplete() const { return mMainFunctionComplete; }
-
-    // Always returns false for Lua scripts, only used for LSL.
-    bool hasLSLEventHandler(int lsl_state, const char* event_name);
 
     bool serializeState(std::string& out);
 
@@ -157,8 +188,8 @@ public:
     void clearFault();
     void setFault(FaultKind kind, const char* fault_string, const char* extended = nullptr);
 
-    // How long we've been told to sleep. Never decremented, only zeroed out when the scheduler
-    // decides we're done the sleep.
+    // How long we've been told to sleep. Never decremented; the host zeroes it once the sleep
+    // is served, which beginRunWindow() requires it to have done.
     float getSleep() const { return mSleep; }
     void setSleep(float sleep);
 
@@ -166,15 +197,20 @@ public:
     double getExcludedTime() const { return mExcludedTime; }
 
 protected:
-    // Written at the head of every payload this class produces, and required to
-    // match on restore. Subclasses return their own so a payload meant for
-    // another class is refused before anything is forked.
+    // Written whole after kScriptStateFingerprint in every payload this class
+    // produces, so a fixed offset says which class a payload belongs to. The
+    // tag must match on restore, refusing a payload meant for another class
+    // before anything is forked. The version covers the extra section.
     virtual StateFingerprint getStateFingerprint() const { return kScriptStateFingerprint; }
 
-    // Durable subclass state, written after our own fields. A subclass partway
-    // down a hierarchy chains to its base before writing or reading its own.
+    // Durable subclass state, written in its own length-prefixed section after
+    // our own fields. Only append to it; the reader gets a ByteReader bounded
+    // to the section and may leave trailing bytes it doesn't know unread, and
+    // `major`/`minor` are what the payload's getStateFingerprint() said, so a
+    // reader can tell an older writer from a truncated section. A subclass
+    // partway down a hierarchy chains to its base before its own.
     virtual bool serializeExtra(ByteWriter&) const { return true; }
-    virtual bool restoreExtra(ByteReader&) { return true; }
+    virtual bool restoreExtra(ByteReader&, uint32_t major, uint32_t minor) { return true; }
 
     static void interruptHandler(lua_State* L, int gc);
     static int memoryLimitCallback(lua_State* L, size_t osize, size_t nsize);
@@ -191,7 +227,9 @@ private:
     void setLuaFaultFromStatus(lua_State* L, int status);
     RunResult handleEventHandlerStatus(int status);
     void destroyHandlerThread();
-    void pushEventHandlerFunction(lua_State* L, int lsl_state, const char* event_name);
+    void pushEventHandlerFunction(lua_State* L, const char* event_name);
+    // The asset's handler mask for `state`, zero for SLua or a state it lacks
+    uint64_t stateHandlerMask(int state) const;
 
     // Opaque per-script host context copied onto the Script. In lscript terms,
     // this is the `LLScriptExecuteLuau` instance.
@@ -213,6 +251,14 @@ private:
     Instance mInstance;
     // Points at the handler thread only while a handler is executing
     lua_State* mHandlerState = nullptr;
+
+    // The indra registers, see the accessors. All persisted.
+    uint64_t mCurrentHandler = 0;
+    uint64_t mStickyHandler = 0;
+    uint64_t mCurrentEvents = 0;
+    uint64_t mEventHandlers = 0;
+    int mCurrentState = 0;
+    int mNextState = 0;
 
     int mMemoryLimit = kDefaultMemoryLimit;
     int mExactSize = 0;
