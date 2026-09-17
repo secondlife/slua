@@ -8,6 +8,14 @@
 // asset and state under the current format versions. The load case restores
 // every committed state this build claims to read and runs its scenario's
 // verify against it, so a state written by an older build has to keep working.
+//
+// TODO: the other direction, an older reader loading states this build wrote,
+// can only be checked by running the previous release's test binary against
+// this tree's fixtures. That needs a runtime override for the fixture dir,
+// unknown scenarios skipped rather than failed, and a way to mark a fixture as
+// expected to be refused (a populated require_feature() field).
+// Perhaps the mere presence of an unknown require_feature() field would be enough,
+// given that we can parse those out ourselves.
 #include "SLExecutorFixture.h"
 
 #include "Luau/FileUtils.h"

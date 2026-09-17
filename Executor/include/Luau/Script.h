@@ -54,8 +54,10 @@ struct RunResult
 // Payload format written by Script::serializeState(). Leads every payload as
 // the family magic and versions the core section only; the concrete class's
 // fingerprint follows it and versions the extra section, so the two evolve
-// independently.
-constexpr StateFingerprint kScriptStateFingerprint{{'E', 'X', 'E', 'C'}, 2, 0};
+// independently. Each fingerprint is followed by a present and a required
+// feature mask for its section, both zero until a feature exists; see
+// serializeState().
+constexpr StateFingerprint kScriptStateFingerprint{{'E', 'X', 'E', 'C'}, 3, 0};
 
 // We need to carry around the error messages in our state, but
 // the messages can be arbitrarily large. Cap them.

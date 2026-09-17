@@ -108,6 +108,48 @@ struct CallInfo;
 struct ExecString;
 
 
+/* Counts, sizes and indices are the unsigned LEB128 varints Luau bytecode
+ * uses, see write_uvarint() in ares.cpp. `v` is the decoded value. */
+typedef struct {
+    local uint64 v = 0;
+    local int shift = 0;
+    local uchar cur;
+    do {
+        cur = ReadUByte(FTell());
+        uchar raw;
+        v |= (uint64)(cur & 0x7F) << shift;
+        shift += 7;
+    } while (cur & 0x80);
+} UVarint <read=Str("%Lu", this.v)>;
+
+/* An `int` field: the same encoding, holding the 32-bit two's complement. */
+typedef struct {
+    local uint64 v = 0;
+    local int shift = 0;
+    local uchar cur;
+    do {
+        cur = ReadUByte(FTell());
+        uchar raw;
+        v |= (uint64)(cur & 0x7F) << shift;
+        shift += 7;
+    } while (cur & 0x80);
+} IntVarint <read=Str("%d", (int32)this.v)>;
+
+/* A genuinely signed field: 64-bit zigzag varint, see write_ares_sint() in
+ * ares.cpp. Integer payloads and the two signed CallInfo fields use it. */
+typedef struct {
+    local uint64 v = 0;
+    local int shift = 0;
+    local uchar cur;
+    do {
+        cur = ReadUByte(FTell());
+        uchar raw;
+        v |= (uint64)(cur & 0x7F) << shift;
+        shift += 7;
+    } while (cur & 0x80);
+    local int64 s = (int64)(v >> 1) ^ -(int64)(v & 1);
+} SVarint <read=Str("%Ld", this.s)>;
+
 // From LuauBytecode.bt
 typedef enum <uint32> {
     // NOP: noop
@@ -502,6 +544,10 @@ typedef uint32 Instruction <read=ReadInstruction>;
 local uint64 refNum = 0;
 // tracks where we saw each reference
 local uint64 refPositions[0xFFFF] = {0};
+// string table entries parsed so far, and where each one's bytes start
+local uint64 strNum = 0;
+local uint64 strPositions[0xFFFF] = {0};
+local uint64 strLengths[0xFFFF] = {0};
 
 /* Closes a length-prefixed record: anything left before record_end is test
  * padding or fields a newer minor appended, both of which the reader skips.
@@ -520,20 +566,22 @@ typedef struct {
     /* Mirrors ARES_FORMAT_MAJOR in VM/include/lua.h. Any minor under it
      * parses: fields are only ever appended inside records, and each record's
      * length word steps over what this template doesn't know. */
-    Assert(major == 6);
+    Assert(major == 7);
     uint32_t record_len;
     local int64 record_end = FTell() + record_len;
     uint8_t sizeof_number;  /* sizeof(lua_Number) to check type compatibility */
     lua_Number test;    /* -1.234567890 to check representation compatibility */
-    uint8_t sizeof_int; /* sizeof(int) in persisted data */
-    uint8_t sizeof_size_t;  /* sizeof(size_t) in persisted data */
     uint8_t vector_components; /* how many components are stored in vectors */
-    /* Note that the last two fields determine the size of the int and size_t
-     * fields in the following definitions. We write each value in the native
-     * "size" and check for truncation when reading, if necessary. */
-    /* Reserved when the header is written and patched in after the root
-     * object, see p_header_refcount() in ares.cpp. */
+    /* The root is serialized to a scratch buffer before the header is
+     * written, so this is final. Strings do not count. */
     uint32_t final_refcount;
+    /* Every feature bit the writer knows, i.e. every appended field whose
+     * bytes are in this stream's records. Mirrors kAresFeaturesSupported in
+     * ares.cpp. */
+    uint64_t features_present;
+    /* The subset a reader has to understand: what populated fields asked for
+     * through require_feature(). An unknown bit here refuses the stream. */
+    uint64_t features_required;
     ParseRecordEnd(record_end);
 } Header <bgcolor=cLtRed>;
 
@@ -544,6 +592,10 @@ void ParseGCHeader() {
 }
 
 string ReadObject(Object &o) {
+    if (o.type == ARES_T_STRING) {
+        return Str("%s $%Lu \"%s\"", EnumToString(o.type), o.val.v,
+                   ReadString(strPositions[o.val.v], strLengths[o.val.v]));
+    }
     // ref should be non-zero if present
     if (o.ourRef) {
         // ARES_T_REFERENCE refNums are references _to_ something
@@ -571,6 +623,8 @@ typedef struct {
         case ARES_T_VECTOR:
         // storing a reference to a reference? no.
         case ARES_T_REFERENCE:
+        // strings are indexes into the string table, not references
+        case ARES_T_STRING:
             break;
         // Permanents take a number too: persist_keyed() allocates it before
         // the permanents table gets a look, and u_permanent() reserves it
@@ -604,13 +658,13 @@ typedef struct {
         case ARES_T_NIL:
             break;
         case ARES_T_BOOLEAN:
-            int32_t val; break;
+            IntVarint val; break;
         case ARES_T_LIGHTUSERDATA:
             LightUserdata val; break;
         case ARES_T_NUMBER:
             Number val; break;
         case ARES_T_INTEGER:
-            int64_t val; break;
+            SVarint val; break;
         case ARES_T_VECTOR:
             float val[3]; break;
         /* Reserved but never emitted; p_vector refuses to write f64 vectors
@@ -619,7 +673,8 @@ typedef struct {
             ParseGCHeader();
             double val[3]; break;
         case ARES_T_STRING:
-            String val; break;
+            /* 1-based index into the string table ahead of the root */
+            UVarint val <bgcolor=cLtGreen>; break;
         case ARES_T_TABLE:
             Table val; break;
         case ARES_T_FUNCTION:
@@ -643,8 +698,8 @@ typedef struct {
             /* Note that the types LUA_TNIL, LUA_TBOOLEAN, LUA_TNUMBER and
              * LUA_TLIGHTUSERDATA will never be "referenced", but always be written
              * directly. */
-            uint32 reference <bgcolor=cLtGreen>; /* The index the object was referenced with */
-            ourRef = reference;
+            IntVarint reference <bgcolor=cLtGreen>; /* The index the object was referenced with */
+            ourRef = reference.v;
             break;
         case ARES_T_CLASS:
         case ARES_T_OBJECT:
@@ -658,28 +713,45 @@ typedef struct {
         ParseRecordEnd(record_end);
 } Object<optimize=false, bgcolor=cLtPurple, read=ReadObject>;
 
+/* A string table entry. Every string the root reaches, in first-sight order. */
 typedef struct {
     ParseGCHeader();
-    size_t length;      /* The length of the string */
-    char str[length];   /* The actual string (not always null terminated) */
+    UVarint length;     /* The length of the string */
+    /* Where the bytes start, whether or not there are any */
+    local int64 str_start = FTell();
+    char str[length.v];   /* The actual string (not always null terminated) */
+    strNum++;
+    strPositions[strNum] = str_start;
+    strLengths[strNum] = length.v;
 } String <read=(exists(this.str) ? this.str : "")>;
 
 typedef struct {
+    uint32_t record_len <bgcolor=cLtGray>;
+    local int64 record_end = FTell() + record_len;
+    UVarint count;
+    local int i;
+    for (i = 0; i < count.v; ++i) {
+        String entry;
+    }
+    ParseRecordEnd(record_end);
+} StrTab <optimize=false>;
+
+typedef struct {
     ParseGCHeader();
-    size_t length;      /* The length of the buffer */
-    char data[length];   /* The actual buffer data */
+    UVarint length;     /* The length of the buffer */
+    char data[length.v];   /* The actual buffer data */
 } Buffer <read=(exists(this.data) ? this.data : "")>;
 
 struct Table {
     ParseGCHeader();
     uint8_t read_only;
     uint8_t safe_env;
-    int array_size;
-    int node_size;
+    IntVarint array_size;
+    IntVarint node_size;
     local int i;
     // This serialization format preserves `nil` holes, so we can't use `nil` as a
     // terminator.
-    for (i=0; i<(array_size+node_size); ++i) {
+    for (i=0; i<(array_size.v+node_size.v); ++i) {
         /* key/value pairs */
         struct Pair {
             /* Both of these may legally be `nil` due to hole preservation */
@@ -704,7 +776,7 @@ typedef struct {
     }
     case UTAG_DETECTED_EVENT:
     {
-        int32_t index;
+        IntVarint index;
         uint8_t valid;
         uint8_t can_change_damage;
         break;
@@ -723,16 +795,16 @@ typedef struct {
     }
     case UTAG_STRBUF:
     {
-        size_t capacity;
-        size_t used;
-        uchar data[used];
+        UVarint capacity;
+        UVarint used;
+        uchar data[used.v];
         break;
     }
     case UTAG_OPAQUE_BUFFER:
     default:
     {
-        size_t length;      /* Size of the data */
-        uchar data[length]; /* The actual data */
+        UVarint length;      /* Size of the data */
+        uchar data[length.v]; /* The actual data */
     }
     }
     Object metatable;   /* The metatable (nil for none, otherwise LUA_TTABLE) */
@@ -740,7 +812,7 @@ typedef struct {
 
 typedef struct {
     uint8_t lutag;       /* Userdata tag */
-    size_t ptr;
+    uint64_t ptr;        /* Pointer-sized, so fixed width rather than a varint */
 } LightUserdata <read=Str("%c : %Lu", this.lutag, this.ptr)>;
 
 struct Closure {
@@ -774,7 +846,7 @@ struct Proto {
 
     Object source;      /* Textual source for the function, string or nil */
 
-    int bytecode_id;
+    IntVarint bytecode_id;
 
     uint8_t maxstacksize;   /* Size of stack reserved for the function */
     uint8_t flags;      /* Flags related to the function definition */
@@ -782,16 +854,16 @@ struct Proto {
     uint8_t nups;       /* Number of upvalues */
     uint8_t is_vararg;  /* 1 if function accepts varargs, 0 otherwise */
 
-    int sizecode;       /* Number of instructions in code */
-    Instruction code[sizecode]; /* The proto's code */
+    IntVarint sizecode; /* Number of instructions in code */
+    Instruction code[sizecode.v]; /* The proto's code */
 
-    int sizek;          /* Number of constants referenced */
-    Object k[sizek];    /* Constants referenced */
+    IntVarint sizek;    /* Number of constants referenced */
+    Object k[sizek.v];  /* Constants referenced */
 
-    int sizep;          /* Number of inner Protos referenced */
-    Object p[sizep];    /* Inner Protos referenced */
+    IntVarint sizep;    /* Number of inner Protos referenced */
+    Object p[sizep.v];  /* Inner Protos referenced */
 
-    int linedefined;    /* Start of line range */
+    IntVarint linedefined;    /* Start of line range */
     Object debugname;   /* Name of the function for debugging, string or nil */
 
     // Neither of these are supported yet.
@@ -817,53 +889,56 @@ struct Proto {
         Object upvalnames[sizeupvalues];    /* Upvalue names */
     }
 
-    int sizeyieldpoints;
-    int yieldpoints[sizeyieldpoints];
+    IntVarint sizeyieldpoints;
+    local int yp;
+    for (yp = 0; yp < sizeyieldpoints.v; ++yp) {
+        IntVarint yieldpoint;
+    }
 };
 
 struct Thread {
     ParseGCHeader();
     Object env;
-    uint32_t stacksize; /* Allocated stack slots, restored as-is */
-    size_t top;         /* top = L->top - L->stack; */
-    Object stack[top];    /* All stack values, bottom up */
+    UVarint stacksize;  /* Allocated stack slots, restored as-is */
+    UVarint top;        /* top = L->top - L->stack; */
+    Object stack[top.v];    /* All stack values, bottom up */
 
     AresStatus status;     /* current thread status (ok, yield) */
     uint8_t activememcat <bgcolor=cLtYellow>;
     Object namecall;    /* The pending namecall string, nil for none */
 
-    uint32_t size_ci;   /* Allocated callinfo slots, never below BASIC_CI_SIZE */
-    uint32_t num_cis;   /* number of callinfo frames */
+    UVarint size_ci;    /* Allocated callinfo slots, never below BASIC_CI_SIZE */
+    UVarint num_cis;    /* number of callinfo frames */
     /* The CallInfo stack, starting with base_ci. Each frame is its own record. */
     struct CallInfo {
         uint32_t record_len <bgcolor=cLtGray>;
         local int64 record_end = FTell() + record_len;
-        size_t func;        /* func = ci->func - thread->stack */
-        size_t top;         /* top = ci->top - thread->stack */
-        size_t base;        /* base = ci->base - thread-stack */
-        int32_t nresults;   /* expected number of results from this function */
+        UVarint func;       /* func = ci->func - thread->stack */
+        UVarint top;        /* top = ci->top - thread->stack */
+        UVarint base;       /* base = ci->base - thread-stack */
+        SVarint nresults;   /* expected number of results from this function, -1 for MULTRET */
         uint8_t flags;      /* What to do after completing this call, see lstate.h */
         eris_CIKind ci_kind;/* What kind of CallInfo this is */
 
         if (ci_kind == ERIS_CI_KIND_LUA) {
-            int yield_point;
-            int savedpc; /* savedpc = ci->u.l.savedpc - ci_func(ci)->p->code */
+            SVarint yield_point;  /* -1 on an errored thread */
+            IntVarint savedpc; /* savedpc = ci->u.l.savedpc - ci_func(ci)->p->code */
         } else if (ci_kind == ERIS_CI_KIND_C) {
-            int32_t errfunc;    /* pcall's error handler, 1-based from ci->base, 0 for none */
+            IntVarint errfunc;  /* pcall's error handler, 1-based from ci->base, 0 for none */
             Object function;
         } else {
             Assert(ci_kind == ERIS_CI_KIND_NONE);
         }
         ParseRecordEnd(record_end);
-    } ci[num_cis] <bgcolor=cLtAqua, optimize=false>;
+    } ci[num_cis.v] <bgcolor=cLtAqua, optimize=false>;
 
     while (TRUE) {
         struct OpenUpval {
-            size_t idx;         /* stack index of the value + 1; 0 if end of list */
-            if (idx)
+            UVarint idx;        /* stack index of the value + 1; 0 if end of list */
+            if (idx.v)
                 Object upval;       /* The upvalue */
         } openupval <optimize=false>;
-        if (!openupval.idx)
+        if (!openupval.idx.v)
             break;
     }
 };
@@ -878,7 +953,9 @@ struct PermKey {
 
 typedef struct {
     refNum = 0;
+    strNum = 0;
     Header header;
+    StrTab strtab;      /* Read in full before the root, see u_strtab() */
     Object rootobj;     /* The root object that was persisted. */
     /* The same check the reader makes in u_finish() */
     if (refNum != header.final_refcount)
@@ -904,12 +981,19 @@ typedef struct {
     Assert(tag == "EXEC");
     uint32_t major;
     uint32_t minor;
-    Assert(major == 2);
+    Assert(major == 3);
+    /* Feature masks for the core section: the features whose fields the
+     * writer emits, then the subset a reader has to understand. Both are
+     * zero until a feature exists; a nonzero required mask is refused. */
+    uint64_t features_present;
+    uint64_t features_required;
     /* The concrete Script subclass's fingerprint (EXEC again for the base
-     * class), covering the extra section at the end. */
+     * class), covering the extra section at the end, with its own masks. */
     char class_tag[4] <bgcolor=0x33aaff>;
     uint32_t class_major;
     uint32_t class_minor;
+    uint64_t class_features_present;
+    uint64_t class_features_required;
 
     struct CoreSection {
         uint32_t record_len <bgcolor=cLtGray>;

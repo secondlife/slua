@@ -1710,7 +1710,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor unserializable global is refused with
 
 // Size of the payload a `counter = 1` script serializes to. Update it when the
 // wire format moves; a change nobody meant to make is the thing worth catching.
-constexpr size_t kExpectedDonorPayloadSize = 634;
+constexpr size_t kExpectedDonorPayloadSize = 492;
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
 {
@@ -1770,19 +1770,29 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         bad_magic[0] = 'B';
         CHECK_FALSE(second.exec.restoreState(bad_magic.data(), bad_magic.size()));
 
-        // The core section's major follows the magic, the class's own follows
-        // the class tag
+        // Each fingerprint is tag, major, minor, then a present and a required
+        // feature mask, so the class fingerprint starts at 28
         std::string bad_core_version = payload;
         bad_core_version[4] = (char)(kScriptStateFingerprint.major + 99);
         CHECK_FALSE(second.exec.restoreState(bad_core_version.data(), bad_core_version.size()));
 
         std::string bad_class_tag = payload;
-        bad_class_tag[12] = 'B';
+        bad_class_tag[28] = 'B';
         CHECK_FALSE(second.exec.restoreState(bad_class_tag.data(), bad_class_tag.size()));
 
         std::string bad_class_version = payload;
-        bad_class_version[16] = (char)(kScriptStateFingerprint.major + 99);
+        bad_class_version[32] = (char)(kScriptStateFingerprint.major + 99);
         CHECK_FALSE(second.exec.restoreState(bad_class_version.data(), bad_class_version.size()));
+
+        // A required feature this build doesn't know is refused, for either
+        // section
+        std::string core_requires = payload;
+        core_requires[20] = 1;
+        CHECK_FALSE(second.exec.restoreState(core_requires.data(), core_requires.size()));
+
+        std::string class_requires = payload;
+        class_requires[48] = 1;
+        CHECK_FALSE(second.exec.restoreState(class_requires.data(), class_requires.size()));
 
         CHECK_FALSE(second.exec.restoreState("", 0));
         for (size_t len : {size_t(4), size_t(8), size_t(16), payload.size() / 2, payload.size() - 1})
@@ -1791,6 +1801,17 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         // Nothing was torn down, so a good payload still loads and runs
         second.exec.clearFault();
         restore(second.exec, payload);
+        CHECK(second.exec.getFaultKind() == FaultKind::None);
+    }
+
+    SUBCASE("unknown present features are skipped")
+    {
+        // A feature that is present but not required belongs to a droppable
+        // field, and an older build loads the payload without it
+        std::string core_present = payload;
+        core_present[12] = 1;
+        core_present[40] = 1;
+        restore(second.exec, core_present);
         CHECK(second.exec.getFaultKind() == FaultKind::None);
     }
 
