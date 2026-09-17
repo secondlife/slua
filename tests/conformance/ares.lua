@@ -227,6 +227,17 @@ assert(ares.unpersist(ares.persist(userdata)) ~= nil)
 
 assert_round_trips(vector(1, 2, 3))
 
+-- Strings live in a table ahead of the root, so a repeat costs an index, not a copy
+local long_str = string.rep("abcdefgh", 64)
+local once = #ares.persist({long_str})
+local four_times = #ares.persist({long_str, long_str, long_str, long_str})
+assert(four_times - once < #long_str)
+
+-- The same string as key and value resolves to the same table entry
+local str_key_val = round_trip({[long_str] = long_str, other = "other"})
+assert(str_key_val[long_str] == long_str)
+assert(str_key_val.other == "other")
+
 -- Integer values survive round-trips at full 64-bit width.
 -- The integer library is only registered when the integer fflags are enabled,
 -- and this file must still parse without them, so no integer literals here.

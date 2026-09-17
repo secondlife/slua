@@ -785,14 +785,10 @@ static void populateperms(lua_State *L, bool forUnpersist)
 #undef eris_persist_base_cont
 #undef eris_persist_cont
 
-// Ares stream format version. A reader accepts any minor under a major it
-// supports: fields are only ever appended to length-prefixed records, so a
-// newer minor's extra bytes are skipped and an older minor's missing ones
-// default. The major moves only for a change that can't be expressed that way,
-// and the reader keeps every major back to ARES_MIN_SUPPORTED_MAJOR readable.
-#define ARES_FORMAT_MAJOR 6
+// Ares stream format versions
+#define ARES_FORMAT_MAJOR 7
 #define ARES_FORMAT_MINOR 0
-#define ARES_MIN_SUPPORTED_MAJOR 6
+#define ARES_MIN_SUPPORTED_MAJOR 7
 
 LUA_API lua_State *eris_make_forkserver(lua_State *Lsrc);
 
