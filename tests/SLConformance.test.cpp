@@ -980,7 +980,7 @@ TEST_CASE("LLTimers")
 }
 
 static const luaL_Reg test_ll_prim_lib[] = {
-    // llprim.ParamsSetter:apply() routes through this on the base globals.
+    // llprim.ParamSetter:apply() routes through this on the base globals.
     // We capture its args into Lua globals so the test can verify them.
     {"SetLinkPrimitiveParamsFast", [](lua_State *L) {
         luaL_checkinteger(L, 1);
