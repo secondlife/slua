@@ -6,7 +6,7 @@
 #include "llsl.h"
 #include "llprim.h"
 
-struct PrimParamsSetterMethod
+struct PrimParamSetterMethod
 {
     const char *name;
     const char *sem;
@@ -18,7 +18,7 @@ struct PrimParamsSetterMethod
 // Pull in the generated descriptors based on lsl_definitions.yaml
 #include "llprim_set_primitive_params.inl"
 
-// Shared wrapper for every ParamsSetter method.
+// Shared wrapper for every ParamSetter method.
 // Uses upvalues to determine what to push and with what semantics
 static int prim_params_rule_wrapper(lua_State *L)
 {
@@ -177,7 +177,7 @@ void luaSL_setup_llprim_module(lua_State *L)
     lua_setfield(L, mt, "__index");
 
     lua_setreadonly(L, mt, true);
-    lua_setfield(L, -2, "ParamsSetter");
+    lua_setfield(L, -2, "ParamSetter");
 
     lua_setreadonly(L, -1, true);
     lua_setglobal(L, "llprim");
