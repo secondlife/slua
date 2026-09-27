@@ -4,8 +4,9 @@
 //
 // Each scenario drives a fresh script into some resting state and says what a
 // script restored from that state must still be able to do. With
-// LUAU_REGENERATE_FIXTURES set, the regenerate case writes every scenario's
-// asset and state under the current format versions. The load case restores
+// LUAU_REGENERATE_FIXTURES set, the regenerate case writes each scenario's
+// asset and state, named for the current format versions, into the
+// scenario's directory. The load case restores
 // every committed state this build claims to read and runs its scenario's
 // verify against it, so a state written by an older build has to keep working.
 //
@@ -28,6 +29,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace Luau;
@@ -37,7 +39,7 @@ namespace
 {
 struct GoldenScenario
 {
-    // The source file beside the fixtures, whose extension is the flavor
+    // The scenario's directory under the fixture dir, an `-lsl` suffix makes us use LSL mode.
     const char* name;
     // Drives a fresh script into the state the fixture captures
     void (*arrange)(TestScript&);
@@ -47,7 +49,7 @@ struct GoldenScenario
 }
 
 static const GoldenScenario kGoldenScenarios[] = {
-    {"between-handlers.lua",
+    {"between-handlers",
         [](TestScript& ts)
         {
             ts.start();
@@ -57,7 +59,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"counter ok", "table ok", "buffer ok", "vector ok", "coroutine ok", "upvalue ok"});
         }},
-    {"yielded-main.lua",
+    {"yielded-main",
         [](TestScript& ts)
         {
             ts.loadDefaultState();
@@ -74,7 +76,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"done ok"});
         }},
-    {"yielded-handler.lua",
+    {"yielded-handler",
         [](TestScript& ts)
         {
             ts.start();
@@ -87,7 +89,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"counter ok"});
         }},
-    {"errored-handler.lua",
+    {"errored-handler",
         [](TestScript& ts)
         {
             ts.start();
@@ -106,7 +108,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             checkCapture(ts.host.printed, {"ran after reset"});
         }},
 #ifdef LUAU_USE_TAILSLIDE
-    {"between-handlers.lsl",
+    {"between-handlers-lsl",
         [](TestScript& ts)
         {
             ts.start();
@@ -119,7 +121,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"counter ok"});
         }},
-    {"state-change-pending.lsl",
+    {"state-change-pending-lsl",
         [](TestScript& ts)
         {
             ts.start();
@@ -138,7 +140,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"counter ok"});
         }},
-    {"yielded-handler.lsl",
+    {"yielded-handler-lsl",
         [](TestScript& ts)
         {
             ts.start();
@@ -152,7 +154,7 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"done ok"});
         }},
-    {"errored-main.lsl",
+    {"errored-main-lsl",
         [](TestScript& ts)
         {
             ts.loadDefaultState();
@@ -175,13 +177,20 @@ static std::string goldenFixtureDir()
     dir.erase(dir.find_last_of("\\/"));
     dir += "/conformance";
 #endif
-    return dir + "/fixtures/exec";
+    return dir + "/exec";
 }
 
-static std::string goldenFixtureBase(const GoldenScenario& scenario)
+// The format versions this build writes, which name its files in each
+// scenario's directory
+static std::string goldenFixtureVersion()
 {
     return "exec" + std::to_string(kScriptStateFingerprint.major) + "." + std::to_string(kScriptStateFingerprint.minor) + "-ares" +
-           std::to_string(ARES_FORMAT_MAJOR) + "." + std::to_string(ARES_FORMAT_MINOR) + "-" + scenario.name;
+           std::to_string(ARES_FORMAT_MAJOR) + "." + std::to_string(ARES_FORMAT_MINOR);
+}
+
+static std::string goldenFixtureBase(const std::string& dir, const GoldenScenario& scenario)
+{
+    return dir + "/" + scenario.name + "/" + goldenFixtureVersion();
 }
 
 static std::string readBinaryFile(const std::string& path)
@@ -210,30 +219,9 @@ static std::string fileStem(const std::string& path)
     return path.substr(start, dot - start);
 }
 
-// The scenario a fixture belongs to, from the name its stem ends with
-static const GoldenScenario* findGoldenScenario(const std::string& stem)
-{
-    size_t ares = stem.find("-ares");
-    if (ares == std::string::npos)
-        return nullptr;
-
-    size_t name_start = stem.find('-', ares + 1);
-    if (name_start == std::string::npos)
-        return nullptr;
-
-    std::string name = stem.substr(name_start + 1);
-    for (const GoldenScenario& scenario : kGoldenScenarios)
-    {
-        if (name == scenario.name)
-            return &scenario;
-    }
-    return nullptr;
-}
-
-// The extension a scenario's name ends with is its flavor
 static bool isLSLScenario(std::string_view name)
 {
-    return name.size() > 4 && name.substr(name.size() - 4) == ".lsl";
+    return name.size() > 4 && name.substr(name.size() - 4) == "-lsl";
 }
 
 // Compiling is the one place a bad source throws, and doctest is built without
@@ -241,11 +229,12 @@ static bool isLSLScenario(std::string_view name)
 // instead of saying which file is wrong.
 static bool compileGoldenScenario(const std::string& dir, const GoldenScenario& scenario, TestAsset& asset)
 {
-    const std::string source = dir + "/" + scenario.name;
+    const bool lsl = isLSLScenario(scenario.name);
+    const std::string source = dir + "/" + scenario.name + (lsl ? "/source.lsl" : "/source.lua");
     const std::string text = readBinaryFile(source);
     try
     {
-        asset = compileTestAsset(text.c_str(), isLSLScenario(scenario.name));
+        asset = compileTestAsset(text.c_str(), lsl);
         return true;
     }
     catch (const ParseErrors& e)
@@ -274,7 +263,7 @@ static void writeGoldenFixture(const std::string& dir, const GoldenScenario& sce
     TestScript ts(asset);
     scenario.arrange(ts);
 
-    std::string base = dir + "/" + goldenFixtureBase(scenario);
+    std::string base = goldenFixtureBase(dir, scenario);
     writeBinaryFile(base + ".sluac", asset.bytes);
     writeBinaryFile(base + ".state", serialize(ts.exec));
 }
@@ -312,53 +301,39 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures")
     // Verify we _do_ have a dump on the current version for each scenario.
     for (const GoldenScenario& scenario : kGoldenScenarios)
     {
-        const std::string base = dir + "/" + goldenFixtureBase(scenario);
+        const std::string base = goldenFixtureBase(dir, scenario);
         CAPTURE(base);
         REQUIRE(isFile(base + ".state"));
         REQUIRE(isFile(base + ".sluac"));
     }
 
-    // Every state file this build is expected to load. Collected before the
-    // subcases so the skips don't each cost a run of the body.
-    std::vector<std::string> loadable;
-    auto collect = [&](const std::string& path)
+    std::vector<std::pair<const GoldenScenario*, std::string>> loadable;
+    for (const GoldenScenario& scenario : kGoldenScenarios)
     {
-        if (!hasFileExtension(path, {".state"}))
-            return;
-
-        const std::string name = fileStem(path);
-
 #ifndef LUAU_USE_TAILSLIDE
         // No LSL compiler in this build, so those scenarios can't run
-        const GoldenScenario* scenario = findGoldenScenario(name);
-        if (scenario != nullptr && isLSLScenario(scenario->name))
-            return;
+        if (isLSLScenario(scenario.name))
+            continue;
 #endif
-
-        loadable.push_back(path);
-    };
-    REQUIRE(traverseDirectory(dir, collect));
-    REQUIRE_FALSE(loadable.empty());
-
-    // A subcase each, so a scenario that breaks says which one it was rather
-    // than taking the rest of them down with it.
-    for (const std::string& state_path : loadable)
-    {
-        const std::string name = fileStem(state_path);
-        SUBCASE(name.c_str())
+        // Yucky yucky lambda :(
+        auto collect = [&](const std::string& path)
         {
-            const std::string asset_path = state_path.substr(0, state_path.size() - 6) + ".sluac";
+            if (hasFileExtension(path, {".state"}))
+                loadable.emplace_back(&scenario, path);
+        };
+        REQUIRE(traverseDirectory(dir + "/" + scenario.name, collect));
+        REQUIRE_FALSE(loadable.empty());
+    }
+
+    for (const auto& [scenario, state_path] : loadable)
+    {
+        const std::string subcase_name = std::string(scenario->name) + "/" + fileStem(state_path);
+        SUBCASE(subcase_name.c_str())
+        {
+            const std::string asset_path = state_path.substr(0, state_path.rfind('.')) + ".sluac";
             REQUIRE(isFile(asset_path));
 
-            // The committed asset says what flavor it is, so the filename
-            // doesn't have to, and it goes in whole the way a host would hand
-            // it over
             TestAsset asset{readBinaryFile(asset_path)};
-
-            // Get the scenario associated with this state file, and there
-            // _better_ be one.
-            const GoldenScenario* scenario = findGoldenScenario(name);
-            REQUIRE(scenario != nullptr);
 
             TestScript ts(asset);
             // Start the script and restore the state from the statefile
