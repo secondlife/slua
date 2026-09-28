@@ -1710,16 +1710,16 @@ int luaopen_string(lua_State* L)
     luaL_register(L, LUA_STRLIBNAME, strlib);
 
     // ServerLua: Overwrite pattern-matching functions with yieldable versions.
-    lua_pushcclosurek(L, yieldable_str_find_v0, "find", 0, yieldable_str_find_v0_k);
+    lua_pushcclosurek(L, yieldable_str_find, "find", 0, yieldable_str_find_k);
     lua_setfield(L, -2, "find");
 
-    lua_pushcclosurek(L, yieldable_str_match_v0, "match", 0, yieldable_str_match_v0_k);
+    lua_pushcclosurek(L, yieldable_str_match, "match", 0, yieldable_str_match_k);
     lua_setfield(L, -2, "match");
 
     lua_pushcfunction(L, yieldable_gmatch, "gmatch");
     lua_setfield(L, -2, "gmatch");
 
-    lua_pushcclosurek(L, yieldable_str_gsub_v0, "gsub", 0, yieldable_str_gsub_v0_k);
+    lua_pushcclosurek(L, yieldable_str_gsub, "gsub", 0, yieldable_str_gsub_k);
     lua_setfield(L, -2, "gsub");
 
     createmetatable(L);

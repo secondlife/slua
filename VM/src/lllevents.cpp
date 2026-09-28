@@ -556,7 +556,7 @@ DEFINE_YIELDABLE(llevents_handle_event, 0)
         CALL_HANDLER = 2,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
 
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, handler_index, 1);
@@ -738,7 +738,7 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
     lua_setfield(L, -2, "eventNames");
 
     // Store _handleEvent in registry for host access
-    lua_pushcclosurek(L, llevents_handle_event_v0, "_handleEvent", 0, llevents_handle_event_v0_k);
+    lua_pushcclosurek(L, llevents_handle_event, "_handleEvent", 0, llevents_handle_event_k);
     lua_setfield(L, LUA_REGISTRYINDEX, LLEVENTS_HANDLEEVENT_KEY);
 
     // Store timer wrapper guard in registry for handlers() protection
@@ -747,7 +747,7 @@ void luaSL_setup_llevents_metatable(lua_State *L, int expose_internal_funcs)
 
     if (expose_internal_funcs)
     {
-        lua_pushcclosurek(L, llevents_handle_event_v0, "_handleEvent", 0, llevents_handle_event_v0_k);
+        lua_pushcclosurek(L, llevents_handle_event, "_handleEvent", 0, llevents_handle_event_k);
         lua_setfield(L, -2, "_handleEvent");
     }
 

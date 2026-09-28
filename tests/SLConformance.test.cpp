@@ -1202,10 +1202,14 @@ TEST_CASE("Table Sizing")
     });
 }
 
+// The ABI version the test yieldables write and answer with, so a test can
+// move it between persisting and unpersisting
+static uint8_t testAbiVersion = 0;
+
 // Yieldable C function test using lyieldable.h framework.
 // Takes a callback and a count n, calls callback(i) for i=1..n,
 // accumulates return values and returns the sum.
-DEFINE_YIELDABLE(test_yieldable_sum, 0)
+DEFINE_YIELDABLE(test_yieldable_sum, testAbiVersion)
 {
     YIELDABLE_RETURNS_DEFAULT;
 
@@ -1218,7 +1222,7 @@ DEFINE_YIELDABLE(test_yieldable_sum, 0)
     };
 
     // All slots must be finalized before we do any init code.
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
 
     // Phase storage is explicit
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
@@ -1300,7 +1304,7 @@ static void test_yieldable_inner(lua_State* L, SlotManager& parentSlots, int32_t
 // Calls callback(0) first (a yieldable call in the parent) before
 // delegating to the helper — this proves that slots.isInit() in the
 // helper returns true even when the parent has already yielded & resumed.
-DEFINE_YIELDABLE(test_yieldable_chained, 0)
+DEFINE_YIELDABLE(test_yieldable_chained, testAbiVersion)
 {
     YIELDABLE_RETURNS_DEFAULT;
     enum class Phase : uint8_t
@@ -1310,7 +1314,7 @@ DEFINE_YIELDABLE(test_yieldable_chained, 0)
         HELPER_CALL = 2,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, accumulator, 0);
     slots.finalize();
@@ -1388,7 +1392,7 @@ DEFINE_YIELDABLE(test_yieldable_recursive, 0)
         HELPER_CALL = 1,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, accumulator, 0);
     slots.finalize();
@@ -1414,7 +1418,7 @@ DEFINE_YIELDABLE(test_yieldable_check_sum, 0)
         CHECK_POINT = 1,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, i, 1);
     DEFINE_SLOT(int32_t, n, 0);
@@ -1486,7 +1490,7 @@ DEFINE_YIELDABLE(test_yieldable_chained_check, 0)
         HELPER_CALL = 2,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, accumulator, 0);
     slots.finalize();
@@ -1504,17 +1508,44 @@ DEFINE_YIELDABLE(test_yieldable_chained_check, 0)
     return 1;
 }
 
+// Runs test_yieldable_sum's continuation over hand-built yield state bytes:
+// (bytes, callback, n, pending callback result) -> whatever the resume returns
+static int call_test_sum_k(lua_State* L)
+{
+    size_t len;
+    const char* bytes = luaL_checklstring(L, 1, &len);
+    void* buffer = lua_newuserdatatagged(L, len, UTAG_YIELD_STATE);
+    memcpy(buffer, bytes, len);
+    lua_replace(L, 1);
+    return test_yieldable_sum_k(L, 0);
+}
+
 TEST_CASE("Lyieldable")
 {
+    testAbiVersion = 0;
     runConformance("lyieldable.luau", nullptr, [](lua_State* L) {
-        lua_pushcclosurek(L, test_yieldable_sum_v0, "test_yieldable_sum", 0, test_yieldable_sum_v0_k);
+        lua_pushcclosurek(L, test_yieldable_sum, "test_yieldable_sum", 0, test_yieldable_sum_k);
         lua_setglobal(L, "yieldable_sum");
 
-        lua_pushcclosurek(L, test_yieldable_chained_v0, "test_yieldable_chained", 0, test_yieldable_chained_v0_k);
+        lua_pushcclosurek(L, test_yieldable_chained, "test_yieldable_chained", 0, test_yieldable_chained_k);
         lua_setglobal(L, "yieldable_chained");
 
-        lua_pushcclosurek(L, test_yieldable_recursive_v0, "test_yieldable_recursive", 0, test_yieldable_recursive_v0_k);
+        lua_pushcclosurek(L, test_yieldable_recursive, "test_yieldable_recursive", 0, test_yieldable_recursive_k);
         lua_setglobal(L, "yieldable_recursive");
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L) -> int
+            {
+                testAbiVersion = (uint8_t)luaL_checkinteger(L, 1);
+                return 0;
+            },
+            "set_test_abi_version"
+        );
+        lua_setglobal(L, "set_test_abi_version");
+
+        lua_pushcfunction(L, call_test_sum_k, "call_test_sum_k");
+        lua_setglobal(L, "call_test_sum_k");
     });
 }
 
@@ -1527,10 +1558,10 @@ TEST_CASE("LyieldableCheck")
         nullptr,
         [](lua_State* L)
         {
-            lua_pushcclosurek(L, test_yieldable_check_sum_v0, "test_yieldable_check_sum", 0, test_yieldable_check_sum_v0_k);
+            lua_pushcclosurek(L, test_yieldable_check_sum, "test_yieldable_check_sum", 0, test_yieldable_check_sum_k);
             lua_setglobal(L, "yieldable_check_sum");
 
-            lua_pushcclosurek(L, test_yieldable_chained_check_v0, "test_yieldable_chained_check", 0, test_yieldable_chained_check_v0_k);
+            lua_pushcclosurek(L, test_yieldable_chained_check, "test_yieldable_chained_check", 0, test_yieldable_chained_check_k);
             lua_setglobal(L, "yieldable_chained_check");
 
             // clear_check_count() — resets the yield counter

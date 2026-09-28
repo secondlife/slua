@@ -8,13 +8,13 @@
 
 #include "lua.h"
 
-LUAI_FUNC int yieldable_str_find_v0(lua_State* L);
-LUAI_FUNC int yieldable_str_find_v0_k(lua_State* L, int status);
+LUAI_FUNC int yieldable_str_find(lua_State* L);
+LUAI_FUNC int yieldable_str_find_k(lua_State* L, int status);
 
-LUAI_FUNC int yieldable_str_match_v0(lua_State* L);
-LUAI_FUNC int yieldable_str_match_v0_k(lua_State* L, int status);
+LUAI_FUNC int yieldable_str_match(lua_State* L);
+LUAI_FUNC int yieldable_str_match_k(lua_State* L, int status);
 
 LUAI_FUNC int yieldable_gmatch(lua_State* L);
 
-LUAI_FUNC int yieldable_str_gsub_v0(lua_State* L);
-LUAI_FUNC int yieldable_str_gsub_v0_k(lua_State* L, int status);
+LUAI_FUNC int yieldable_str_gsub(lua_State* L);
+LUAI_FUNC int yieldable_str_gsub_k(lua_State* L, int status);

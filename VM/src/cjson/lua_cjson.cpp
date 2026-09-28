@@ -1199,7 +1199,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
 
 // ServerLua: Shared yieldable body for json_encode / json_encode_sl.
 // sl_tagged selects between standard JSON and SL tagged type encoding.
-static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
+static int json_encode_common(lua_State* l, bool is_init, uint8_t abi_version, bool sl_tagged)
 {
     YIELDABLE_RETURNS_DEFAULT;
     enum class Phase : uint8_t
@@ -1212,7 +1212,7 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
         ROOT_REPLACER_CALL = 5,
     };
 
-    SlotManager slots(l, is_init);
+    SlotManager slots(l, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(bool, tight_encoding, false);
     DEFINE_SLOT(bool, skip_tojson, false);
@@ -1334,32 +1334,39 @@ static int json_encode_common(lua_State* l, bool is_init, bool sl_tagged)
     return 1;
 }
 
-// ServerLua: init / continuation wrappers for json_encode
-static int json_encode_v0(lua_State* l)
+// ServerLua: init / continuation wrappers for json_encode. Hand-rolled
+// equivalents of DEFINE_YIELDABLE's, see that for what the version pins.
+static constexpr uint8_t JSON_ENCODE_ABI_VERSION = 0;
+
+static int json_encode(lua_State* l)
 {
     int nargs = lua_gettop(l);
     luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     if (nargs >= 2)
         luaL_checktype(l, 2, LUA_TTABLE);
-    return json_encode_common(l, true, false);
+    return json_encode_common(l, true, JSON_ENCODE_ABI_VERSION, false);
 }
-static int json_encode_v0_k(lua_State* l, int)
+static int json_encode_k(lua_State* l, int status)
 {
+    if (status == LUA_YIELDABLE_ABI_QUERY)
+        return JSON_ENCODE_ABI_VERSION;
     lua_checkstack(l, LUA_MINSTACK);
-    return json_encode_common(l, false, false);
+    return json_encode_common(l, false, JSON_ENCODE_ABI_VERSION, false);
 }
-static int json_encode_sl_v0(lua_State* l)
+static int json_encode_sl(lua_State* l)
 {
     int nargs = lua_gettop(l);
     luaL_checkany(l, 1);
     if (nargs >= 2)
         luaL_checktype(l, 2, LUA_TTABLE);
-    return json_encode_common(l, true, true);
+    return json_encode_common(l, true, JSON_ENCODE_ABI_VERSION, true);
 }
-static int json_encode_sl_v0_k(lua_State* l, int)
+static int json_encode_sl_k(lua_State* l, int status)
 {
+    if (status == LUA_YIELDABLE_ABI_QUERY)
+        return JSON_ENCODE_ABI_VERSION;
     lua_checkstack(l, LUA_MINSTACK);
-    return json_encode_common(l, false, true);
+    return json_encode_common(l, false, JSON_ENCODE_ABI_VERSION, true);
 }
 
 /* ===== DECODING ===== */
@@ -2324,7 +2331,7 @@ static void json_process_value(lua_State* l, SlotManager& parent_slots,
 
 // ServerLua: Shared yieldable body for json_decode / json_decode_sl.
 // sl_tagged selects between standard JSON and SL tagged type decoding.
-static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
+static int json_decode_common(lua_State* l, bool is_init, uint8_t abi_version, bool sl_tagged)
 {
     YIELDABLE_RETURNS_DEFAULT;
     enum class Phase : uint8_t
@@ -2335,7 +2342,7 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
         ROOT_REVIVER_CALL = 3,
     };
 
-    SlotManager slots(l, is_init);
+    SlotManager slots(l, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, ptr_offset, 0);
     slots.finalize();
@@ -2483,34 +2490,40 @@ static int json_decode_common(lua_State* l, bool is_init, bool sl_tagged)
     return 1;
 }
 
-// ServerLua: init / continuation wrappers for json_decode
-static int json_decode_v0(lua_State* l)
+// ServerLua: init / continuation wrappers for json_decode, as for json_encode
+static constexpr uint8_t JSON_DECODE_ABI_VERSION = 0;
+
+static int json_decode(lua_State* l)
 {
     int nargs = lua_gettop(l);
     luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     luaL_checkstring(l, 1);
     if (nargs >= 2 && !lua_isfunction(l, 2) && !lua_istable(l, 2))
         luaL_argerror(l, 2, "expected function or table");
-    return json_decode_common(l, true, false);
+    return json_decode_common(l, true, JSON_DECODE_ABI_VERSION, false);
 }
-static int json_decode_v0_k(lua_State* l, int)
+static int json_decode_k(lua_State* l, int status)
 {
+    if (status == LUA_YIELDABLE_ABI_QUERY)
+        return JSON_DECODE_ABI_VERSION;
     lua_checkstack(l, LUA_MINSTACK);
-    return json_decode_common(l, false, false);
+    return json_decode_common(l, false, JSON_DECODE_ABI_VERSION, false);
 }
-static int json_decode_sl_v0(lua_State* l)
+static int json_decode_sl(lua_State* l)
 {
     int nargs = lua_gettop(l);
     luaL_argcheck(l, nargs >= 1 && nargs <= 2, 1, "expected 1-2 arguments");
     luaL_checkstring(l, 1);
     if (nargs >= 2 && !lua_isfunction(l, 2) && !lua_istable(l, 2))
         luaL_argerror(l, 2, "expected function or table");
-    return json_decode_common(l, true, true);
+    return json_decode_common(l, true, JSON_DECODE_ABI_VERSION, true);
 }
-static int json_decode_sl_v0_k(lua_State* l, int)
+static int json_decode_sl_k(lua_State* l, int status)
 {
+    if (status == LUA_YIELDABLE_ABI_QUERY)
+        return JSON_DECODE_ABI_VERSION;
     lua_checkstack(l, LUA_MINSTACK);
-    return json_decode_common(l, false, true);
+    return json_decode_common(l, false, JSON_DECODE_ABI_VERSION, true);
 }
 
 /* ===== INITIALISATION ===== */
@@ -2573,13 +2586,13 @@ static int lua_cjson_new(lua_State *l)
     lua_newtable(l);
 
     // ServerLua: Register with continuations for yieldable encode/decode
-    lua_pushcclosurek(l, json_encode_v0, "encode", 0, json_encode_v0_k);
+    lua_pushcclosurek(l, json_encode, "encode", 0, json_encode_k);
     lua_setfield(l, -2, "encode");
-    lua_pushcclosurek(l, json_decode_v0, "decode", 0, json_decode_v0_k);
+    lua_pushcclosurek(l, json_decode, "decode", 0, json_decode_k);
     lua_setfield(l, -2, "decode");
-    lua_pushcclosurek(l, json_encode_sl_v0, "slencode", 0, json_encode_sl_v0_k);
+    lua_pushcclosurek(l, json_encode_sl, "slencode", 0, json_encode_sl_k);
     lua_setfield(l, -2, "slencode");
-    lua_pushcclosurek(l, json_decode_sl_v0, "sldecode", 0, json_decode_sl_v0_k);
+    lua_pushcclosurek(l, json_decode_sl, "sldecode", 0, json_decode_sl_k);
     lua_setfield(l, -2, "sldecode");
 
     /* Set cjson.null */

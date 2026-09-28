@@ -1774,6 +1774,7 @@ static void p_userdata(Info *info) {                               /* ... udata 
     case UTAG_PROXY:
     case UTAG_QUATERNION:
     case UTAG_OPAQUE_BUFFER:
+    case UTAG_YIELD_STATE:
       WRITE_VALUE(size, ares_size_t);
       WRITE_RAW(value, size);
       break;
@@ -1842,6 +1843,7 @@ static void u_userdata(Info *info) {                                   /* ... */
     uint8_t utag = READ_VALUE(uint8_t);
     switch(utag) {
       case UTAG_OPAQUE_BUFFER:
+      case UTAG_YIELD_STATE:
       case UTAG_PROXY:
       {
           size_t size = READ_VALUE(ares_size_t);
@@ -3135,6 +3137,25 @@ u_thread(Info *info) {                                                 /* ... */
       }
       // We don't actually use the function for anything, just checking!
       lua_pop(info->L, 1);                                    /* ... thread */
+
+      // Okay, we may be resuming an lyieldable function. Make sure we can actually load the
+      // version provided by comparing it against what our impl actually supports
+      if (thread->status == LUA_OK || thread->status == LUA_YIELD || thread->status == LUA_BREAK) {
+        StkId base = thread->ci->base;
+        if (base < thread->top && ttisuserdata(base) && uvalue(base)->tag == UTAG_YIELD_STATE) {
+          if (!func_cl->c.cont) {
+            eris_error(info, "malformed data: yield state under a function without a continuation");
+          }
+          // Silly hack: Abuse the continuation function by defining a custom status, so we can ask
+          // what max version this func supports.
+          int version = func_cl->c.cont(thread, LUA_YIELDABLE_ABI_QUERY);
+          int found = (uint8_t)uvalue(base)->data[0];
+          if (version < 0 || version > UINT8_MAX || found > version) {
+            const char *debugname = cclosure_debugname(func_cl);
+            eris_error(info, "state saved by a newer version of %s", debugname ? debugname : "<unknown>");
+          }
+        }
+      }
     } else {
       if (ci_kind != ERIS_CI_KIND_NONE) {
         eris_error(info, "malformed data: invalid call info kind");

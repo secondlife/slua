@@ -11,12 +11,19 @@ using Luau::PrimitiveSlot;
 #include "llsl.h"
 #include "lualib.h"
 
+// Script error for a yield buffer the resume path can't trust
+void SlotManager::corrupt() const
+{
+    luaL_error(L, "corrupt yield state");
+}
+
 // Root constructor. On init, pushes nil at position 1.
-// On resume, reads the serialized opaque userdata at position 1.
-SlotManager::SlotManager(lua_State* L, bool is_init)
+// On resume, reads the yield state userdata at position 1.
+SlotManager::SlotManager(lua_State* L, bool is_init, uint8_t abi_version)
     : L(L)
     , bufferStackOffset(L->base - L->stack)
     , initMode(is_init)
+    , abiVersion(abi_version)
 {
     if (is_init)
     {
@@ -26,15 +33,22 @@ SlotManager::SlotManager(lua_State* L, bool is_init)
     }
     else
     {
-        // Position 1 has the opaque userdata written by the previous flushForYield().
+        // Position 1 has the yield state written by the previous flushForYield().
         TValue* slot = L->stack + bufferStackOffset;
-        if (!ttisuserdata(slot) || uvalue(slot)->tag != UTAG_OPAQUE_BUFFER)
-            luaL_error(L, "corrupt yield state");
+        if (!ttisuserdata(slot) || uvalue(slot)->tag != UTAG_YIELD_STATE)
+            corrupt();
         Udata* u = uvalue(slot);
         bufferData = u->data;
         bufferSize = u->len;
-        if (bufferData[0] != 0)
-            luaL_error(L, "unsupported yield buffer version");
+        // Generally should not happen, since the only way it could happen is if
+        // Ares' version check isn't doing its job, but let's be extra sure.
+        if ((uint8_t)bufferData[0] > abi_version)
+        {
+            TString* name = clvalue(L->ci->func)->c.debugname;
+            luaL_error(L, "yield state of %s was saved by a newer version", name ? getstr(name) : "?");
+        }
+
+        readStoredLength();
     }
 
     callbacks = &L->global->cb;
@@ -46,7 +60,7 @@ SlotManager::SlotManager(lua_State* L, bool is_init)
         lua_checkstack(L, needed);
 }
 
-// Creates an opaque userdata at position 1 sized for the entire chain.
+// Creates a yield state userdata at position 1 sized for the entire chain.
 // Sets bufferData and yielding on all managers so slot destructors
 // write on unwind.
 void SlotManager::flushForYield()
@@ -56,7 +70,7 @@ void SlotManager::flushForYield()
     TValue* slot = L->stack + bufferStackOffset;
     Udata* u;
 
-    if (ttisuserdata(slot) && uvalue(slot)->tag == UTAG_OPAQUE_BUFFER && uvalue(slot)->len >= (int)totalSize)
+    if (ttisuserdata(slot) && uvalue(slot)->tag == UTAG_YIELD_STATE && uvalue(slot)->len >= (int)totalSize)
     {
         // Reuse userdata from previous yield
         u = uvalue(slot);
@@ -66,7 +80,7 @@ void SlotManager::flushForYield()
         // First yield (slot is nil) or userdata too small — allocate.
         luaC_checkGC(L);
         luaC_threadbarrier(L);
-        u = luaU_newudata(L, totalSize, UTAG_OPAQUE_BUFFER);
+        u = luaU_newudata(L, totalSize, UTAG_YIELD_STATE);
         // Recompute slot — GC or allocation may have reallocated the stack.
         slot = L->stack + bufferStackOffset;
         setuvalue(L, slot, u);
@@ -78,6 +92,7 @@ void SlotManager::flushForYield()
     // during stack unwinding.
     char* buf = u->data;
     memset(buf, 0, totalSize);
+    buf[0] = (char)abiVersion;
     for (SlotManager* mgr = this; mgr; mgr = mgr->parent)
     {
         mgr->yielding = true;

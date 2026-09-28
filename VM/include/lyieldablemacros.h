@@ -24,19 +24,21 @@ using Luau::YieldGuard;
 // DEFINE_YIELDABLE_IMPL: base macro parameterized by linkage specifier.
 // Generates the init function (name), continuation (name_k), and body
 // (name_body) from a single function definition. The body receives
-// lua_State* L and bool is_init. Body is always static.
-#define DEFINE_YIELDABLE_IMPL(linkage, name, version)                \
-    static int name##_v##version##_body(lua_State* L, bool is_init);     \
-    linkage int name##_v##version(lua_State* L)                          \
-    {                                                       \
-        return name##_v##version##_body(L, true);                        \
-    }                                                       \
-    linkage int name##_v##version##_k(lua_State* L, int status)          \
-    {                                                       \
-        lua_checkstack(L, LUA_MINSTACK);                    \
-        return name##_v##version##_body(L, false);                       \
-    }                                                       \
-    static int name##_v##version##_body(lua_State* L, bool is_init)
+// lua_State* L, bool is_init and the ABI version. Body is always static.
+#define DEFINE_YIELDABLE_IMPL(linkage, name, version)                       \
+    static int name##_body(lua_State* L, bool is_init, uint8_t abi_version); \
+    linkage int name(lua_State* L)                                           \
+    {                                                                        \
+        return name##_body(L, true, (version));                              \
+    }                                                                        \
+    linkage int name##_k(lua_State* L, int status)                           \
+    {                                                                        \
+        if (status == LUA_YIELDABLE_ABI_QUERY)                               \
+            return (version);                                                \
+        lua_checkstack(L, LUA_MINSTACK);                                     \
+        return name##_body(L, false, (version));                             \
+    }                                                                        \
+    static int name##_body(lua_State* L, bool is_init, uint8_t abi_version)
 
 // DEFINE_YIELDABLE: static linkage (single translation unit).
 #define DEFINE_YIELDABLE(name, version) DEFINE_YIELDABLE_IMPL(static, name, version)
@@ -83,10 +85,10 @@ using Luau::YieldGuard;
 #define YIELD_DISPATCH(phase_name) \
     case Phase::phase_name: goto _yieldable_label_##phase_name
 
-// Closes the dispatch switch.
+// Closes the dispatch switch. A phase this build doesn't know is a bad buffer.
 #define YIELD_DISPATCH_END()                                                        \
     default:                                                                        \
-        LUAU_ASSERT(!"Unhandled yieldable phase");                                  \
+        _yieldable_slots.corrupt();                                                 \
     } (void)0
 
 // Fires the interrupt handler and yields if the VM requests it.

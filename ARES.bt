@@ -34,6 +34,15 @@ const uchar UTAG_LLEVENTS = 29;
 const uchar UTAG_LLTIMERS = 30;
 const uchar UTAG_STRBUF = 31;
 const uchar UTAG_OPAQUE_BUFFER = 32;
+const uchar UTAG_YIELD_STATE = 33;
+
+/* One SlotManager's region of a UTAG_YIELD_STATE buffer. The innermost flag
+ * says whether this was the deepest active manager. */
+typedef struct {
+    uint16 length;           /* Slots plus the innermost flag */
+    uchar slots[length - 1];
+    uint8_t innermost;
+} YieldRegion;
 
 /* Mirrors enum AresType in VM/src/ares.cpp. These are wire values and are
  * assigned explicitly there - do not derive them from Luau's lua_Type. */
@@ -798,6 +807,22 @@ typedef struct {
         UVarint capacity;
         UVarint used;
         uchar data[used.v];
+        break;
+    }
+    case UTAG_YIELD_STATE:
+    {
+        UVarint length;
+        local int64 end = FTell() + length.v;
+        uint8_t abi_version; /* The frame's continuation must answer with at least this */
+        local int innermost = 0;
+        while (!innermost)
+        {
+            YieldRegion region;
+            innermost = region.innermost;
+        }
+        /* A buffer reused from an earlier yield can be larger than the chain */
+        if (FTell() < end)
+            uchar slack[end - FTell()];
         break;
     }
     case UTAG_OPAQUE_BUFFER:
