@@ -383,6 +383,12 @@ static MatchStateWire* new_matchstate_wire(lua_State* L)
     return wire;
 }
 
+// A wire buffer that came back through Ares is only trusted once it looks like one
+static bool matchstate_wire_ok(lua_State* L, int idx)
+{
+    return lua_touserdatatagged(L, idx, UTAG_OPAQUE_BUFFER) != nullptr && lua_objlen(L, idx) == sizeof(MatchStateWire);
+}
+
 // Max chars processed per inner-loop batch before yielding back to the
 // scheduler.  Balances yield frequency against per-yield overhead.
 static constexpr int YIELD_BATCH_SIZE = 256;
@@ -423,8 +429,8 @@ struct MatchStateGuard : YieldGuard
         if (isInit())
             return;
         // Resume: offset -> pointer
-        LUAU_ASSERT(wire->level >= 0 && wire->level <= WIRE_MAXCAPTURES);
-        LUAU_ASSERT(wire->stk >= 0 && wire->stk <= WIRE_MAXBACKTRACK);
+        LUAU_ASSERT_ALWAYS(wire->level >= 0 && wire->level <= WIRE_MAXCAPTURES);
+        LUAU_ASSERT_ALWAYS(wire->stk >= 0 && wire->stk <= WIRE_MAXBACKTRACK);
         ms->level = wire->level;
         ms->stk = wire->stk;
         for (int i = 0; i < ms->level; i++)
@@ -872,7 +878,7 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
             continue;
         }
         default:
-            LUAU_ASSERT(!"invalid backtrack site");
+            LUAU_ASSERT_ALWAYS(!"invalid backtrack site");
             break;
         }
     }
@@ -889,7 +895,7 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
 ** =======================================================
 */
 
-static int str_find_match_body(lua_State* L, bool is_init, MatchMode match_mode)
+static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, MatchMode match_mode)
 {
     YIELDABLE_RETURNS_DEFAULT;
     enum Arg
@@ -943,12 +949,15 @@ static int str_find_match_body(lua_State* L, bool is_init, MatchMode match_mode)
         }
     }
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, s1_off, 0);
     DEFINE_SLOT(bool, is_anchor, false);
     DEFINE_SLOT(bool, is_plain, false);
     slots.finalize();
+
+    if (!is_init && !is_plain && !matchstate_wire_ok(L, STACK_WIRE))
+        slots.corrupt();
 
     if (is_init)
     {
@@ -1069,22 +1078,30 @@ static int str_find_match_body(lua_State* L, bool is_init, MatchMode match_mode)
     return 1;
 }
 
-int yieldable_str_find_v0(lua_State* L)
+// find and match share str_find_match_body, so they share its yield ABI.
+// Hand-rolled equivalents of DEFINE_YIELDABLE's wrappers, see that for the rules.
+static constexpr uint8_t STR_FIND_MATCH_ABI_VERSION = 0;
+
+int yieldable_str_find(lua_State* L)
 {
-    return str_find_match_body(L, true, MatchMode::FIND);
+    return str_find_match_body(L, true, STR_FIND_MATCH_ABI_VERSION, MatchMode::FIND);
 }
-int yieldable_str_find_v0_k(lua_State* L, int status)
+int yieldable_str_find_k(lua_State* L, int status)
 {
-    return str_find_match_body(L, false, MatchMode::FIND);
+    if (status == LUA_YIELDABLE_ABI_QUERY)
+        return STR_FIND_MATCH_ABI_VERSION;
+    return str_find_match_body(L, false, STR_FIND_MATCH_ABI_VERSION, MatchMode::FIND);
 }
 
-int yieldable_str_match_v0(lua_State* L)
+int yieldable_str_match(lua_State* L)
 {
-    return str_find_match_body(L, true, MatchMode::MATCH);
+    return str_find_match_body(L, true, STR_FIND_MATCH_ABI_VERSION, MatchMode::MATCH);
 }
-int yieldable_str_match_v0_k(lua_State* L, int status)
+int yieldable_str_match_k(lua_State* L, int status)
 {
-    return str_find_match_body(L, false, MatchMode::MATCH);
+    if (status == LUA_YIELDABLE_ABI_QUERY)
+        return STR_FIND_MATCH_ABI_VERSION;
+    return str_find_match_body(L, false, STR_FIND_MATCH_ABI_VERSION, MatchMode::MATCH);
 }
 
 // }======================================================
@@ -1109,7 +1126,7 @@ DEFINE_YIELDABLE_EXTERN(yieldable_gmatch_aux, 0)
         MATCH_CALL = 1,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, src_off, 0);
     slots.finalize();
@@ -1132,6 +1149,10 @@ DEFINE_YIELDABLE_EXTERN(yieldable_gmatch_aux, 0)
         setnilvalue(uv);
         // wire at STACK_WIRE
     }
+    // A held iterator's wire comes back through Ares as an upvalue, a
+    // suspended one's as a stack slot
+    if (!matchstate_wire_ok(L, STACK_WIRE))
+        slots.corrupt();
 
     MatchState ms;
     prepstate(&ms, L, s, ls, p, lp);
@@ -1183,7 +1204,7 @@ int yieldable_gmatch(lua_State* L)
     lua_settop(L, 2);
     lua_pushinteger(L, 0);
     new_matchstate_wire(L);
-    lua_pushcclosurek(L, yieldable_gmatch_aux_v0, "gmatch_aux", 4, yieldable_gmatch_aux_v0_k);
+    lua_pushcclosurek(L, yieldable_gmatch_aux, "gmatch_aux", 4, yieldable_gmatch_aux_k);
     return 1;
 }
 
@@ -1218,7 +1239,7 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
         REPL_CALL = 2,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, n, 0);
     DEFINE_SLOT(int32_t, src_off, 0);
@@ -1227,6 +1248,9 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
     DEFINE_SLOT(int32_t, end_off, 0);
     DEFINE_SLOT(bool, is_anchor, false);
     slots.finalize();
+
+    if (!is_init && !matchstate_wire_ok(L, STACK_WIRE))
+        slots.corrupt();
 
     lua_YieldSafeStrBuf* buf;
 
@@ -1273,6 +1297,8 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
     const char* p = lua_tolstring(L, ARG_PATTERN, &lp);
     int match_end_off = -1;
     buf = (lua_YieldSafeStrBuf*)lua_touserdatatagged(L, STACK_STRBUF, UTAG_STRBUF);
+    if (!buf)
+        slots.corrupt();
 
     MatchState ms;
     prepstate(&ms, L, src_str, srcl, p, lp);

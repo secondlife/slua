@@ -712,7 +712,7 @@ DEFINE_YIELDABLE(tsort, 0)
         SORT = 1,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, n, 0);
     DEFINE_SLOT(bool, use_pred, false);
@@ -781,7 +781,7 @@ DEFINE_YIELDABLE(tfind, 0)
         LOOP = 1,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, i, 1);
     slots.finalize();
@@ -930,9 +930,9 @@ int luaopen_table(lua_State* L)
     luaL_register(L, LUA_TABLIBNAME, tab_funcs);
 
     // ServerLua: override sort and find registration with yieldable versions (need continuation)
-    lua_pushcclosurek(L, tsort_v0, "sort", 0, tsort_v0_k);
+    lua_pushcclosurek(L, tsort, "sort", 0, tsort_k);
     lua_setfield(L, -2, "sort");
-    lua_pushcclosurek(L, tfind_v0, "find", 0, tfind_v0_k);
+    lua_pushcclosurek(L, tfind, "find", 0, tfind_k);
     lua_setfield(L, -2, "find");
 
     // Lua 5.1 compat

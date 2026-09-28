@@ -746,7 +746,7 @@ static void populateperms(lua_State *L, bool forUnpersist)
     eris_persist_static(strlib, gmatch_aux)
 #endif
 #if defined(eris_c) || defined(lyieldstrlib_c)
-    eris_persist_cont(lyieldstrlib, yieldable_gmatch_aux_v0, yieldable_gmatch_aux_v0_k)
+    eris_persist_cont(lyieldstrlib, yieldable_gmatch_aux, yieldable_gmatch_aux_k)
 #endif
 #if defined(eris_c) || defined(lutf8lib_c)
     eris_persist_static(utf8lib, iter_aux)
@@ -762,12 +762,12 @@ static void populateperms(lua_State *L, bool forUnpersist)
     eris_persist_static_cont(corolib, auxwrapy, auxwrapcont)
 #endif
 #if defined(eris_c) || defined(lllevents_c)
-    eris_persist_static_cont(llevents, llevents_handle_event_v0, llevents_handle_event_v0_k)
+    eris_persist_static_cont(llevents, llevents_handle_event, llevents_handle_event_k)
     eris_persist_static_cont(llevents, llevents_once_wrapper, llevents_once_wrapper_cont)
     eris_persist_static(llevents, timer_wrapper_guard)
 #endif
 #if defined(eris_c) || defined(llltimers_c)
-    eris_persist_static_cont(llltimers, lltimers_tick_v0, lltimers_tick_v0_k)
+    eris_persist_static_cont(llltimers, lltimers_tick, lltimers_tick_k)
     eris_persist_cont(llltimers, timer_event_wrapper, timer_event_wrapper_cont)
 #endif
 #if defined(eris_c) || defined(llprim_c)

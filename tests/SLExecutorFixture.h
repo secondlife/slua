@@ -57,9 +57,23 @@ private:
     inline static FakeQuantaClock* current = nullptr;
 };
 
+/// Like the base `Script`, but with tooling for stepping through lyieldable functions.
+struct TestHostScript : Luau::Executor::Script
+{
+    using Script::Script;
+
+    static void installVMCallbacks(lua_State* L)
+    {
+        Script::installVMCallbacks(L);
+        lua_callbacks(L)->interrupt = stdlib_yield_interrupt;
+    }
+
+    static void stdlib_yield_interrupt(lua_State* L, int gc);
+};
+
 // Provisioner with deterministic fakes: the virtual quanta clock above, plus
 // capture of print output and dynamic handler registrations.
-struct TestProvisioner : Luau::Executor::Provisioner<>, FakeQuantaClock
+struct TestProvisioner : Luau::Executor::Provisioner<TestHostScript>, FakeQuantaClock
 {
     // The script-visible stopwatch LLTimers schedules against. Deliberately
     // separate from the quanta clock above, which advances on every reading.
@@ -67,10 +81,13 @@ struct TestProvisioner : Luau::Executor::Provisioner<>, FakeQuantaClock
     double last_timer_interval = -1.0;
     std::vector<std::string> printed;
     std::vector<std::string> registrations;
+    // One-shot, set by arm_stdlib_yield() and consumed by the next stdlib
+    // yield check, see TestHostScript
+    bool stdlib_yield_armed = false;
 
     // Subclasses pass their own callbacks, composed off makeCallbacks()
     explicit TestProvisioner(const Luau::Executor::HostCallbacks& callbacks = makeCallbacks())
-        : Luau::Executor::Provisioner<>(callbacks)
+        : Luau::Executor::Provisioner<TestHostScript>(callbacks)
     {
     }
 
@@ -95,6 +112,9 @@ struct TestProvisioner : Luau::Executor::Provisioner<>, FakeQuantaClock
 
         lua_pushcfunction(L, lua_break, "preempt");
         lua_setglobal(L, "preempt");
+
+        lua_pushcfunction(L, arm_stdlib_yield, "arm_stdlib_yield");
+        lua_setglobal(L, "arm_stdlib_yield");
 
         lua_pushcfunction(L, jump_clock, "jump_clock");
         lua_setglobal(L, "jump_clock");
@@ -132,6 +152,13 @@ struct TestProvisioner : Luau::Executor::Provisioner<>, FakeQuantaClock
         return 0;
     }
 
+    // The next stdlib yield check yields the coroutine it runs on
+    static int arm_stdlib_yield(lua_State* L)
+    {
+        of(L).stdlib_yield_armed = true;
+        return 0;
+    }
+
     static int capture_print(lua_State* L)
     {
         TestProvisioner::of(L).printed.emplace_back(luaL_checkstring(L, 1));
@@ -160,6 +187,24 @@ struct TestProvisioner : Luau::Executor::Provisioner<>, FakeQuantaClock
         return true;
     }
 };
+
+inline void TestHostScript::stdlib_yield_interrupt(lua_State* L, int gc)
+{
+    if (gc == LUA_INTERRUPT_STDLIB && Script::fromLuaState(L) != nullptr)
+    {
+        TestProvisioner& host = TestProvisioner::of(L);
+        if (host.stdlib_yield_armed)
+        {
+            host.stdlib_yield_armed = false;
+            // A stdlib check is a yieldable point by construction
+            LUAU_ASSERT(luaSL_may_interrupt(L) == YieldableStatus::OK);
+            lua_yield(L, 0);
+            return;
+        }
+    }
+
+    Script::interruptHandler(L, gc);
+}
 
 // Owns the asset bytes an ImageConfig only borrows, so the config is minted on
 // conversion rather than held with a pointer that a move could invalidate.

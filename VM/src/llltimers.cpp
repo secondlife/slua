@@ -431,12 +431,12 @@ static void schedule_next_tick(lua_State *L, lua_LLTimers *lltimers)
 }
 
 // Forward-declare continuation for is_already_in_tick.
-static int lltimers_tick_v0_k(lua_State *L, int status);
+static int lltimers_tick_k(lua_State *L, int status);
 
 // Check if we're already inside a _tick() call by walking the call stack
 static bool is_already_in_tick(lua_State *L)
 {
-    // Walk up the call stack looking for lltimers_tick_v0_k
+    // Walk up the call stack looking for lltimers_tick_k
     // We start from L->ci - 1 because L->ci is the current (new) call to _tick
     for (CallInfo* ci = L->ci - 1; ci > L->base_ci; ci--)
     {
@@ -447,7 +447,7 @@ static bool is_already_in_tick(lua_State *L)
         Closure* cl = clvalue(ci->func);
 
         // Check if this is a C function with our continuation
-        if (cl->isC && cl->c.cont == lltimers_tick_v0_k)
+        if (cl->isC && cl->c.cont == lltimers_tick_k)
         {
             // Found _tick() higher in the call stack - we're reentrant!
             return true;
@@ -467,7 +467,7 @@ DEFINE_YIELDABLE(lltimers_tick, 0)
         CALL_HANDLER = 2,
     };
 
-    SlotManager slots(L, is_init);
+    SlotManager slots(L, is_init, abi_version);
 
     DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
     DEFINE_SLOT(int32_t, timer_index, 1);
@@ -740,12 +740,12 @@ void luaSL_setup_llltimers_metatable(lua_State *L, int expose_internal_funcs)
     lua_setfield(L, -2, "off");
 
     // Store _tick in registry for host and timer wrapper access
-    lua_pushcclosurek(L, lltimers_tick_v0, "_tick", 0, lltimers_tick_v0_k);
+    lua_pushcclosurek(L, lltimers_tick, "_tick", 0, lltimers_tick_k);
     lua_setfield(L, LUA_REGISTRYINDEX, "LLTIMERS_TICK");
 
     if (expose_internal_funcs)
     {
-        lua_pushcclosurek(L, lltimers_tick_v0, "_tick", 0, lltimers_tick_v0_k);
+        lua_pushcclosurek(L, lltimers_tick, "_tick", 0, lltimers_tick_k);
         lua_setfield(L, -2, "_tick");
     }
 

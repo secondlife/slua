@@ -22,10 +22,13 @@
 #include "Luau/FileUtils.h"
 #include "Luau/ParseResult.h"
 
+#include "lstate.h"
+
 #include "doctest.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -47,6 +50,139 @@ struct GoldenScenario
     void (*verify)(TestScript&);
 };
 }
+
+// The phase of every region of every suspended yieldable C frame on a thread,
+// outermost frame and root region first
+using YieldShape = std::vector<std::vector<uint8_t>>;
+
+static YieldShape readYieldShape(lua_State* thread)
+{
+    YieldShape shape;
+    for (CallInfo* ci = thread->base_ci + 1; ci <= thread->ci; ++ci)
+    {
+        if (!ttisfunction(ci->func) || !clvalue(ci->func)->isC || ci->base >= thread->top)
+            continue;
+        if (!ttisuserdata(ci->base) || uvalue(ci->base)->tag != UTAG_YIELD_STATE)
+            continue;
+
+        Udata* u = uvalue(ci->base);
+        const uint8_t* bytes = (const uint8_t*)u->data;
+        size_t size = u->len;
+        std::vector<uint8_t> phases;
+        // Past the version byte, each region is a u16 length, its slots with
+        // the phase first, and the innermost flag
+        size_t off = sizeof(uint8_t);
+        for (;;)
+        {
+            REQUIRE(off + sizeof(uint16_t) <= size);
+            uint16_t length;
+            memcpy(&length, bytes + off, sizeof(uint16_t));
+            off += sizeof(uint16_t);
+            REQUIRE(length >= 2);
+            REQUIRE(off + length <= size);
+            phases.push_back(bytes[off]);
+            if (bytes[off + length - 1])
+                break;
+            off += length;
+        }
+        shape.push_back(std::move(phases));
+    }
+    return shape;
+}
+
+static std::string formatYieldShape(const YieldShape& shape)
+{
+    std::string out = "{";
+    for (size_t i = 0; i < shape.size(); ++i)
+    {
+        out += i ? ",{" : "{";
+        for (size_t j = 0; j < shape[i].size(); ++j)
+            out += (j ? "," : "") + std::to_string(shape[i][j]);
+        out += "}";
+    }
+    return out + "}";
+}
+
+// The handler thread, then each coroutine in the script's `parked` table,
+// against the shapes a scenario expects
+static void checkYieldShapes(TestScript& ts, const std::vector<YieldShape>& expected)
+{
+    lua_State* instance = ts.exec.getInstanceState();
+    std::vector<lua_State*> threads;
+    threads.push_back(lua_tothread(instance, 1));
+
+    lua_getglobal(instance, "parked");
+    REQUIRE(lua_istable(instance, -1));
+    int count = lua_objlen(instance, -1);
+    for (int i = 1; i <= count; ++i)
+    {
+        lua_rawgeti(instance, -1, i);
+        threads.push_back(lua_tothread(instance, -1));
+        lua_pop(instance, 1);
+    }
+    lua_pop(instance, 1);
+
+    REQUIRE(threads.size() == expected.size());
+    for (size_t i = 0; i < threads.size(); ++i)
+    {
+        REQUIRE(threads[i] != nullptr);
+        YieldShape actual = readYieldShape(threads[i]);
+        INFO("thread ", i, " expected ", formatYieldShape(expected[i]), " actual ", formatYieldShape(actual));
+        CHECK(actual == expected[i]);
+    }
+}
+
+// Okay so this is probably overkill, but we also want to test some of our lyieldable stuff.
+// The best way we can do that is by ensuring that we yield at a variety of points in the
+// various functions, and save the state. The problem is trying to ensure we can deterministically
+// pause at the correct point in that C++ function stack. Counting interrupts is very brittle,
+// so instead we just force the functions to constantly flush their yield buffers and inspect
+// them to see if they're in the stack state we want to test.
+//
+// Naturally, all of these Phase enums are kind of internal implementation details of each
+// of these functions, so just keep a record of them here as well. Nasty as hell, but I'm
+// okay with it if it makes this testable.
+namespace phase
+{
+// lllevents.cpp llevents_handle_event, llltimers.cpp lltimers_tick
+constexpr uint8_t HANDLE_EVENT_CALL_HANDLER = 2;
+constexpr uint8_t TICK_CALL_HANDLER = 2;
+// lyieldstrlib.cpp str_find_match_body, str_gsub_body, yieldable_gmatch_aux
+constexpr uint8_t FIND_MATCH_CALL = 1;
+constexpr uint8_t FIND_PLAIN_YIELD = 2;
+constexpr uint8_t GSUB_MATCH_CALL = 1;
+constexpr uint8_t GSUB_REPL_CALL = 2;
+constexpr uint8_t GMATCH_MATCH_CALL = 1;
+// lyieldstrlib.cpp iterative_match_helper, the check at the top of its loop
+constexpr uint8_t MATCH_MAIN_YIELD = 1;
+// ltablib.cpp tsort, sort_rec, tfind
+constexpr uint8_t SORT = 1;
+constexpr uint8_t SORT_REC_CMP_UL = 2;
+constexpr uint8_t TFIND_LOOP = 1;
+// lua_cjson.cpp json_encode_common, json_append_data, json_append_array
+constexpr uint8_t ENCODE_APPEND_DATA = 1;
+constexpr uint8_t APPEND_DATA_ARRAY_AUTO = 5;
+constexpr uint8_t APPEND_ARRAY_REPLACER_CALL = 4;
+// lua_cjson.cpp json_decode_common, json_process_value, json_parse_array_context
+constexpr uint8_t DECODE_PROCESS_VALUE = 1;
+constexpr uint8_t PROCESS_VALUE_ARRAY = 2;
+constexpr uint8_t PARSE_ARRAY_REVIVER_CALL = 4;
+}
+
+// Handler thread first, then the coroutines in the order the source parks them
+static const std::vector<YieldShape> kYieldedStdlibShapes = {
+    // _handleEvent -> _tick -> the timer function, which calls preempt()
+    {{phase::HANDLE_EVENT_CALL_HANDLER}, {phase::TICK_CALL_HANDLER}},
+    {{phase::FIND_PLAIN_YIELD}},
+    {{phase::FIND_MATCH_CALL, phase::MATCH_MAIN_YIELD}},
+    {{phase::GSUB_MATCH_CALL, phase::MATCH_MAIN_YIELD}},
+    {{phase::GMATCH_MATCH_CALL, phase::MATCH_MAIN_YIELD}},
+    {{phase::TFIND_LOOP}},
+    {{phase::GSUB_REPL_CALL}},
+    {{phase::SORT, phase::SORT_REC_CMP_UL}},
+    {{phase::ENCODE_APPEND_DATA, phase::APPEND_DATA_ARRAY_AUTO, phase::APPEND_ARRAY_REPLACER_CALL}},
+    {{phase::DECODE_PROCESS_VALUE, phase::PROCESS_VALUE_ARRAY, phase::PARSE_ARRAY_REVIVER_CALL}},
+};
 
 static const GoldenScenario kGoldenScenarios[] = {
     {"between-handlers",
@@ -88,6 +224,24 @@ static const GoldenScenario kGoldenScenarios[] = {
             resumeToCompletion(ts.exec, 1.0);
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"counter ok"});
+        }},
+    // Every yieldable C function suspended mid-call at once, each in its own
+    // coroutine, the handler itself inside _tick. The shapes pin where.
+    {"yielded-stdlib",
+        [](TestScript& ts)
+        {
+            ts.start();
+            ts.host.script_clock = 1.0;
+            dispatch(ts.exec, LSLEvent::Timer, HandlerRunStatus::Preempted);
+            checkYieldShapes(ts, kYieldedStdlibShapes);
+        },
+        [](TestScript& ts)
+        {
+            REQUIRE(ts.exec.isHandlerActive());
+            checkYieldShapes(ts, kYieldedStdlibShapes);
+            resumeToCompletion(ts.exec, 1.0);
+            dispatch(ts.exec, LSLEvent::MovingStart);
+            checkCapture(ts.host.printed, {"yieldables ok"});
         }},
     {"errored-handler",
         [](TestScript& ts)

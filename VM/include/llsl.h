@@ -32,6 +32,12 @@ enum class YieldableStatus : uint8_t {
 #define UTAG_LLTIMERS 30
 #define UTAG_STRBUF 31
 #define UTAG_OPAQUE_BUFFER 32
+// A yieldable C function's slot buffer, see lyieldable.h
+#define UTAG_YIELD_STATE 33
+
+// Passed as the status to a yieldable's continuation to get its ABI version
+// back instead of a resume
+#define LUA_YIELDABLE_ABI_QUERY (-1)
 
 // Internal global names for event/timer managers (hidden from user code)
 #define LLEVENTS_GLOBAL_NAME "/$ LLEvents"
