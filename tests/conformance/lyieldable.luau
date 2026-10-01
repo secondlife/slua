@@ -285,4 +285,12 @@ do
     assert(ok and result == 15)
 end
 
+-- A chain whose regions don't fit the uint16 offsets is refused up front,
+-- before any yield could write through wrapped offsets
+do
+    local ok, err = pcall(yieldable_wide)
+    assert(not ok, "wide yield state was accepted")
+    assert(string.find(err, "yield state too large", 1, true), err)
+end
+
 return "OK"

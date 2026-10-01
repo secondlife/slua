@@ -349,6 +349,7 @@ struct IMatchCapture
     int32_t len;
 };
 
+// This must be true on EVERY platform, or ARES data won't be portable.
 static_assert(sizeof(ImatchFrame[2]) == 2 * 5 * sizeof(int32_t));
 static_assert(sizeof(IMatchCapture[2]) == 2 * 2 * sizeof(int32_t));
 
@@ -392,6 +393,18 @@ static bool matchstate_wire_ok(lua_State* L, int idx)
 // Max chars processed per inner-loop batch before yielding back to the
 // scheduler.  Balances yield frequency against per-yield overhead.
 static constexpr int YIELD_BATCH_SIZE = 256;
+
+// If we're scanning a character class, "charge" this many extra scans
+// per this many characters in the class.
+static constexpr int CLASS_BYTES_PER_STEP = 16;
+
+static inline void charge_class_scan(int& yield_budget, const char* p, const char* ep)
+{
+    yield_budget -= (int)(ep - p) / CLASS_BYTES_PER_STEP;
+}
+
+// Short enough we don't have to give it any special consideration for "cost"
+static constexpr size_t SHORT_PATTERN = 512;
 
 static_assert(MAXSSIZE <= INT32_MAX, "MAXSSIZE exceeds int32_t range; pattern matcher offsets would overflow");
 
@@ -570,6 +583,7 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
         {
             for (;;)
             {
+                charge_class_scan(yield_budget, p, pat_str + greedy_ep_off);
                 BUDGET_YIELD_CHECK(L, GREEDY_YIELD);
                 if (!singlematch(ms, s + greedy_i, p, pat_str + greedy_ep_off))
                 {
@@ -700,6 +714,9 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                         if (*p != '[')
                             luaL_error(L, "missing '[' after '%%f' in pattern");
                         ep = classend(ms, p);
+                        // Two scans: the previous char and the current one
+                        charge_class_scan(yield_budget, p, ep);
+                        charge_class_scan(yield_budget, p, ep);
                         previous = (s == ms->src_init) ? '\0' : *(s - 1);
                         if (!matchbracketclass(uchar(previous), p, ep - 1) &&
                             matchbracketclass(uchar(*s), p, ep - 1))
@@ -738,6 +755,7 @@ static int iterative_match_helper(lua_State* L, SlotManager& parent_slots,
                 imatch_dflt:
                 {
                     const char* ep = classend(ms, p);
+                    charge_class_scan(yield_budget, p, ep);
                     if (!singlematch(ms, s, p, ep))
                     {
                         if (*ep == '*' || *ep == '?' || *ep == '-')
@@ -915,6 +933,7 @@ static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, 
 
     // Fast path: plain find or no-specials pattern — bypass all yieldable
     // machinery. Pre-SlotManager arg positions: source=1, pattern=2, init=3, plain=4.
+    bool literal = false;
     if (is_init && match_mode == MatchMode::FIND)
     {
         size_t ls, lp;
@@ -928,14 +947,12 @@ static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, 
             lua_pushnil(L);
             return 1;
         }
-        // ServerLua: gate the fast (unyieldable) lmemfind path by pattern length.
-        // Long patterns must go through yieldable paths:
-        //  - nospecials: strpbrk scans the entire pattern before any YIELD_CHECK
-        //  - plain=true: lmemfind is O(N*M) for adversarial input
-        // The pattern matching path handles literal characters with yield checks;
-        // plain=true with long patterns gets a dedicated yieldable search loop.
-        constexpr size_t MAX_PLAIN_STR = 512;
-        if (lp <= MAX_PLAIN_STR && (lua_toboolean(L, 4) || nospecials(p, lp)))
+        literal = lua_toboolean(L, 4) || (lp <= SHORT_PATTERN && nospecials(p, lp));
+        // lmemfind has no yield check, so it is gated on the work it can do:
+        // a memcmp of up to lp bytes at each remaining position. Past that,
+        // a literal search takes the yieldable plain loop below.
+        constexpr size_t MAX_PLAIN_WORK = 1 << 20;
+        if (literal && lp * (ls - init + 1) <= MAX_PLAIN_WORK)
         {
             const char* s2 = lmemfind(s + init - 1, ls - init + 1, p, lp);
             if (s2)
@@ -973,7 +990,7 @@ static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, 
             return 1;
         }
 
-        is_plain = (match_mode == MatchMode::FIND) && lua_toboolean(L, ARG_PLAIN);
+        is_plain = literal;
         s1_off = init - 1;
 
         if (is_plain)
@@ -1005,6 +1022,7 @@ static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, 
     int end_off = -1;
     // Declared before YIELD_DISPATCH to avoid goto-crossing-initialization.
     const char* found = nullptr;
+    int yield_budget = YIELD_BATCH_SIZE;
 
     MatchState ms;
     prepstate(&ms, L, s, ls, p, lp);
@@ -1014,12 +1032,12 @@ static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, 
     YIELD_DISPATCH(PLAIN_YIELD);
     YIELD_DISPATCH_END();
 
-    // Yieldable plain substring search for long patterns — same algorithm as
-    // lmemfind, inlined because YIELD_CHECK labels can't cross function boundaries.
-    // Each iteration does one memchr + one O(lp) memcmp, so per-iteration
-    // yield checks are appropriate (no budget needed for patterns > 512).
+    // Yieldable plain substring search, same algorithm as lmemfind, inlined
+    // because YIELD_CHECK labels can't cross function boundaries.
     if (is_plain)
     {
+        // An empty pattern always fits the fast path's work gate
+        LUAU_ASSERT(lp > 0);
         while ((size_t)s1_off + lp <= ls)
         {
             found = (const char*)memchr(s + s1_off, p[0], ls - lp - s1_off + 1);
@@ -1033,10 +1051,14 @@ static int str_find_match_body(lua_State* L, bool is_init, uint8_t abi_version, 
                 return 2;
             }
             s1_off = (int)(found - s) + 1;
-            YIELD_CHECK(L, PLAIN_YIELD, LUA_INTERRUPT_STDLIB);
-            // Re-read after potential yield (pointers may have moved)
-            s = lua_tolstring(L, ARG_SOURCE, &ls);
-            p = lua_tolstring(L, ARG_PATTERN, &lp);
+            if (lp > SHORT_PATTERN || --yield_budget <= 0)
+            {
+                YIELD_CHECK(L, PLAIN_YIELD, LUA_INTERRUPT_STDLIB);
+                yield_budget = YIELD_BATCH_SIZE;
+                // Re-read after potential yield (pointers may have moved)
+                s = lua_tolstring(L, ARG_SOURCE, &ls);
+                p = lua_tolstring(L, ARG_PATTERN, &lp);
+            }
         }
         lua_pushnil(L);
         return 1;
@@ -1339,8 +1361,8 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
                 else if (repl_type == LUA_TTABLE)
                 {
                     push_onecapture(&ms, 0, match_start, match_end);
-                    // Not yieldable, but callTMres already calls the
-                    // interrupt handler if __index is a function.
+                    // An __index function can't yield here: callTMres guards
+                    // it, and fires the interrupt handler before it runs.
                     lua_gettable(L, ARG_REPL);
                 }
                 else

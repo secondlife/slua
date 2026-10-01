@@ -2017,7 +2017,7 @@ TEST_CASE("StdlibYield")
             [](lua_State* L) -> int
             {
                 pmTimingMode = true;
-                pmLastTimestamp = 0;
+                pmLastTimestamp = lua_cputime();
                 pmMaxDelta = 0;
                 return 0;
             },
@@ -2030,6 +2030,10 @@ TEST_CASE("StdlibYield")
             [](lua_State* L) -> int
             {
                 pmTimingMode = false;
+                // The stretch after the last interrupt counts too
+                double delta = lua_cputime() - pmLastTimestamp;
+                if (delta > pmMaxDelta)
+                    pmMaxDelta = delta;
                 lua_pushnumber(L, pmMaxDelta);
                 return 1;
             },

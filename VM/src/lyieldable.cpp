@@ -17,6 +17,12 @@ void SlotManager::corrupt() const
     luaL_error(L, "corrupt yield state");
 }
 
+// Script error for a chain whose regions don't fit the uint16 offsets
+void SlotManager::tooLarge() const
+{
+    luaL_error(L, "yield state too large");
+}
+
 // Root constructor. On init, pushes nil at position 1.
 // On resume, reads the yield state userdata at position 1.
 SlotManager::SlotManager(lua_State* L, bool is_init, uint8_t abi_version)
@@ -80,7 +86,15 @@ void SlotManager::flushForYield()
         // First yield (slot is nil) or userdata too small — allocate.
         luaC_checkGC(L);
         luaC_threadbarrier(L);
-        u = luaU_newudata(L, totalSize, UTAG_YIELD_STATE);
+        {
+            // NB: We are very careful to allocate this under a non-user memcat so it
+            // isn't "charged" against the user for memory purposes. Since these only
+            // get allocated by the yielding mechanism, we would end up in a situation
+            // where one could non-deterministically OoM due to a pre-emption yield
+            // being injected at a particularly inopportune point.
+            MemcatGuard guard(L, 0);
+            u = luaU_newudata(L, totalSize, UTAG_YIELD_STATE);
+        }
         // Recompute slot — GC or allocation may have reallocated the stack.
         slot = L->stack + bufferStackOffset;
         setuvalue(L, slot, u);

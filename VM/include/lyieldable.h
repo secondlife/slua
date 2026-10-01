@@ -127,6 +127,7 @@ public:
     bool isInit() const { return initMode; }
 
     LUA_NORETURN void corrupt() const;
+    LUA_NORETURN void tooLarge() const;
 
     // Lock the slot layout. Must be called after all slots are allocated
     // and before YIELD_DISPATCH_BEGIN.
@@ -259,6 +260,12 @@ LUAU_FORCEINLINE void SlotManager::finalize()
     innermostOffset = static_cast<uint16_t>(baseOffset + requiredSize);
     requiredSize += sizeof(uint8_t);
     LUAU_ASSERT(requiredSize <= UINT16_MAX);
+    // Every offset in this region, including the ones allocSlot already
+    // truncated, sits below the region's end, so this is the one place the
+    // uint16 layout has to be checked. Nothing has been written through them
+    // yet: finalize precedes every yield point.
+    if (baseOffset + requiredSize > UINT16_MAX)
+        tooLarge();
     finalized = true;
 
     if (!initMode)
