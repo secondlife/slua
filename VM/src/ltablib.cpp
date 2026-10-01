@@ -380,7 +380,25 @@ static int tunpack(lua_State* L)
 // ServerLua: Budget between yield checks for the default (non-predicate) comparator path.
 // Same concept as YIELD_BATCH_SIZE in lyieldstrlib.cpp.
 // This may be raised or lowered without breaking ABI compatibility.
-static constexpr int SORT_YIELD_BUDGET = 512;
+static constexpr int SORT_YIELD_BUDGET = 32;
+
+// ServerLua: Return if __lt might be invoked when comparing
+static bool sort_cmp_may_call(LuaTable* t, int i, int j)
+{
+    for (const TValue* val : {&t->array[i], &t->array[j]})
+    {
+        switch (ttype(val))
+        {
+        case LUA_TNUMBER:
+        case LUA_TSTRING:
+        case LUA_TLIGHTUSERDATA:
+            break;
+        default:
+            return true;
+        }
+    }
+    return false;
+}
 
 // ServerLua: Comparison macro for yieldable sort. Expects `t` (LuaTable*), `use_pred`
 // (bool slot), `saved_sa` (int32_t slot), and `yield_budget` (int local) to
@@ -388,14 +406,14 @@ static constexpr int SORT_YIELD_BUDGET = 512;
 // unique PHASE_NAME.
 //
 // Yield check fires on every comparison when use_pred is true (short-circuit
-// skips the budget decrement). For the default comparator, the budget gates
-// yield checks to every SORT_YIELD_BUDGET comparisons.
+// skips the budget decrement) or when the compare can reach a metamethod.
+// Otherwise the budget gates yield checks to every SORT_YIELD_BUDGET comparisons.
 //
 // The LuaTable* is a stable heap pointer — it never moves. Only t->array
 // and t->sizearray can change (if the comparator resizes the table), which
 // is what saved_sa detects. God do I hate that this is a macro but what can you do.
 #define SORT_CMP(cmp_var, i_idx, j_idx, phase_name)                                             \
-    if (use_pred || --yield_budget <= 0)                                                         \
+    if (use_pred || sort_cmp_may_call(t, i_idx, j_idx) || --yield_budget <= 0)                   \
     {                                                                                            \
         YIELD_CHECK(L, phase_name##_YINT, LUA_INTERRUPT_STDLIB);                                 \
         yield_budget = SORT_YIELD_BUDGET;                                                        \
@@ -420,10 +438,7 @@ static constexpr int SORT_YIELD_BUDGET = 512;
     else                                                                                         \
     {                                                                                            \
         int _sa = t->sizearray;                                                                  \
-        /* ServerLua: guard nCcalls so __lt metamethods can't yield from this context */          \
-        ++L->nCcalls;                                                                            \
         cmp_var = luaV_lessthan(L, &t->array[i_idx], &t->array[j_idx]);                         \
-        --L->nCcalls;                                                                            \
         if (t->sizearray != _sa)                                                                 \
             luaL_error(L, "table modified during sorting");                                      \
     }
@@ -820,11 +835,7 @@ DEFINE_YIELDABLE(tfind, 0)
 
         StkId v = L->base + 2;
 
-        // ServerLua: guard nCcalls so __eq metamethods can't yield from this context
-        ++L->nCcalls;
-        bool eq = equalobj(L, v, e);
-        --L->nCcalls;
-        if (eq)
+        if (equalobj(L, v, e))
         {
             lua_pushinteger(L, i);
             return 1;

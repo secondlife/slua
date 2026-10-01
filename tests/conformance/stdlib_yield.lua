@@ -210,6 +210,15 @@ assert(not pcall(function()
   table.find(t, setmetatable({2}, mt))
 end))
 
+-- Same for __index on a gsub replacement table.
+assert(not pcall(function()
+  local repl = setmetatable({}, { __index = function(t, k)
+    coroutine.yield()
+    return "x"
+  end })
+  string.gsub("abc", "%w", repl)
+end))
+
 -- Enable interrupt-driven yields from YIELD_CHECK for remaining tests.
 -- The interrupt handler (installed by C++ test fixture) calls lua_yield
 -- on every YIELD_CHECK hit, and we Ares round-trip on each yield.
@@ -414,12 +423,38 @@ do
   end)
 end
 
+-- Short pattern, long subject: the unyieldable fast path has to be gated on
+-- the work it would do, not just the pattern length. Both the plain flag and
+-- the no-specials detection reach it.
+do
+  local s = string.rep("a", N)
+  local p = string.rep("a", 511) .. "b"
+  assert_interrupt_bounded("plain find (short pattern)", 0.0001, function()
+    assert(string.find(s, p, 1, true) == nil, "should not match")
+  end)
+  assert_interrupt_bounded("nospecials find (short pattern)", 0.0001, function()
+    assert(string.find(s, p) == nil, "should not match")
+  end)
+end
+
 do
   local pat = "(" .. string.rep("a", 254) .. "b)"
   local s = string.rep("a", N)
   assert_interrupt_bounded("outer loop", 0.0001, function()
     local r = string.find(s, pat)
     assert(r == nil, "should not match")
+  end)
+end
+
+-- Long bracket class under a greedy quantifier: the matching char is last, so
+-- every step scans the whole class. The budget has to count that.
+do
+  local n = 5000
+  local class = "[" .. string.rep("b", n) .. "a]*"
+  local s = string.rep("a", n)
+  assert_interrupt_bounded("bracket class", 0.0001, function()
+    local i, j = string.find(s, class)
+    assert(i == 1 and j == n, `bracket class match failed: i={i} j={j}`)
   end)
 end
 
@@ -563,6 +598,41 @@ do
   assert_interrupt_bounded("sort comparator", 0.0001, function()
     table.sort(t, function(a, b) return a < b end)
   end)
+end
+
+-- Default comparator on long strings sharing a prefix: each compare is a long
+-- memcmp, so the budget between checks has to stay small.
+do
+  local n = 8000
+  local a = string.rep("a", n) .. "a"
+  local b = string.rep("a", n) .. "b"
+  local t = {}
+  for i = 1, 1000 do
+    t[i] = if i % 2 == 0 then a else b
+  end
+  assert_interrupt_bounded("sort long strings", 0.0001, function()
+    table.sort(t)
+  end)
+  assert(t[1] == a and t[1000] == b, "sort long strings order")
+end
+
+-- Default comparator over __lt tables: every compare is a Lua call, and one
+-- the sort can't yield from, so a check has to precede each of them.
+do
+  local mt = { __lt = function(a, b)
+    for _ = 1, 200 do end
+    return a.v < b.v
+  end }
+  local t = {}
+  for i = 1, 300 do
+    t[i] = setmetatable({ v = (i * 7919) % 300 }, mt)
+  end
+  assert_interrupt_bounded("sort __lt", 0.0001, function()
+    table.sort(t)
+  end)
+  for i = 2, 300 do
+    assert(t[i - 1].v <= t[i].v, "sort __lt order")
+  end
 end
 
 -- ==========================================================================

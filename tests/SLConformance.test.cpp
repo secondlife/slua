@@ -1407,6 +1407,54 @@ DEFINE_YIELDABLE(test_yieldable_recursive, 0)
     return 1;
 }
 
+// A slot wide enough that two of them across a chain overflow the uint16
+// region offsets. finalize has to refuse the layout.
+struct YieldPad
+{
+    char bytes[40000];
+};
+
+static void test_yieldable_wide_inner(lua_State* L, SlotManager& parentSlots)
+{
+    YIELDABLE_RETURNS_VOID;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+    };
+
+    SlotManager slots(parentSlots);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(YieldPad, pad, {});
+    slots.finalize();
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH_END();
+}
+
+DEFINE_YIELDABLE(test_yieldable_wide, 0)
+{
+    YIELDABLE_RETURNS_DEFAULT;
+    enum class Phase : uint8_t
+    {
+        DEFAULT = 0,
+        HELPER_CALL = 1,
+    };
+
+    SlotManager slots(L, is_init, abi_version);
+    DEFINE_SLOT(Phase, phase, Phase::DEFAULT);
+    DEFINE_SLOT(YieldPad, pad, {});
+    slots.finalize();
+
+    YIELD_DISPATCH_BEGIN(phase, slots);
+    YIELD_DISPATCH(HELPER_CALL);
+    YIELD_DISPATCH_END();
+
+    YIELD_HELPER(L, HELPER_CALL, test_yieldable_wide_inner(L, slots));
+
+    lua_pushboolean(L, true);
+    return 1;
+}
+
 // Simple yieldable function that yields via YIELD_CHECK (interrupt-driven).
 // Takes n, sums 1..n. No callback — yields happen purely from the interrupt handler.
 DEFINE_YIELDABLE(test_yieldable_check_sum, 0)
@@ -1532,6 +1580,9 @@ TEST_CASE("Lyieldable")
 
         lua_pushcclosurek(L, test_yieldable_recursive, "test_yieldable_recursive", 0, test_yieldable_recursive_k);
         lua_setglobal(L, "yieldable_recursive");
+
+        lua_pushcclosurek(L, test_yieldable_wide, "test_yieldable_wide", 0, test_yieldable_wide_k);
+        lua_setglobal(L, "yieldable_wide");
 
         lua_pushcfunction(
             L,

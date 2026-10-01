@@ -74,7 +74,12 @@ static StkId callTMres(lua_State* L, StkId res, const TValue* f, const TValue* p
     L->top += 3;
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
     luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
+    // ServerLua: Make sure `lua_gettable()` and friends don't think they're yieldable if we just
+    // happen to currently be inside a C function with a continuation. Bump nCcalls to ensure
+    // we don't accidentally allow them to yield and cause a big mess on the stack.
+    ++L->nCcalls;
     luaD_call(L, L->top - 3, 1);
+    --L->nCcalls;
     res = restorestack(L, result);
     L->top--;
     setobj2s(L, res, L->top);
@@ -99,7 +104,10 @@ static void callTM(lua_State* L, const TValue* f, const TValue* p1, const TValue
     L->top += 4;
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
     luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
+    // ServerLua: same yield guard as in callTMres
+    ++L->nCcalls;
     luaD_call(L, L->top - 4, 0);
+    --L->nCcalls;
 }
 
 void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
