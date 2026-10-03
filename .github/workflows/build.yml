@@ -159,8 +159,20 @@ jobs:
       run: |
         autobuild install -A64
     - name: make coverage
+      env:
+        # ServerLua: regenerate the golden fixtures so the dirty-tree check below
+        # catches non-deterministic or stale serialized states
+        LUAU_REGENERATE_FIXTURES: 1
       run: |
         CXX=clang++ make -j2 config=coverage native=1 coverage
+    - name: check for dirty tree
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "ERROR: working tree is dirty after the build and tests"
+          git status --porcelain
+          git diff --stat
+          exit 1
+        fi
 #    - name: upload coverage
 #      uses: codecov/codecov-action@v3
 #      with:

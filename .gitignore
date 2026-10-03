@@ -4,6 +4,7 @@
 /cmake/
 /cmake[.-]*/
 /coverage/
+/coverage.info
 /.vs/
 /.vscode/
 /fuzz/luau.pb.*
