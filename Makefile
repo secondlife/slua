@@ -254,8 +254,6 @@ clean:
 	rm -rf $(EXECUTABLE_ALIASES)
 
 coverage: $(TESTS_TARGET) $(COMPILE_CLI_TARGET)
-	$(TESTS_TARGET)
-	mv default.profraw tests.profraw
 	$(TESTS_TARGET) --fflags=true
 	mv default.profraw tests-flags.profraw
 	$(TESTS_TARGET) --fflags=true,DebugLuauDeferredConstraintResolution=true
@@ -264,6 +262,8 @@ coverage: $(TESTS_TARGET) $(COMPILE_CLI_TARGET)
 	mv default.profraw codegen.profraw
 	$(TESTS_TARGET) -ts=Conformance --codegen --fflags=true
 	mv default.profraw codegen-flags.profraw
+	$(TESTS_TARGET)
+	mv default.profraw tests.profraw
 	$(COMPILE_CLI_TARGET) --codegennull --target=a64 --fflags=DebugLuauUserDefinedClasses=true tests/conformance
 	mv default.profraw codegen-a64.profraw
 	$(COMPILE_CLI_TARGET) --codegennull --target=x64 --fflags=DebugLuauUserDefinedClasses=true tests/conformance
