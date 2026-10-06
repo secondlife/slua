@@ -54,9 +54,8 @@ struct RunResult
 // Payload format written by Script::serializeState(). Leads every payload as
 // the family magic and versions the core section only; the concrete class's
 // fingerprint follows it and versions the extra section, so the two evolve
-// independently. Each fingerprint is followed by a present and a required
-// feature mask for its section, both zero until a feature exists; see
-// serializeState().
+// independently. Each fingerprint is followed by its section's required
+// feature mask, zero until a feature exists; see serializeState().
 constexpr StateFingerprint kScriptStateFingerprint{{'E', 'X', 'E', 'C'}, 3, 0};
 
 // We need to carry around the error messages in our state, but
@@ -206,11 +205,14 @@ protected:
     virtual StateFingerprint getStateFingerprint() const { return kScriptStateFingerprint; }
 
     // Durable subclass state, written in its own length-prefixed section after
-    // our own fields. Only append to it; the reader gets a ByteReader bounded
-    // to the section and may leave trailing bytes it doesn't know unread, and
-    // `major`/`minor` are what the payload's getStateFingerprint() said, so a
-    // reader can tell an older writer from a truncated section. A subclass
-    // partway down a hierarchy chains to its base before its own.
+    // our own fields: positional fields, then a block (ByteWriter::Block) for
+    // each later feature. The reader gets a ByteReader bounded to the section,
+    // walks its blocks with ByteReader::blocks() and returns reader.ok(); we
+    // ignore whatever it leaves unread. `major`/`minor` are what the payload's
+    // getStateFingerprint() said, for diagnostics; later fields are found by
+    // their blocks. A subclass partway down a hierarchy chains to its base
+    // before its own, each level in a nested section of its own so blocks
+    // don't mix.
     virtual bool serializeExtra(ByteWriter&) const { return true; }
     virtual bool restoreExtra(ByteReader&, uint32_t major, uint32_t minor) { return true; }
 

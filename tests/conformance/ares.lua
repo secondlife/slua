@@ -225,6 +225,11 @@ assert(not table.pack(pcall(function() ro_table['foo'] = 1 end))[1])
 local userdata = newproxy(true)
 assert(ares.unpersist(ares.persist(userdata)) ~= nil)
 
+-- A proxy's metatable is the script's, and can refer back to it
+getmetatable(userdata).self = userdata
+local proxy_copy = round_trip(userdata)
+assert(getmetatable(proxy_copy).self == proxy_copy)
+
 assert_round_trips(vector(1, 2, 3))
 
 -- Strings live in a table ahead of the root, so a repeat costs an index, not a copy

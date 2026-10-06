@@ -674,16 +674,13 @@ bool Script::serializeState(std::string& out)
     writer.writeBytes(kScriptStateFingerprint.tag, sizeof(kScriptStateFingerprint.tag));
     writer.writeU32(kScriptStateFingerprint.major);
     writer.writeU32(kScriptStateFingerprint.minor);
-    // Each fingerprint is followed by two feature masks for its section: the
-    // features whose fields this writer emits, then the subset a reader has
-    // to understand to load this payload. No feature exists yet, so both are
-    // zero, and a reader refuses any nonzero required mask.
-    writer.writeU64(0);
+    // Each fingerprint is followed by its section's required feature mask:
+    // the blocks a reader has to understand to load this payload. No feature
+    // exists yet, so it's zero, and a reader refuses any nonzero mask.
     writer.writeU64(0);
     writer.writeBytes(fingerprint.tag, sizeof(fingerprint.tag));
     writer.writeU32(fingerprint.major);
     writer.writeU32(fingerprint.minor);
-    writer.writeU64(0);
     writer.writeU64(0);
 
     size_t core = writer.beginSection();
@@ -705,7 +702,7 @@ bool Script::serializeState(std::string& out)
     writer.writeU64(mStickyHandler);
     writer.writeU64(mCurrentEvents);
     writer.writeU64(mEventHandlers);
-    // New core fields go here, and bump kScriptStateFingerprint.minor
+    // Later core fields go in blocks here, and bump kScriptStateFingerprint.minor
     writer.endSection(core);
 
     writer.writeString(ares_blob);
@@ -741,7 +738,6 @@ bool Script::restoreState(const char* data, size_t len)
     uint64_t sticky_handler = 0;
     uint64_t current_events = 0;
     uint64_t event_handlers = 0;
-    uint64_t present_features = 0;
     uint64_t required_features = 0;
     ByteReader core{nullptr, 0};
     ByteReader extra{nullptr, 0};
@@ -762,9 +758,9 @@ bool Script::restoreState(const char* data, size_t len)
         setFault(FaultKind::Runtime, "invalid script state");
         return false;
     }
-    // Present features are skipped through their section lengths.
-    // We don't have any yet, so just bail if it's non-zero.
-    if (!reader.readU64(present_features) || !reader.readU64(required_features) || required_features != 0)
+    // Blocks of unknown features are stepped over. None are known yet, so any
+    // required one is refused.
+    if (!reader.readU64(required_features) || required_features != 0)
     {
         logWarn(logSource(), "Script state requires features 0x%llx this build doesn't know", (unsigned long long)required_features);
         setFault(FaultKind::Runtime, "invalid script state");
@@ -783,7 +779,7 @@ bool Script::restoreState(const char* data, size_t len)
         setFault(FaultKind::Runtime, "invalid script state");
         return false;
     }
-    if (!reader.readU64(present_features) || !reader.readU64(required_features) || required_features != 0)
+    if (!reader.readU64(required_features) || required_features != 0)
     {
         logWarn(logSource(), "Script extra state requires features 0x%llx this build doesn't know", (unsigned long long)required_features);
         setFault(FaultKind::Runtime, "invalid script state");
@@ -816,7 +812,7 @@ bool Script::restoreState(const char* data, size_t len)
     READ_OR_BAIL(core.readU64(sticky_handler));
     READ_OR_BAIL(core.readU64(current_events));
     READ_OR_BAIL(core.readU64(event_handlers));
-    // Fields appended after minor 0 are read here only if the section has them
+    // Later core fields are read here with ByteReader::blocks()
 
     READ_OR_BAIL(reader.readString(ares_blob));
 

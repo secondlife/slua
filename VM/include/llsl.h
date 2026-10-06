@@ -34,6 +34,8 @@ enum class YieldableStatus : uint8_t {
 #define UTAG_OPAQUE_BUFFER 32
 // A yieldable C function's slot buffer, see lyieldable.h
 #define UTAG_YIELD_STATE 33
+// Test-only, see lua_AresTestObject
+#define UTAG_ARES_TEST 34
 
 // Passed as the status to a yieldable's continuation to get its ABI version
 // back instead of a resume
@@ -60,6 +62,17 @@ typedef struct lua_DetectedEvent {
     bool valid;
     bool can_change_damage;
 } lua_DetectedEvent;
+
+// Ugh. Stupid test-only hack so we can test blocks associated with
+// features, but without actually having to register a feature.
+typedef struct lua_AresTestObject {
+    int32_t base;
+    int32_t added;
+    // Bytes of a block the reader doesn't know, ahead of added's
+    uint8_t newer_block;
+    // Bytes appended to added's block that the reader doesn't know
+    uint8_t newer_tail;
+} lua_AresTestObject;
 
 struct LuaTable;
 typedef struct lua_LLEvents {

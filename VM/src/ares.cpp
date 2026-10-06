@@ -64,6 +64,7 @@ THE SOFTWARE.
 #include "lljson.h"
 #include "Luau/Bytecode.h"
 #include "Luau/BytecodeWire.h"
+#include "Luau/ByteStream.h"
 
 LUAU_FASTFLAG(LuauCIProto)
 LUAU_FASTFLAG(LuauManagedDebugNames)
@@ -205,12 +206,11 @@ typedef uint64_t ares_size_t;
                       "(directly or indirectly via an upvalue)."
 #define ERIS_ERR_INVAL_PC "Tried to serialize thread yielded at invalid point"
 #define ERIS_ERR_RECORD "malformed data: record exceeds enclosing record"
+#define ERIS_ERR_BLOCK "malformed data: block exceeds enclosing record"
 #define ERIS_ERR_REFCOUNT "malformed data: reference count mismatch (expected %u, got %u)"
-#define ERIS_ERR_TRAILER "persisted a reference in a record's trailer without require_feature() (refcount %d -> %d)"
 #define ERIS_ERR_TRAILING "malformed data: trailing bytes after root object"
 #define ERIS_ERR_MAJOR "unsupported file format version %u.%u (want %u.x through %u.x)"
 #define ERIS_ERR_FEATURE "file format version %u.%u uses features 0x%llx this reader doesn't know"
-#define ERIS_ERR_FEATURE_SET "malformed data: required features 0x%llx are not among the present features 0x%llx"
 #define ERIS_ERR_STRIDX "malformed data: string table index %llu out of range (table has %d)"
 
 /*
@@ -323,17 +323,20 @@ typedef struct PersistInfo {
   void *ud;
   bool writeDebugInfo;
   bool persistingCFunc;
-  /* Junk bytes appended inside every record, for forward-compat tests. */
+  /* Bytes of an unknown block appended inside every record, for
+   * forward-compat tests. */
   uint32_t testPadding;
-  /* info->refcount where the record being written reached BEGIN_TRAILER(),
-   * -1 until its body gets there. */
-  int trailerRefcount;
-  /* Whether require_feature() has been called since BEGIN_TRAILER(). A
-   * reference persisted in the trailer without it is an error, since a reader
-   * that skips the trailer would lose track of the numbering. */
-  bool trailerRequired;
-  /* Every feature a populated field asked for through require_feature(). */
+  /* Whether the innermost record has a BlockWriter open. */
+  bool blockOpen;
+  /* Where the innermost record's last block ended, -1 before any, so a
+   * positional field written after it trips an assert. An offset rather than
+   * a streampos, which has a constructor the union can't hold. */
+  std::streamoff blocksEnd;
+  /* Every feature a block was written BLOCK_REQUIRED for. */
   uint64_t requiredFeatures;
+  /* Set once p_header has written the feature masks; a BLOCK_REQUIRED after
+   * that would be lost. */
+  bool headerWritten;
   /* Strings assigned a string table index so far. */
   int strcount;
 } PersistInfo;
@@ -342,18 +345,15 @@ typedef uint8_t lu_byte;
 
 /* State information when unpersisting an object. */
 typedef struct UnpersistInfo {
-  const char *data;
-  size_t size;
-  size_t pos;
-  /* End of the innermost open record. Every read is bounded by it. */
-  size_t record_end;
+  /* The innermost open record or block, as a bounded cursor. Every read goes
+   * through it; RecordReader and BlockRange swap it for the scope of their
+   * region and put the enclosing one back. */
+  Luau::ByteReader *cur;
   size_t vector_components;
   uint32_t major;
   uint32_t minor;
   /* The writer's final reference count, from the header. */
   uint32_t expectedRefcount;
-  /* The features whose fields the writer emitted, from the header. */
-  uint64_t presentFeatures;
   /* Entries in the string table, once u_strtab has read it. */
   int strtabCount;
   /* When set, stamped as the threaddata of every thread of the unpersisted
@@ -403,19 +403,29 @@ static char const kHeader[] = { 'A', 'R', 'E', 'S' };
 /* Floating point number used to check compatibility of loaded data. */
 static const lua_Number kHeaderNumber = (lua_Number)-1.234567890;
 
-/* Feature bits, one per group of appended fields. Wire values: never
- * renumbered or reused within a major; a major bump clears the set. A set bit
- * in the header means "this build writes the field's bytes"; the field must be
- * understood only when the writer also called require_feature() for it. To
- * add one: define the bit, OR it into kAresFeaturesSupported, bump
- * ARES_FORMAT_MINOR, and add a golden fixture. */
-enum AresFeature : uint64_t {
-  /* ARES_FEATURE_EXAMPLE = 1ull << 0, */
+/* Features, one per group of fields a later build added to a record. Each
+ * feature's fields go in a block keyed by its id, see BlockWriter. Ids are
+ * wire values and bit numbers in the header's required mask: allocated on
+ * main only, never renumbered or reused within a major; a major bump clears
+ * them. A feature only has to be understood when the writer wrote a block
+ * BLOCK_REQUIRED for it. To add one: define the id, OR its bit into
+ * kAresFeaturesSupported, bump ARES_FORMAT_MINOR, and add a golden fixture. */
+enum AresFeature : uint8_t {
+  /* ARES_FEATURE_EXAMPLE = 0, */
+
+  /* Test-only, never required, so they sit past the ids the required mask
+   * can name. UTAG_ARES_TEST's, see p_userdata: */
+  ARES_FEATURE_TEST_NEWER = 64,
+  ARES_FEATURE_TEST_ADDED = 65,
+  /* The testpad setting's */
+  ARES_FEATURE_TEST_PAD = 66,
+  ARES_FEATURE_TEST_PAD_EMPTY = 67,
 };
 
-/* The features this build implements. As a writer it emits the fields of all
- * of them, so this is what the header's present mask says; as a reader it can
- * be asked to require no more than this. */
+#define ARES_FEATURE_BIT(feature) (1ull << (feature))
+
+/* The features this build implements: the most a reader can be asked to
+ * require. */
 static const uint64_t kAresFeaturesSupported = 0;
 
 /* Records that carry a length prefix: the VM-shaped ones whose layout tracks
@@ -778,25 +788,6 @@ set_setting(lua_State *L, void *key) {                           /* ... value */
   lua_settable(L, LUA_REGISTRYINDEX);                                  /* ... */
 }
 
-/* Marks the stream as needing a reader that knows this feature. Call it from
- * the site that writes an appended field, under the same "is this the
- * default" test the reader applies when the feature is absent, so a stream
- * where the field was never populated still loads on older readers. Mandatory
- * when the field takes a reference number, see RecordWriter::close. A call
- * naming a bit this build doesn't know, such as one left over from before a
- * major bump, fails the build. */
-#define require_feature(info, feature) do { \
-    static_assert(((feature) & kAresFeaturesSupported) == (feature), "require_feature() names a feature this build doesn't support"); \
-    static_assert((feature) != 0 && ((feature) & ((feature) - 1)) == 0, "require_feature() takes a single feature bit"); \
-    (info)->u.pi.requiredFeatures |= (feature); \
-    (info)->u.pi.trailerRequired = true; \
-  } while(0)
-
-/* Whether the stream being read carries the field(s) behind this feature. The
- * reader gates every appended field on this, never on the writer's minor or
- * on bytes remaining in the record. */
-#define has_feature(info, feature) (((info)->u.upi.presentFeatures & (feature)) != 0)
-
 /* Used as a callback for luaL_opt to check boolean setting values. */
 static bool
 checkboolean(lua_State *L, int narg) {                       /* ... bool? ... */
@@ -835,16 +826,13 @@ checkboolean(lua_State *L, int narg) {                       /* ... bool? ... */
 /** ======================================================================== */
 
 /* Bytes left in the innermost open record. */
-#define RECORD_REMAINING() (info->u.upi.record_end - info->u.upi.pos)
+#define RECORD_REMAINING() (info->u.upi.cur->remaining)
 
 /* Reads a raw block of memory with the specified size, never past the end of
  * the current record. */
 #define READ_RAW(value, size) do { \
-  size_t _sz = (size_t)(size); \
-  if (_sz > RECORD_REMAINING()) \
-    eris_error(info, ERIS_ERR_READ); \
-  memcpy((value), info->u.upi.data + info->u.upi.pos, _sz); \
-  info->u.upi.pos += _sz; } while(0)
+  if (!info->u.upi.cur->readBytes((value), (size_t)(size))) \
+    eris_error(info, ERIS_ERR_READ); } while(0)
 
 /* Reads a single value with the specified type. */
 #define READ_VALUE(type) read_##type(info)
@@ -877,12 +865,21 @@ write_uint8_t(Info *info, uint8_t value) {
   WRITE_RAW(&value, sizeof(uint8_t));
 }
 
+/* write_uint32_t() without the failure check, for the record scopes' closing
+ * writes, which a destructor makes. */
+static void
+put_uint32_t(std::ostream *writer, uint32_t value) {
+  for (int i = 0; i < 4; ++i) {
+    writer->put((char)(uint8_t)(value >> (i * 8)));
+  }
+}
+
 static void
 write_uint32_t(Info *info, uint32_t value) {
-  write_uint8_t(info, (uint8_t)value);
-  write_uint8_t(info, (uint8_t)(value >> 8));
-  write_uint8_t(info, (uint8_t)(value >> 16));
-  write_uint8_t(info, (uint8_t)(value >> 24));
+  put_uint32_t(info->u.pi.writer, value);
+  if (info->u.pi.writer->fail()) {
+    eris_error(info, ERIS_ERR_WRITE);
+  }
 }
 
 static void
@@ -972,49 +969,40 @@ write_Instruction(Info *info, Instruction value) {
 
 /** ======================================================================== */
 
+/* The cursor's own readers, with their failure turned into the read error. */
+template <typename T>
+static T
+read_or_fail(Info *info, bool (Luau::ByteReader::*read)(T&)) {
+  T value;
+  if (!(info->u.upi.cur->*read)(value)) {
+    eris_error(info, ERIS_ERR_READ);
+  }
+  return value;
+}
+
 static uint8_t
 read_uint8_t(Info *info) {
-  uint8_t value;
-  READ_RAW(&value, sizeof(uint8_t));
-  return value;
+  return read_or_fail(info, &Luau::ByteReader::readU8);
 }
 
 static uint32_t
 read_uint32_t(Info *info) {
-  auto value = (uint32_t)read_uint8_t(info);
-  value |= (uint32_t)read_uint8_t(info) << 8;
-  value |= (uint32_t)read_uint8_t(info) << 16;
-  value |= (uint32_t)read_uint8_t(info) << 24;
-  return value;
+  return read_or_fail(info, &Luau::ByteReader::readU32);
 }
 
 static uint64_t
 read_uint64_t(Info *info) {
-  auto value = (uint64_t)read_uint8_t(info);
-  value |= (uint64_t)read_uint8_t(info) << 8;
-  value |= (uint64_t)read_uint8_t(info) << 16;
-  value |= (uint64_t)read_uint8_t(info) << 24;
-  value |= (uint64_t)read_uint8_t(info) << 32;
-  value |= (uint64_t)read_uint8_t(info) << 40;
-  value |= (uint64_t)read_uint8_t(info) << 48;
-  value |= (uint64_t)read_uint8_t(info) << 56;
-  return value;
+  return read_or_fail(info, &Luau::ByteReader::readU64);
 }
 
 static float
 read_float32(Info *info) {
-  float value;
-  uint32_t rep = read_uint32_t(info);
-  memcpy(&value, &rep, sizeof(float));
-  return value;
+  return read_or_fail(info, &Luau::ByteReader::readF32);
 }
 
 static double
 read_float64(Info *info) {
-  double value;
-  uint64_t rep = read_uint64_t(info);
-  memcpy(&value, &rep, sizeof(double));
-  return value;
+  return read_or_fail(info, &Luau::ByteReader::readF64);
 }
 
 /* A 64-bit value is at most ten varint bytes. */
@@ -1024,19 +1012,23 @@ static uint64_t
 read_uvarint(Info *info) {
   /* Luau::readVarInt64 trusts its input, so find the terminating byte inside
    * the record before handing it the buffer. */
-  const char *data = info->u.upi.data;
-  size_t limit = RECORD_REMAINING();
+  Luau::ByteReader *cur = info->u.upi.cur;
+  size_t limit = cur->remaining;
   if (limit > kMaxVarintBytes) {
     limit = kMaxVarintBytes;
   }
   size_t n = 0;
-  while (n < limit && ((uint8_t)data[info->u.upi.pos + n] & 0x80)) {
+  while (n < limit && ((uint8_t)cur->data[n] & 0x80)) {
     ++n;
   }
   if (n == limit) {
     eris_error(info, ERIS_ERR_VARINT);
   }
-  return Luau::readVarInt64(data, info->u.upi.pos);
+  size_t offset = 0;
+  const uint64_t value = Luau::readVarInt64(cur->data, offset);
+  cur->data += offset;
+  cur->remaining -= offset;
+  return value;
 }
 
 static int
@@ -1093,95 +1085,210 @@ read_Instruction(Info *info) {
 /** ======================================================================== */
 
 /*
- * Length-prefixed records. A record is `u32 len` followed by `len` body bytes.
- * Everything after BEGIN_TRAILER() is the trailer: fields a later feature
- * added, which an older reader steps over via the length word. A reference
- * persisted there is only safe if require_feature() was called, so the readers
- * that would have skipped it refuse the stream instead.
+ * Length-prefixed records. A record is `u32 len` followed by `len` bytes: the
+ * body's positional fields, then zero or more blocks holding the fields later
+ * features added. A block is `u8 feature, u32 len, bytes`, and a feature
+ * with no block in a record has its default. Readers walk a record's blocks
+ * with blocks() and skip the features they don't know, so features don't have
+ * to be added in one linear history.
+ *
+ * A reader that skips a block loses track of any reference numbers assigned
+ * inside it, so a block may only take a new one when written BLOCK_REQUIRED,
+ * making those readers refuse the stream instead. Back-references and strings
+ * take no new number.
+ *
+ * Writers and readers are scopes, closed by their destructors, so nothing in
+ * closing may throw: the length patch relies on the ostream's sticky failbit,
+ * which the next WRITE_RAW or the end of persist reports, and the refcount
+ * rule is asserted.
  */
-#define BEGIN_TRAILER() do { \
-    info->u.pi.trailerRefcount = info->refcount; \
-    info->u.pi.trailerRequired = false; \
-  } while(0)
 
-// Write a length-prefixed binary section to
+/* Fills in a u32 length reserved at `body_start - 4`, covering everything
+ * written since. */
+static void
+patch_length(Info *info, std::streampos body_start) {
+  std::ostream *writer = info->u.pi.writer;
+  const std::streampos end = writer->tellp();
+  writer->seekp(body_start - std::streamoff(sizeof(uint32_t)));
+  put_uint32_t(writer, (uint32_t)(end - body_start));
+  writer->seekp(end);
+}
+
+/* A record, open for the scope of the object. Closing appends the testpad
+ * blocks and patches the length in. */
 struct RecordWriter {
   explicit RecordWriter(Info *info_)
     : info(info_), exceptions(std::uncaught_exceptions()),
-      outer_trailer_refcount(info_->u.pi.trailerRefcount),
-      outer_trailer_required(info_->u.pi.trailerRequired) {
+      outer_block_open(info_->u.pi.blockOpen), outer_blocks_end(info_->u.pi.blocksEnd) {
     write_uint32_t(info, 0);
-    info->u.pi.trailerRefcount = -1;
-    info->u.pi.trailerRequired = false;
     body_start = info->u.pi.writer->tellp();
+    info->u.pi.blockOpen = false;
+    info->u.pi.blocksEnd = -1;
   }
 
-  void close() {
-    eris_assert(!closed);
-    closed = true;
-
-    // A body that never called BEGIN_TRAILER() has no trailer to check
-    eris_assert(info->u.pi.trailerRefcount != -1);
-    if (info->u.pi.trailerRefcount != info->refcount && !info->u.pi.trailerRequired) {
-        eris_error(info, ERIS_ERR_TRAILER, info->u.pi.trailerRefcount, info->refcount);
-    }
-
-    info->u.pi.trailerRefcount = outer_trailer_refcount;
-    info->u.pi.trailerRequired = outer_trailer_required;
-    // write in some padding if we're in a test that wants malformed data
-    for (uint32_t i = 0; i < info->u.pi.testPadding; ++i) {
-      write_uint8_t(info, (uint8_t)(0xA5 ^ i) | 1);
-    }
-    // Okay, go back and fill in the length.
-    std::ostream *writer = info->u.pi.writer;
-    std::streampos end = writer->tellp();
-    uint32_t len = (uint32_t)(end - body_start);
-    writer->seekp(body_start - std::streamoff(sizeof(uint32_t)));
-    write_uint32_t(info, len);
-    writer->seekp(end);
-    if (writer->fail()) {
-      eris_error(info, ERIS_ERR_WRITE);
-    }
-  }
-
-  ~RecordWriter() {
-    // Anything else is a body that forgot to close, leaving a zero length
-    eris_assert(closed || std::uncaught_exceptions() != exceptions);
-  }
+  ~RecordWriter();
 
   RecordWriter(const RecordWriter&) = delete;
   RecordWriter& operator=(const RecordWriter&) = delete;
 
   Info *info;
   int exceptions;
-  int outer_trailer_refcount;
-  bool outer_trailer_required;
+  bool outer_block_open;
+  std::streamoff outer_blocks_end;
   std::streampos body_start;
-  bool closed = false;
 };
 
-// reads a size-prefixed section from `Info`,
-// skips by whatever junk at the end that isn't consumed.
+enum BlockNeed { BLOCK_OPTIONAL, BLOCK_REQUIRED };
+
+/* One feature's block in the innermost record, open for the scope of the
+ * object, after the record's positional fields. Only build one when the field
+ * is populated, so a stream where it never was still loads on older readers.
+ * BLOCK_REQUIRED marks the stream as needing a reader that knows the feature,
+ * which a block that assigns a reference number must be. The header and
+ * string table are written after the root, so their blocks can't be. */
+struct BlockWriter {
+  BlockWriter(Info *info_, AresFeature feature_, BlockNeed need)
+    : info(info_), feature(feature_), required(need == BLOCK_REQUIRED),
+      refcount(info_->refcount), exceptions(std::uncaught_exceptions()) {
+    eris_assert(!info->u.pi.blockOpen);
+    // Nothing positional may sit between blocks
+    eris_assert(info->u.pi.blocksEnd == -1 || info->u.pi.blocksEnd == (std::streamoff)info->u.pi.writer->tellp());
+    if (required) {
+      // Features past the masks can't be required, nor ones this build
+      // doesn't support, such as one left over from before a major bump
+      eris_assert(feature < 64 && (ARES_FEATURE_BIT(feature) & kAresFeaturesSupported) != 0);
+      eris_assert(!info->u.pi.headerWritten);
+      info->u.pi.requiredFeatures |= ARES_FEATURE_BIT(feature);
+    }
+    // Raw, so RecordWriter's destructor can build the testpad blocks
+    info->u.pi.writer->put((char)feature);
+    put_uint32_t(info->u.pi.writer, 0);
+    body_start = info->u.pi.writer->tellp();
+    info->u.pi.blockOpen = true;
+  }
+
+  ~BlockWriter() {
+    info->u.pi.blockOpen = false;
+    if (std::uncaught_exceptions() != exceptions) {
+      return;
+    }
+    // A reader that skips an optional block would lose track of the numbering
+    eris_assert(required || info->refcount == refcount);
+    patch_length(info, body_start);
+    info->u.pi.blocksEnd = (std::streamoff)info->u.pi.writer->tellp();
+  }
+
+  BlockWriter(const BlockWriter&) = delete;
+  BlockWriter& operator=(const BlockWriter&) = delete;
+
+  Info *info;
+  AresFeature feature;
+  bool required;
+  int refcount;
+  int exceptions;
+  std::streampos body_start;
+};
+
+RecordWriter::~RecordWriter() {
+  if (std::uncaught_exceptions() == exceptions) {
+    // Blocks no reader knows, standing in for a newer writer's
+    if (info->u.pi.testPadding) {
+      {
+        BlockWriter pad(info, ARES_FEATURE_TEST_PAD, BLOCK_OPTIONAL);
+        for (uint32_t i = 0; i < info->u.pi.testPadding; ++i) {
+          info->u.pi.writer->put((char)(uint8_t)(0xA5 ^ i));
+        }
+      }
+      {
+        BlockWriter empty(info, ARES_FEATURE_TEST_PAD_EMPTY, BLOCK_OPTIONAL);
+      }
+    }
+    eris_assert(!info->u.pi.blockOpen);
+    // Nothing positional may follow a block
+    eris_assert(info->u.pi.blocksEnd == -1 || info->u.pi.blocksEnd == (std::streamoff)info->u.pi.writer->tellp());
+    patch_length(info, body_start);
+  }
+  info->u.pi.blockOpen = outer_block_open;
+  info->u.pi.blocksEnd = outer_blocks_end;
+}
+
+/* Reads for the scope of the object come from the record, carved out of the
+ * enclosing cursor, which is then already past it: whatever the body leaves
+ * unread is skipped by construction. */
 struct RecordReader {
-  explicit RecordReader(Info *info_) : info(info_) {
-    uint32_t len = read_uint32_t(info);
-    if (len > RECORD_REMAINING()) {
+  explicit RecordReader(Info *info_) : info(info_), outer(info_->u.upi.cur) {
+    if (!outer->readSection(section)) {
       eris_error(info, ERIS_ERR_RECORD);
     }
-    saved = info->u.upi.record_end;
-    info->u.upi.record_end = info->u.upi.pos + len;
+    info->u.upi.cur = &section;
   }
 
   ~RecordReader() {
-    // Well we better have not gone off the end!
-    eris_assert(info->u.upi.pos <= info->u.upi.record_end);
-    info->u.upi.pos = info->u.upi.record_end;
-    info->u.upi.record_end = saved;
+    info->u.upi.cur = outer;
+  }
+
+  RecordReader(const RecordReader&) = delete;
+  RecordReader& operator=(const RecordReader&) = delete;
+
+  Info *info;
+  Luau::ByteReader *outer;
+  Luau::ByteReader section{nullptr, 0};
+};
+
+/* ByteBlocks over the innermost record, differing only in what a shared
+ * header can't do: each block is made the cursor for the loop body, and a
+ * header the walk can't parse is an error. The record's cursor is past every
+ * block it entered, so leaving the loop early is the same as never walking. */
+struct BlockRange {
+  explicit BlockRange(Info *info_) : info(info_), outer(info_->u.upi.cur), walk(*outer) {}
+
+  ~BlockRange() {
+    info->u.upi.cur = outer;
+  }
+
+  BlockRange(const BlockRange&) = delete;
+  BlockRange& operator=(const BlockRange&) = delete;
+
+  struct Iterator {
+    BlockRange *range;
+
+    uint8_t operator*() const { return range->block.id; }
+    Iterator& operator++() { ++range->it; range->enter(); return *this; }
+    bool operator!=(Luau::ByteBlocks::Sentinel end) const { return range->it != end; }
+  };
+
+  Iterator begin() {
+    it = walk.begin();
+    enter();
+    return Iterator{this};
+  }
+
+  Luau::ByteBlocks::Sentinel end() { return {}; }
+
+private:
+  void enter() {
+    if (it != walk.end()) {
+      block = *it;
+      info->u.upi.cur = &block;
+      return;
+    }
+    info->u.upi.cur = outer;
+    if (!outer->ok()) {
+      eris_error(info, ERIS_ERR_BLOCK);
+    }
   }
 
   Info *info;
-  size_t saved;
+  Luau::ByteReader *outer;
+  Luau::ByteBlocks walk;
+  Luau::ByteBlocks::Iterator it{};
+  Luau::ByteBlock block{};
 };
+
+static BlockRange
+blocks(Info *info) {
+  return BlockRange(info);
+}
 
 /** ======================================================================== */
 
@@ -1393,8 +1500,6 @@ p_strtab(Info *info) {                                   /* perms reftbl strtab 
     WRITE_RAW(value, length);
     lua_pop(info->L, 1);                                 /* perms reftbl strtab ... */
   }
-  BEGIN_TRAILER();
-  rec.close();
 }
 
 static void
@@ -1413,9 +1518,10 @@ u_strtab(Info *info) {                                   /* perms reftbl strtab 
     VALIDATE_SIZE(length);
     /* The stream is already in memory, so the string is interned straight
      * out of it. */
-    lua_pushlstring(info->L, info->u.upi.data + info->u.upi.pos, length);
-                                                     /* perms reftbl strtab ... str */
-    info->u.upi.pos += length;
+    Luau::ByteReader *cur = info->u.upi.cur;
+    lua_pushlstring(info->L, cur->data, length);     /* perms reftbl strtab ... str */
+    cur->data += length;
+    cur->remaining -= length;
     lua_rawseti(info->L, STRTIDX, (int)i);               /* perms reftbl strtab ... */
   }
   info->u.upi.strtabCount = (int)count;
@@ -1566,7 +1672,6 @@ static void p_table(Info *info) {                                  /* ... tbl */
   }
 
   p_metatable(info);
-  BEGIN_TRAILER();
 }
 
 static void u_table(Info *info) {                                      /* ... */
@@ -1770,8 +1875,17 @@ static void p_userdata(Info *info) {                               /* ... udata 
   const size_t size = lua_objlen(info->L, -1);
   const void *value = lua_touserdata(info->L, -1);
   WRITE_VALUE(utag, uint8_t);
+  // Each tag's case is the end of the record, so it can finish with blocks.
+  // Only a proxy carries its metatable: every other tag's comes from the tag
+  // registry when the reader creates the object.
   switch(utag) {
     case UTAG_PROXY:
+      // newproxy() only makes empty ones, which u_userdata relies on
+      if (size != 0) {
+        eris_error(info, "cannot persist a proxy with a payload");
+      }
+      p_metatable(info);                                         /* ... udata */
+      break;
     case UTAG_QUATERNION:
     case UTAG_OPAQUE_BUFFER:
     case UTAG_YIELD_STATE:
@@ -1827,13 +1941,28 @@ static void p_userdata(Info *info) {                               /* ... udata 
         WRITE_RAW(buf->buf, buf->length);
         break;
     }
+    case UTAG_ARES_TEST:
+    {
+        const auto *obj = (const lua_AresTestObject*)value;
+        WRITE_VALUE((int)obj->base, int);
+        if (obj->newer_block) {
+          BlockWriter blk(info, ARES_FEATURE_TEST_NEWER, BLOCK_OPTIONAL);
+          for (uint8_t i = 0; i < obj->newer_block; ++i)
+            write_uint8_t(info, 0xA5);
+        }
+        if (obj->added) {
+          BlockWriter blk(info, ARES_FEATURE_TEST_ADDED, BLOCK_OPTIONAL);
+          WRITE_VALUE((int)obj->added, int);
+          for (uint8_t i = 0; i < obj->newer_tail; ++i)
+            write_uint8_t(info, 0xA5);
+        }
+        break;
+    }
     default:
       eris_error(info, "Unknown userdata type %d", utag);
       break;
   }
-  p_metatable(info);                                             /* ... udata */
   eris_assert(top == lua_gettop(info->L));
-  BEGIN_TRAILER();
 }
 
 static void u_userdata(Info *info) {                                   /* ... */
@@ -1842,9 +1971,17 @@ static void u_userdata(Info *info) {                                   /* ... */
   {
     uint8_t utag = READ_VALUE(uint8_t);
     switch(utag) {
+      case UTAG_PROXY:
+      {
+          // A newproxy(true) metatable is the script's own and may refer back
+          // to the proxy, so the proxy has to exist before it's read
+          lua_newuserdatatagged(info->L, 0, UTAG_PROXY);         /* ... udata */
+          registerobject(info);
+          u_metatable(info);                                     /* ... udata */
+          break;
+      }
       case UTAG_OPAQUE_BUFFER:
       case UTAG_YIELD_STATE:
-      case UTAG_PROXY:
       {
           size_t size = READ_VALUE(ares_size_t);
           VALIDATE_SIZE(size);
@@ -1978,12 +2115,31 @@ static void u_userdata(Info *info) {                                   /* ... */
           registerobject(info);
           break;
       }
+      case UTAG_ARES_TEST:
+      {
+          auto *obj = (lua_AresTestObject*)lua_newuserdatatagged(
+              info->L,
+              sizeof(lua_AresTestObject),
+              UTAG_ARES_TEST
+          );
+                                                                 /* ... udata */
+          memset(obj, 0, sizeof(lua_AresTestObject));
+          obj->base = READ_VALUE(int);
+          registerobject(info);
+          for (uint8_t feature : blocks(info)) {
+            switch (feature) {
+              case ARES_FEATURE_TEST_ADDED:
+                obj->added = READ_VALUE(int);
+                break;
+            }
+          }
+          break;
+      }
       default:
         eris_error(info, "Unknown userdata tag %d", utag);
         break;
     }
   }
-  u_metatable(info);
   eris_assert(top + 1 == lua_gettop(info->L));
   eris_checktype(info, -1, LUA_TUSERDATA);
 }
@@ -2119,7 +2275,6 @@ p_proto(Info *info) {                                            /* ... proto */
   {
       WRITE_VALUE(p->yieldpoints[i], int);
   }
-  BEGIN_TRAILER();
 }
 
 static void
@@ -2290,7 +2445,6 @@ u_proto(Info *info) {                                            /* ... proto */
 static void
 p_upval(Info *info) {                                              /* ... obj */
   persist(info);                                                   /* ... obj */
-  BEGIN_TRAILER();
 }
 
 static void
@@ -2455,7 +2609,6 @@ p_closure(Info *info) {                              /* perms reftbl ... func */
     }
     poppath(info);
   }
-  BEGIN_TRAILER();
 }
 
 static void
@@ -2855,8 +3008,6 @@ p_thread(Info *info) {                                          /* ... thread */
       WRITE_VALUE(ERIS_CI_KIND_NONE, uint8_t);
       eris_assert(ttisnil(ci->func));
     }
-    BEGIN_TRAILER();
-    ci_rec.close();
     poppath(info);
   }
 
@@ -2888,7 +3039,6 @@ p_thread(Info *info) {                                          /* ... thread */
   lua_pop(info->L, 1);                                          /* ... thread */
   poppath(info);
   eris_assert(lua_type(info->L, -1) == LUA_TTHREAD);
-  BEGIN_TRAILER();
 }
 
 /* Used in u_thread to validate read stack positions. */
@@ -3345,13 +3495,12 @@ persist_typed(Info *info, AresType type) {            /* perms reftbl ... obj */
   WRITE_VALUE(type, uint8_t);
 
   // Some types are framed so that they can
-  // have fields appended in new minor versions
+  // have blocks added by later features
   // without breaking old consumers.
   if (type_is_framed(type)) {
     RecordWriter rec(info);
     p_memcat(info, type);
     persist_body(info, type);
-    rec.close();
   }
   else {
     p_memcat(info, type);
@@ -3596,10 +3745,8 @@ p_header(Info *info) {
   WRITE_VALUE(LUA_VECTOR_SIZE, uint8_t);
   /* So a reader that lost or gained a reference somewhere refuses the stream. */
   WRITE_VALUE((uint32_t)info->refcount, uint32_t);
-  WRITE_VALUE(kAresFeaturesSupported, uint64_t);
   WRITE_VALUE(info->u.pi.requiredFeatures, uint64_t);
-  BEGIN_TRAILER();
-  rec.close();
+  info->u.pi.headerWritten = true;
 }
 
 static void
@@ -3630,17 +3777,12 @@ u_header(Info *info) {
   }
   info->u.upi.vector_components = READ_VALUE(uint8_t);
   info->u.upi.expectedRefcount = READ_VALUE(uint32_t);
-  info->u.upi.presentFeatures = READ_VALUE(uint64_t);
   const uint64_t required_features = READ_VALUE(uint64_t);
-  /* Present-but-unknown features are skipped through their record lengths;
-   * only required ones refuse the stream. */
+  /* Blocks of unknown features are stepped over; only required ones refuse
+   * the stream, and up front. */
   if (required_features & ~kAresFeaturesSupported) {
     eris_error(info, ERIS_ERR_FEATURE, info->u.upi.major, info->u.upi.minor,
                (unsigned long long)(required_features & ~kAresFeaturesSupported));
-  }
-  if (required_features & ~info->u.upi.presentFeatures) {
-    eris_error(info, ERIS_ERR_FEATURE_SET, (unsigned long long)required_features,
-               (unsigned long long)info->u.upi.presentFeatures);
   }
 }
 
@@ -3651,7 +3793,7 @@ u_finish(Info *info) {
   if (info->u.upi.expectedRefcount != (uint32_t)info->refcount) {
     eris_error(info, ERIS_ERR_REFCOUNT, info->u.upi.expectedRefcount, (uint32_t)info->refcount);
   }
-  if (info->u.upi.pos != info->u.upi.size) {
+  if (!info->u.upi.cur->atEnd()) {
     eris_error(info, ERIS_ERR_TRAILING);
   }
 }
@@ -4008,9 +4150,10 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
   info.u.pi.writeDebugInfo = kWriteDebugInformation;
   info.u.pi.persistingCFunc = false;
   info.u.pi.testPadding = 0;
-  info.u.pi.trailerRefcount = -1;
-  info.u.pi.trailerRequired = false;
+  info.u.pi.blockOpen = false;
+  info.u.pi.blocksEnd = -1;
   info.u.pi.requiredFeatures = 0;
+  info.u.pi.headerWritten = false;
   info.u.pi.strcount = 0;
 
   eris_checkstack(L, 7);
@@ -4104,10 +4247,8 @@ unchecked_unpersist(lua_State *L, const char *data, size_t size, void *threaddat
   info.maxComplexity = kMaxComplexity;
   info.generatePath = kGeneratePath;
   info.persisting = false;
-  info.u.upi.data = data;
-  info.u.upi.size = size;
-  info.u.upi.pos = 0;
-  info.u.upi.record_end = size;
+  Luau::ByteReader root{data, size};
+  info.u.upi.cur = &root;
   info.u.upi.threaddata = threaddata;
   info.u.upi.strtabCount = 0;
 

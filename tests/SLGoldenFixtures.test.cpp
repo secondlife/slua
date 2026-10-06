@@ -14,8 +14,8 @@
 // can only be checked by running the previous release's test binary against
 // this tree's fixtures. That needs a runtime override for the fixture dir,
 // unknown scenarios skipped rather than failed, and a way to mark a fixture as
-// expected to be refused (a populated require_feature() field).
-// Perhaps the mere presence of an unknown require_feature() field would be enough,
+// expected to be refused (a block written BLOCK_REQUIRED).
+// Perhaps the mere presence of an unknown BLOCK_REQUIRED block would be enough,
 // given that we can parse those out ourselves.
 #include "SLExecutorFixture.h"
 

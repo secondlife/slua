@@ -20,7 +20,7 @@ void writeBytecodeHeader(std::string& out, const BytecodeHeader& header)
     for (uint64_t mask : header.stateHandlerMasks)
         writer.writeU64(mask);
     writer.writeU32(header.chargedBytecodeSize);
-    // New fields go here, and bump kBytecodeHeaderFingerprint.minor
+    // Later fields go in blocks here, and bump kBytecodeHeaderFingerprint.minor
     writer.endSection(section);
 }
 
@@ -61,7 +61,7 @@ bool readBytecodeHeader(const char* data, size_t len, BytecodeHeader& header, si
     }
     if (!section.readU32(header.chargedBytecodeSize))
         return false;
-    // Fields appended after 6.0 are read here only if the section has them
+    // Later fields are read here with ByteReader::blocks()
 
     bytecode_start = len - reader.remaining;
     return true;

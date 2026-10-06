@@ -1297,6 +1297,50 @@ TEST_CASE("CompileAssetCAPI")
     free(error);
 }
 
+static int32_t getAresTestField(lua_State* L, const char* name)
+{
+    lua_getfield(L, 1, name);
+    const int32_t value = luaL_optinteger(L, -1, 0);
+    lua_pop(L, 1);
+    return value;
+}
+
+static int lua_ares_test_object(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    auto* obj = (lua_AresTestObject*)lua_newuserdatatagged(L, sizeof(lua_AresTestObject), UTAG_ARES_TEST);
+    obj->base = getAresTestField(L, "base");
+    obj->added = getAresTestField(L, "added");
+    obj->newer_block = (uint8_t)getAresTestField(L, "newer_block");
+    obj->newer_tail = (uint8_t)getAresTestField(L, "newer_tail");
+    return 1;
+}
+
+static int lua_ares_test_fields(lua_State* L)
+{
+    auto* obj = (lua_AresTestObject*)luaL_checkudatatagged(L, 1, UTAG_ARES_TEST);
+    lua_createtable(L, 0, 4);
+    lua_pushinteger(L, obj->base);
+    lua_setfield(L, -2, "base");
+    lua_pushinteger(L, obj->added);
+    lua_setfield(L, -2, "added");
+    lua_pushinteger(L, obj->newer_block);
+    lua_setfield(L, -2, "newer_block");
+    lua_pushinteger(L, obj->newer_tail);
+    lua_setfield(L, -2, "newer_tail");
+    return 1;
+}
+
+// UTAG_ARES_TEST objects to and from a table of their fields
+static void setupAresTestObject(lua_State* L)
+{
+    lua_pushcfunction(L, lua_ares_test_object, "ares_test_object");
+    lua_setglobal(L, "ares_test_object");
+
+    lua_pushcfunction(L, lua_ares_test_fields, "ares_test_fields");
+    lua_setglobal(L, "ares_test_fields");
+}
+
 TEST_CASE("Ares")
 {
     // ServerLua: iterator yield + persist tests require the yieldable FORGLOOP path
@@ -1306,11 +1350,11 @@ TEST_CASE("Ares")
     runConformance("ares_closures.lua");
     runConformance("ares_coros.lua");
     runConformance("ares_iterators.lua");
-    runConformance("ares_errors.lua");
+    runConformance("ares_errors.lua", setupAresTestObject);
 }
 
-// Makes every persist in L's VM append junk inside each length-prefixed record,
-// standing in for fields a newer writer would have added
+// Makes every persist in L's VM end each length-prefixed record with blocks no
+// reader knows, standing in for fields a newer writer would have added
 static void setAresTestPadding(lua_State* L, unsigned padding)
 {
     lua_pushunsigned(L, padding);
@@ -1322,7 +1366,7 @@ TEST_CASE("Ares padded")
 {
     ScopedFastFlag luauYieldIter{FFlag::LuauYieldIter2, true};
 
-    // Same scripts as "Ares", but every record the writer emits carries bytes
+    // Same scripts as "Ares", but every record the writer emits carries blocks
     // the reader has never heard of. Round trips have to come out identical.
     runConformance("ares.lua", [](lua_State* L) {
         setupVectorHelpers(L);
@@ -1350,8 +1394,8 @@ static std::string getConformanceTestSource(const std::string &name) {
 
 // Runs ares_multirun.lua through the forkserver 4 times, serializing at every
 // yield and resuming from the serialized form. With `padding` set the writer
-// stuffs junk into every record. `on_serialized`, if given, sees each
-// serialized state before it is forked from.
+// ends every record with blocks no reader knows. `on_serialized`, if given,
+// sees each serialized state before it is forked from.
 static void runForkserverRoundTrips(unsigned padding, void (*on_serialized)(lua_State* Lforker, const std::string& state) = nullptr)
 {
     std::string source = getConformanceTestSource("ares_multirun.lua");

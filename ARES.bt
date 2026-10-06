@@ -35,6 +35,9 @@ const uchar UTAG_LLTIMERS = 30;
 const uchar UTAG_STRBUF = 31;
 const uchar UTAG_OPAQUE_BUFFER = 32;
 const uchar UTAG_YIELD_STATE = 33;
+const uchar UTAG_ARES_TEST = 34;
+/* LUA_UTAG_LIMIT + 1, see ludata.h */
+const uchar UTAG_PROXY = 129;
 
 /* One SlotManager's region of a UTAG_YIELD_STATE buffer. The innermost flag
  * says whether this was the deepest active manager. */
@@ -558,12 +561,23 @@ local uint64 strNum = 0;
 local uint64 strPositions[0xFFFF] = {0};
 local uint64 strLengths[0xFFFF] = {0};
 
-/* Closes a length-prefixed record: anything left before record_end is test
- * padding or fields a newer minor appended, both of which the reader skips.
- * Declarations leak into the calling struct. */
+/* A block holding a later feature's fields, see BlockWriter in ares.cpp.
+ * This template knows no features yet, so every body shows as raw bytes;
+ * features 64 and 65 are UTAG_ARES_TEST's, 66 and 67 the testpad setting's. */
+typedef struct {
+    uint8_t feature <bgcolor=cLtGreen>;
+    uint32_t length;
+    if (length)
+        uchar body[length] <bgcolor=cSilver>;
+} Block <read=Str("feature %u, %u bytes", this.feature, this.length)>;
+
+/* Closes a length-prefixed record: anything left before record_end is blocks,
+ * which a reader walks in stream order, skipping the features it doesn't
+ * know. Declarations leak into the calling struct. */
 void ParseRecordEnd(int64 record_end) {
-    if (FTell() < record_end)
-        uchar appended[record_end - FTell()] <bgcolor=cSilver>;
+    while (FTell() < record_end) {
+        Block block <optimize=false>;
+    }
     Assert(FTell() == record_end);
 }
 
@@ -573,8 +587,7 @@ typedef struct {
     uint32_t major;
     uint32_t minor;
     /* Mirrors ARES_FORMAT_MAJOR in VM/include/lua.h. Any minor under it
-     * parses: fields are only ever appended inside records, and each record's
-     * length word steps over what this template doesn't know. */
+     * parses: later fields only ever go in blocks at the end of a record. */
     Assert(major == 7);
     uint32_t record_len;
     local int64 record_end = FTell() + record_len;
@@ -584,12 +597,9 @@ typedef struct {
     /* The root is serialized to a scratch buffer before the header is
      * written, so this is final. Strings do not count. */
     uint32_t final_refcount;
-    /* Every feature bit the writer knows, i.e. every appended field whose
-     * bytes are in this stream's records. Mirrors kAresFeaturesSupported in
-     * ares.cpp. */
-    uint64_t features_present;
-    /* The subset a reader has to understand: what populated fields asked for
-     * through require_feature(). An unknown bit here refuses the stream. */
+    /* The features a reader has to understand, bit n for feature n: those
+     * whose blocks were written BLOCK_REQUIRED. An unknown bit here refuses
+     * the stream. */
     uint64_t features_required;
     ParseRecordEnd(record_end);
 } Header <bgcolor=cLtRed>;
@@ -778,6 +788,13 @@ typedef struct {
     uint8_t utag;       /* Userdata tag */
     switch(utag)
     {
+    case UTAG_PROXY:
+    {
+        /* Always empty, newproxy() makes no others. The only tag whose
+         * metatable is the script's rather than the tag registry's. */
+        Object metatable;
+        break;
+    }
     case UTAG_UUID:
     {
         Object data;
@@ -825,6 +842,12 @@ typedef struct {
             uchar slack[end - FTell()];
         break;
     }
+    case UTAG_ARES_TEST:
+    {
+        /* Its other fields are in blocks */
+        IntVarint base;
+        break;
+    }
     case UTAG_OPAQUE_BUFFER:
     default:
     {
@@ -832,7 +855,6 @@ typedef struct {
         uchar data[length.v]; /* The actual data */
     }
     }
-    Object metatable;   /* The metatable (nil for none, otherwise LUA_TTABLE) */
 } Userdata<optimize=false>;
 
 typedef struct {
@@ -997,8 +1019,8 @@ typedef struct {
 } ExecString <read=(exists(this.str) ? this.str : "")>;
 
 /* The wrapper Script::serializeState() puts around an Ares blob, see
- * Executor/src/Script.cpp. Fields only ever get appended inside the two
- * sections, so a newer minor parses. */
+ * Executor/src/Script.cpp. Later fields only ever go in blocks at the end of
+ * the two sections, so a newer minor parses. */
 typedef struct {
     /* The base class's fingerprint, covering the core section. Mirrors
      * kScriptStateFingerprint in Executor/include/Luau/Script.h. */
@@ -1007,17 +1029,14 @@ typedef struct {
     uint32_t major;
     uint32_t minor;
     Assert(major == 3);
-    /* Feature masks for the core section: the features whose fields the
-     * writer emits, then the subset a reader has to understand. Both are
-     * zero until a feature exists; a nonzero required mask is refused. */
-    uint64_t features_present;
+    /* The core section's required feature mask: the blocks a reader has to
+     * understand. Zero until a feature exists; a nonzero mask is refused. */
     uint64_t features_required;
     /* The concrete Script subclass's fingerprint (EXEC again for the base
-     * class), covering the extra section at the end, with its own masks. */
+     * class), covering the extra section at the end, with its own mask. */
     char class_tag[4] <bgcolor=0x33aaff>;
     uint32_t class_major;
     uint32_t class_minor;
-    uint64_t class_features_present;
     uint64_t class_features_required;
 
     struct CoreSection {

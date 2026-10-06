@@ -1710,7 +1710,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor unserializable global is refused with
 
 // Size of the payload a `counter = 1` script serializes to. Update it when the
 // wire format moves; a change nobody meant to make is the thing worth catching.
-constexpr size_t kExpectedDonorPayloadSize = 492;
+constexpr size_t kExpectedDonorPayloadSize = 434;
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
 {
@@ -1770,28 +1770,28 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         bad_magic[0] = 'B';
         CHECK_FALSE(second.exec.restoreState(bad_magic.data(), bad_magic.size()));
 
-        // Each fingerprint is tag, major, minor, then a present and a required
-        // feature mask, so the class fingerprint starts at 28
+        // Each fingerprint is tag, major, minor, then a required feature
+        // mask, so the class fingerprint starts at 20
         std::string bad_core_version = payload;
         bad_core_version[4] = (char)(kScriptStateFingerprint.major + 99);
         CHECK_FALSE(second.exec.restoreState(bad_core_version.data(), bad_core_version.size()));
 
         std::string bad_class_tag = payload;
-        bad_class_tag[28] = 'B';
+        bad_class_tag[20] = 'B';
         CHECK_FALSE(second.exec.restoreState(bad_class_tag.data(), bad_class_tag.size()));
 
         std::string bad_class_version = payload;
-        bad_class_version[32] = (char)(kScriptStateFingerprint.major + 99);
+        bad_class_version[24] = (char)(kScriptStateFingerprint.major + 99);
         CHECK_FALSE(second.exec.restoreState(bad_class_version.data(), bad_class_version.size()));
 
         // A required feature this build doesn't know is refused, for either
         // section
         std::string core_requires = payload;
-        core_requires[20] = 1;
+        core_requires[12] = 1;
         CHECK_FALSE(second.exec.restoreState(core_requires.data(), core_requires.size()));
 
         std::string class_requires = payload;
-        class_requires[48] = 1;
+        class_requires[32] = 1;
         CHECK_FALSE(second.exec.restoreState(class_requires.data(), class_requires.size()));
 
         CHECK_FALSE(second.exec.restoreState("", 0));
@@ -1804,15 +1804,28 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
         CHECK(second.exec.getFaultKind() == FaultKind::None);
     }
 
-    SUBCASE("unknown present features are skipped")
+    SUBCASE("unknown blocks after the core fields are skipped")
     {
-        // A feature that is present but not required belongs to a droppable
-        // field, and an older build loads the payload without it
-        std::string core_present = payload;
-        core_present[12] = 1;
-        core_present[40] = 1;
-        restore(second.exec, core_present);
+        // The two fingerprints put the core section's length at 40
+        ByteReader reader{payload.data() + 40, payload.size() - 40};
+        uint32_t core_len = 0;
+        REQUIRE(reader.readU32(core_len));
+
+        std::string tail;
+        ByteWriter tail_writer{tail};
+        {
+            ByteWriter::Block block(tail_writer, 5);
+            tail_writer.writeU32(0xA5A5A5A5);
+        }
+        {
+            ByteWriter::Block block(tail_writer, 9);
+        }
+        std::string with_blocks = payload.substr(0, 40);
+        ByteWriter{with_blocks}.writeU32(core_len + (uint32_t)tail.size());
+        with_blocks += payload.substr(44, core_len) + tail + payload.substr(44 + core_len);
+        restore(second.exec, with_blocks);
         CHECK(second.exec.getFaultKind() == FaultKind::None);
+        CHECK(readIntGlobal(second.exec, "counter") == 1);
     }
 
     SUBCASE("restore directly after instantiate succeeds")
@@ -1829,6 +1842,58 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor invalid restore")
     // Restoring (or loading the default state) over a live instance is a host
     // sequencing bug and asserts rather than being refused, so there is no
     // subcase for it here.
+}
+
+TEST_CASE("SLExecutor ByteStream blocks step over features the reader doesn't know")
+{
+    std::string section;
+    ByteWriter writer{section};
+    writer.writeU32(1);
+    for (uint8_t id : {3, 5, 9})
+    {
+        ByteWriter::Block block(writer, id);
+        writer.writeU32(id * 100);
+        // A tail the reader doesn't know either
+        writer.writeU8(0xA5);
+    }
+
+    // Reads block 5, skips 3 and 9, and leaves 5's unread tail
+    auto walk = [](ByteReader& reader, std::vector<int>& seen, uint32_t& value) {
+        for (ByteBlock block : reader.blocks())
+        {
+            seen.push_back(block.id);
+            switch (block.id)
+            {
+            case 5:
+                REQUIRE(block.readU32(value));
+                break;
+            }
+        }
+        return reader.ok();
+    };
+
+    ByteReader reader{section.data(), section.size()};
+    uint32_t positional = 0;
+    REQUIRE(reader.readU32(positional));
+    CHECK(positional == 1);
+    std::vector<int> seen;
+    uint32_t value = 0;
+    CHECK(walk(reader, seen, value));
+    CHECK(value == 500);
+    CHECK(seen == std::vector<int>{3, 5, 9});
+    CHECK(reader.atEnd());
+
+    // A block running past the end of the section ends the walk, after the
+    // blocks ahead of it. Block 9 is ten bytes: its id, length, u32 and tail
+    // byte.
+    std::string overrun = section.substr(0, section.size() - 10) + std::string("\x09\x7F\0\0\0", 5);
+    ByteReader bad{overrun.data(), overrun.size()};
+    REQUIRE(bad.readU32(positional));
+    seen.clear();
+    value = 0;
+    CHECK_FALSE(walk(bad, seen, value));
+    CHECK(value == 500);
+    CHECK(seen == std::vector<int>{3, 5});
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor sleep and fault survive a round trip")
@@ -2039,12 +2104,15 @@ private:
     }
 };
 
-// The same host class one release later: one field appended to its section,
-// minor bumped. Payloads cross between the two in both directions.
+// The same host class one release later: one field added as a block, written
+// only when nonzero, minor bumped. Payloads cross between the two in both
+// directions.
 class NewerStatefulScript : public StatefulScript
 {
 public:
     using StatefulScript::StatefulScript;
+
+    static constexpr uint8_t kNewerBlock = 0;
 
     int32_t newer = 0;
 
@@ -2054,7 +2122,11 @@ protected:
     bool serializeExtra(ByteWriter& writer) const override
     {
         StatefulScript::serializeExtra(writer);
-        writer.writeS32(newer);
+        if (newer != 0)
+        {
+            ByteWriter::Block block(writer, kNewerBlock);
+            writer.writeS32(newer);
+        }
         return true;
     }
 
@@ -2062,11 +2134,19 @@ protected:
     {
         if (!StatefulScript::restoreExtra(reader, major, minor))
             return false;
-        // Appended in 1.1, so a 1.0 payload simply doesn't carry it
-        if (minor >= 1)
-            return reader.readS32(newer);
-        newer = -1;
-        return true;
+        // Absent when the writer had nothing to say, or was a 1.0 build
+        newer = 0;
+        for (ByteBlock block : reader.blocks())
+        {
+            switch (block.id)
+            {
+            case kNewerBlock:
+                if (!block.readS32(newer))
+                    return false;
+                break;
+            }
+        }
+        return reader.ok();
     }
 };
 
@@ -2222,7 +2302,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass payloads cross minor version
     StatefulProvisioner older_host;
     StatefulProvisionerT<NewerStatefulScript> newer_host;
 
-    SUBCASE("an older build skips the field a newer one appended")
+    SUBCASE("an older build skips the block a newer one added")
     {
         std::shared_ptr<NewerStatefulScript> newer = newer_host.start(asset);
         newer->counter = 42;
@@ -2243,7 +2323,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass payloads cross minor version
         REQUIRE(again != nullptr);
         restore(*again, rewritten);
         CHECK(again->counter == 42);
-        CHECK(again->newer == -1);
+        CHECK(again->newer == 0);
     }
 
     SUBCASE("a newer build defaults the field an older one never wrote")
@@ -2256,12 +2336,42 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor subclass payloads cross minor version
         REQUIRE(newer != nullptr);
         restore(*newer, payload);
         CHECK(newer->counter == 5);
-        CHECK(newer->newer == -1);
+        CHECK(newer->newer == 0);
         CHECK(readIntGlobal(*newer, "counter") == 1);
+    }
+
+    SUBCASE("a newer build leaves the block out when the field is zero")
+    {
+        std::shared_ptr<NewerStatefulScript> zero = newer_host.start(asset);
+        zero->counter = 3;
+        std::string without = serialize(*zero);
+        zero->newer = 7;
+        std::string with = serialize(*zero);
+        // The block is its id, length and value
+        CHECK(with.size() == without.size() + 1 + 4 + 4);
+
+        std::shared_ptr<NewerStatefulScript> again = newer_host.provision(asset);
+        REQUIRE(again != nullptr);
+        restore(*again, without);
+        CHECK(again->counter == 3);
+        CHECK(again->newer == 0);
+    }
+
+    SUBCASE("a block that overruns its section is refused")
+    {
+        std::shared_ptr<NewerStatefulScript> newer = newer_host.start(asset);
+        newer->newer = 7;
+        std::string payload = serialize(*newer);
+        // The block's length word sits four bytes before its value, at the end
+        payload[payload.size() - 5] = 0x7F;
+
+        std::shared_ptr<NewerStatefulScript> again = newer_host.provision(asset);
+        REQUIRE(again != nullptr);
+        CHECK_FALSE(again->restoreState(payload.data(), payload.size()));
     }
 }
 
-TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor ares records with unknown trailing bytes restore")
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor ares records with unknown blocks restore")
 {
     TestAsset asset = compileTestAsset(R"(
         counter = 1
@@ -2279,8 +2389,8 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor ares records with unknown trailing by
     TestScript first(asset);
     first.start();
 
-    // The writer pads every ares record with bytes this reader has never seen,
-    // as a newer engine appending fields would
+    // The writer ends every ares record with blocks this reader has never
+    // seen, as a newer engine adding fields would
     lua_State* instance = first.exec.getInstanceState();
     lua_pushunsigned(instance, 5);
     eris_set_setting(instance, "testpad", -1);
@@ -2567,14 +2677,18 @@ TEST_CASE("BytecodeHeader round trip")
         CHECK(bytecode_start == slua_asset.size());
     }
 
-    SUBCASE("bytes a newer writer appends are skipped")
+    SUBCASE("blocks a newer writer adds are skipped")
     {
-        // Grow the section by seven junk bytes, the way a newer minor would
+        // Grow the section by a block this reader doesn't know, the way a
+        // newer minor would
         std::string padded;
         writeBytecodeHeader(padded, header);
-        size_t section_end = padded.size();
-        padded += "\xA5\xA5\xA5\xA5\xA5\xA5\xA5";
-        padded[12] = (char)(uint8_t)(section_end - 16 + 7);
+        {
+            ByteWriter writer{padded};
+            ByteWriter::Block block(writer, 5);
+            writer.writeBytes("\xA5\xA5\xA5", 3);
+        }
+        padded[12] = (char)(uint8_t)(padded.size() - 16);
         padded += bytecode;
         BytecodeHeader parsed_padded;
         REQUIRE(readBytecodeHeader(padded.data(), padded.size(), parsed_padded, bytecode_start));
