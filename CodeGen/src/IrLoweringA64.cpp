@@ -2201,7 +2201,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             TValue n = {};
             setnvalue(&n, uintOp(OP_C(inst)));
-            build.adr(x2, &n, sizeof(n));
+            build.adr(x2, &n, sizeof(n), alignof(TValue)); // ServerLua
         }
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
@@ -2223,7 +2223,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             TValue n = {};
             setnvalue(&n, uintOp(OP_C(inst)));
-            build.adr(x2, &n, sizeof(n));
+            build.adr(x2, &n, sizeof(n), alignof(TValue)); // ServerLua
         }
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");

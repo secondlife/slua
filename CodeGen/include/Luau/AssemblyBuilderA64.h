@@ -141,7 +141,8 @@ public:
     void tbnz(RegisterA64 src, uint8_t bit, Label& label);
 
     // Address of embedded data
-    void adr(RegisterA64 dst, const void* ptr, size_t size);
+    // ServerLua: align is ours addition, the TValue keys GET_TABLE/SET_TABLE embed need 8 to prevent UB
+    void adr(RegisterA64 dst, const void* ptr, size_t size, size_t align = 4);
     void adr(RegisterA64 dst, uint64_t value);
     void adr(RegisterA64 dst, float value);
     void adr(RegisterA64 dst, double value);

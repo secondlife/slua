@@ -3,7 +3,7 @@
 
 option(TAILSLIDE_BUILD_CLI "Build the tailslide CLI" OFF)
 option(TAILSLIDE_BUILD_FUZZER "Build the libFuzzer harness" OFF)
-option(TAILSLIDE_SANITIZE "Use ASAN" OFF)
+option(TAILSLIDE_SANITIZE "Use ASAN and UBSAN" OFF)
 option(TAILSLIDE_FUZZER_INSTRUMENTATION "Add instrumentation for libFuzzer" OFF)
 option(TAILSLIDE_SKIP_GEN "Skip flex/bison generation" OFF)
 
@@ -60,8 +60,8 @@ if(UNIX AND NOT APPLE)
 endif()
 
 if (TAILSLIDE_SANITIZE)
-  add_compile_options("-fsanitize=address" "-O1" "-g")
-  add_link_options("-fsanitize=address" "-g")
+  add_compile_options("-fsanitize=address,undefined" "-fno-sanitize=vptr" "-fno-sanitize-recover=all" "-O1" "-g")
+  add_link_options("-fsanitize=address,undefined" "-g")
 endif()
 
 if (TAILSLIDE_FUZZER_INSTRUMENTATION)
