@@ -1,0 +1,8 @@
+* text=auto
+
+*.cc text
+*.c text
+*.hh text
+
+# These definitely must have lf line endings.
+*.sh text eol=lf

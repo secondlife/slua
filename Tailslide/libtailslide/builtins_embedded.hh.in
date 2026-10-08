@@ -1,0 +1,13 @@
+// Auto-generated from builtins.txt at configure time
+#pragma once
+
+// MSVC has very annoying limitations on string literal sizes, but no such
+// restrictions on character arrays. We don't have any embedded nulls, so
+// this works fine.
+static const unsigned char EMBEDDED_BUILTINS_DATA[] = {
+@BUILTINS_HEX_ARRAY@
+0x00
+};
+
+// We need to specify the array as unsigned, but we need a `char *` elsewhere.
+static const char* EMBEDDED_BUILTINS = reinterpret_cast<const char*>(EMBEDDED_BUILTINS_DATA);

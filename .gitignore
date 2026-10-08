@@ -32,3 +32,20 @@ __pycache__
 !/fuzz/corpus/json/*.json
 *.code-workspace
 *.tar.bz2
+
+# Tailslide's .gitignore follows
+build
+build_fuzz
+*.tar.bz2
+*.tar.zstd
+cmake-build-*
+*.o
+*~
+*.rej
+*.orig
+CMakeLists.txt.user
+callgrind.out.*
+*.profraw
+*.profdata
+coverage/
+stage
