@@ -21,6 +21,11 @@ typedef int   S32;
 typedef float F32;
 typedef double F64;
 
+// LSL negation wraps, so -INT_MIN is INT_MIN. Doing that on a signed int is UB.
+inline S32 negate_wrapping(S32 value) {
+  return (S32)(0u - (unsigned int)value);
+}
+
 class LSLScript;
 
 /// Add a getter / setter field pair to an LSLASTNode subclass
