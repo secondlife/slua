@@ -7,92 +7,6 @@
     <string>autobuild</string>
     <key>installables</key>
     <map>
-      <key>tailslide</key>
-      <map>
-        <key>platforms</key>
-        <map>
-          <key>darwin64</key>
-          <map>
-            <key>archive</key>
-            <map>
-              <key>hash</key>
-              <string>ef0e8043be14d7ba0997eb4b4d633911de5fbafd</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
-              <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.12/tailslide-1.5.12-darwin64-34792659148.tar.zst</string>
-            </map>
-            <key>name</key>
-            <string>darwin64</string>
-          </map>
-          <key>linux</key>
-          <map>
-            <key>archive</key>
-            <map>
-              <key>hash</key>
-              <string>f655370d406ac559f637020ab33251f0095a98b6</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
-              <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.12/tailslide-1.5.12-linux-34792659148.tar.zst</string>
-            </map>
-            <key>name</key>
-            <string>linux</string>
-          </map>
-          <key>linux64</key>
-          <map>
-            <key>archive</key>
-            <map>
-              <key>hash</key>
-              <string>4716f606774dfaa351ce51917094bc6190e179df</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
-              <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.12/tailslide-1.5.12-linux64-34792659148.tar.zst</string>
-            </map>
-            <key>name</key>
-            <string>linux64</string>
-          </map>
-          <key>windows64</key>
-          <map>
-            <key>archive</key>
-            <map>
-              <key>hash</key>
-              <string>db9b556e3794585f1f4a395ac3209c92ba6f415e</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
-              <key>url</key>
-              <string>https://github.com/secondlife/tailslide/releases/download/v1.5.12/tailslide-1.5.12-windows64-34792659148.tar.zst</string>
-            </map>
-            <key>name</key>
-            <string>windows64</string>
-          </map>
-        </map>
-        <key>license</key>
-        <string>MIT</string>
-        <key>license_file</key>
-        <string>LICENSES/tailslide.txt</string>
-        <key>copyright</key>
-        <string>You may copy it</string>
-        <key>version</key>
-        <string>1.5.12</string>
-        <key>use_scm_version</key>
-        <boolean>true</boolean>
-        <key>name</key>
-        <string>tailslide</string>
-        <key>vcs_branch</key>
-        <string>HEAD</string>
-        <key>vcs_revision</key>
-        <string>65a76b90a20d92ad6b64ded75ebdaa5432fea8b0</string>
-        <key>vcs_url</key>
-        <string>https://github.com/SaladDais/tailslide</string>
-        <key>canonical_repo</key>
-        <string>https://github.com/SaladDais/tailslide</string>
-        <key>description</key>
-        <string>Embeddable parser, AST, tree walker and compiler for the Linden Scripting Language based on LSLint</string>
-        <key>source_type</key>
-        <string>git</string>
-      </map>
       <key>lsl_definitions</key>
       <map>
         <key>platforms</key>
@@ -158,6 +72,7 @@
           <key>manifest</key>
           <array>
             <string>LICENSES/luau.txt</string>
+            <string>LICENSES/tailslide.txt</string>
             <string>include</string>
           </array>
           <key>build_directory</key>

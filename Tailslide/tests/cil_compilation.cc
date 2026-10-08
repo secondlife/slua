@@ -1,4 +1,4 @@
-#include "doctest.hh"
+#include "doctest.h"
 #include "passes/mono/script_compiler.hh"
 #include "testutils.hh"
 
@@ -32,16 +32,14 @@ SIMPLE_CIL_CONFORMANCE("lsl_conformance2.lsl")
 SIMPLE_CIL_CONFORMANCE("deprecated_function.lsl")
 SIMPLE_CIL_CONFORMANCE("event_handlers.lsl")
 TEST_CASE("sub_replacement.lsl") {
-    checkCILOutput("sub_replacement.lsl", {
-      .optimize_sutractions = true,
-      .omit_unnecessary_pushes = false
-    });
+  MonoCompilationOptions options{};
+  options.optimize_sutractions = true;
+  checkCILOutput("sub_replacement.lsl", options);
 }
 TEST_CASE("push_omission.lsl") {
-  checkCILOutput("push_omission.lsl", {
-      .optimize_sutractions = false,
-      .omit_unnecessary_pushes = true
-  });
+  MonoCompilationOptions options{};
+  options.omit_unnecessary_pushes = true;
+  checkCILOutput("push_omission.lsl", options);
 }
 
 TEST_SUITE_END();

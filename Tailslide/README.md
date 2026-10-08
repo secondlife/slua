@@ -1,16 +1,13 @@
 # Intro
 
-![Build Status](https://github.com/secondlife/tailslide/workflows/build/badge.svg) [![codecov](https://codecov.io/gh/secondlife/tailslide/branch/master/graph/badge.svg?token=5BQCSA63F1)](https://codecov.io/gh/secondlife/tailslide)
-
-
 Tailslide provides an embeddable parser, AST representation, and tree walker library for
 Second Life's Linden Scripting Language. These can be used as the foundation for an
 LSL compiler or developing a superset of LSL.
 
-A reference [byte-perfect LSO compiler](libtailslide/passes/lso)
-and semantically equivalent [CIL compiler](libtailslide/passes/mono) are provided. Semantic
+A reference [byte-perfect LSO compiler](tailslide/passes/lso)
+and semantically equivalent [CIL compiler](tailslide/passes/mono) are provided. Semantic
 conformity with the output of LL's compilers is proven through
-[extensive testcases](https://github.com/secondlife/tailslide/tree/master/tests/scripts) and a
+[extensive testcases](tests/scripts) and a
 [fuzzer](https://github.com/SaladDais/lscript-tailslide#lscript_fuzzer).
 
 Also provided is a CLI utility to quickly lint or optimize LSL scripts,
@@ -27,37 +24,15 @@ original README and credits.
 
 # Build
 
-## Linux & OSX
+Tailslide is built as part of the SLua tree, see the top-level README. The library
+is the `libtailslide` CMake target and the Makefile's `build/<config>/libtailslide.a`;
+its tests run inside `Luau.UnitTest` / `slua-tests`. Pass `-DTAILSLIDE_BUILD_CLI=ON`
+for the `tailslide` CLI, and see `fuzz.sh` for the libFuzzer harness.
 
-`cmake` must be installed through your system's package manager. `flex` and `bison`
-are optional. If you install them on OS X you _must_ use the Homebrew
-versions, because the versions provided with XCode are extremely old.
-
-```bash
-git clone https://github.com/secondlife/tailslide.git
-cd tailslide
-mkdir build
-cd build
-cmake ..
-make
-```
-
-# Windows
-
-Not well-supported, but possible:
-
-* Install [CMake](https://cmake.org/download/)
-* Optionally, install [Flex and Bison](https://github.com/lexxmark/winflexbison/releases) somewhere in your `PATH` if you want to modify the grammar
-* Install [MSVC for C++ 2022](https://visualstudio.microsoft.com/downloads/)
-
-inside the cloned repo:
-
-```batch
-mkdir build
-cd build
-cmake -G"Visual Studio 17 2022" ..
-cmake --build .
-```
+`flex` and `bison` are optional, the generated scanner and parser are checked in. When
+both are found they regenerate in-tree; `-DTAILSLIDE_SKIP_GEN=ON` turns that off. On
+macOS you _must_ use the Homebrew versions (`bootstrap_macos.sh`), the ones that ship
+with Xcode are extremely old.
 
 # Tech Overview
 

@@ -43,12 +43,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         }
       } else {
         if (!parser.logger.getErrors()) {
-          Tailslide::OptimizationOptions ctx{
-              .fold_constants = true,
-              .prune_unused_locals = true,
-              .prune_unused_globals = true,
-              .prune_unused_functions = true,
-          };
+          Tailslide::OptimizationOptions ctx{};
+          ctx.fold_constants = true;
+          ctx.prune_unused_locals = true;
+          ctx.prune_unused_globals = true;
+          ctx.prune_unused_functions = true;
           script->optimize(ctx);
           script->validateGlobals(true);
           script->checkSymbols();

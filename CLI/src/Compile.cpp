@@ -6,9 +6,7 @@
 
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
-#ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
-#endif
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/Parser.h"
 #include "Luau/TimeTrace.h"
@@ -380,12 +378,7 @@ static bool compileFile(
         // ServerLua: for debugging!
         if (sName.substr(sName.length() - 4) == ".lsl")
         {
-#ifdef LUAU_USE_TAILSLIDE
             compileLSLOrThrow(bcb, *source);
-#else
-            fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
-            exit(1);
-#endif
         }
         else
         {

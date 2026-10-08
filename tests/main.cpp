@@ -13,6 +13,8 @@
 
 #include "RegisterCallbacks.h"
 
+#include <tailslide/lslmini.hh>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -504,6 +506,9 @@ int main(int argc, char** argv)
     // picked up from global state.
     for (Luau::RegisterCallback cb : Luau::getRegisterCallbacks())
         cb();
+
+    // ServerLua: tailslide's tests parse without going through the LSL compiler's lazy init
+    Tailslide::tailslide_init_builtins(nullptr);
 
     int result = context.run();
     if (doctest::parseFlag(argc, argv, "--help") || doctest::parseFlag(argc, argv, "-h"))

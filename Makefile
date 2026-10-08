@@ -62,6 +62,11 @@ LSLBUILTINS_SOURCES=$(wildcard LSLBuiltins/src/*.cpp)
 LSLBUILTINS_OBJECTS=$(LSLBUILTINS_SOURCES:%=$(BUILD)/%.o)
 LSLBUILTINS_TARGET=$(BUILD)/libluaulslbuiltins.a
 
+# ServerLua: the LSL frontend
+TAILSLIDE_SOURCES=$(wildcard Tailslide/tailslide/*.cc Tailslide/tailslide/passes/*.cc Tailslide/tailslide/passes/lso/*.cc Tailslide/tailslide/passes/mono/*.cc)
+TAILSLIDE_OBJECTS=$(TAILSLIDE_SOURCES:%=$(BUILD)/%.o)
+TAILSLIDE_TARGET=$(BUILD)/libtailslide.a
+
 REQUIRE_SOURCES=$(wildcard Require/src/*.cpp)
 REQUIRE_OBJECTS=$(REQUIRE_SOURCES:%=$(BUILD)/%.o)
 REQUIRE_TARGET=$(BUILD)/libluaurequire.a
@@ -71,6 +76,9 @@ ISOCLINE_OBJECTS=$(ISOCLINE_SOURCES:%=$(BUILD)/%.o)
 ISOCLINE_TARGET=$(BUILD)/libisocline.a
 
 TESTS_SOURCES=$(wildcard tests/*.cpp) CLI/src/FileUtils.cpp CLI/src/Flags.cpp CLI/src/Profiler.cpp CLI/src/Coverage.cpp CLI/src/Counters.cpp CLI/src/Repl.cpp CLI/src/ReplRequirer.cpp CLI/src/VfsNavigator.cpp
+# ServerLua: tailslide's tests live in the same binary, with their own include roots
+TAILSLIDE_TESTS_SOURCES=$(wildcard Tailslide/tests/*.cc)
+TAILSLIDE_TESTS_OBJECTS=$(TAILSLIDE_TESTS_SOURCES:%=$(BUILD)/%.o)
 TESTS_OBJECTS=$(TESTS_SOURCES:%=$(BUILD)/%.o)
 TESTS_TARGET=$(BUILD)/slua-tests
 
@@ -115,15 +123,14 @@ ifneq ($(opt),)
 	TESTS_ARGS+=-O$(opt)
 endif
 
-OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(EXECUTOR_OBJECTS) $(LSLBUILTINS_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(HARNESS_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
+OBJECTS=$(COMMON_OBJECTS) $(AST_OBJECTS) $(COMPILER_OBJECTS) $(BYTECODE_OBJECTS) $(JITINLINER_OBJECTS) $(CONFIG_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(EXECUTOR_OBJECTS) $(LSLBUILTINS_OBJECTS) $(TAILSLIDE_OBJECTS) $(REQUIRE_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(TAILSLIDE_TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(COMPILE_CLI_OBJECTS) $(BYTECODE_CLI_OBJECTS) $(HARNESS_CLI_OBJECTS) $(TEST_LINK_VM_OBJECTS) $(TEST_LINK_CODEGEN_OBJECTS) $(FUZZ_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
 EXECUTABLE_ALIASES = slua slua-analyze slua-compile slua-bytecode slua-harness slua-tests
 
 # `LUAU_CONFORMANCE_SOURCE_DIR` is configured at build time
 LUAU_CONFORMANCE_SOURCE_DIR = "\"$(realpath .)/tests/conformance\""
 
 # common flags
-# We have to do tailslide builds for `make`-based builds, conditionally including the LSL compiler is annoying in `make`.
-CXXFLAGS+=-g -Wall -DLUAU_USE_TAILSLIDE=1
+CXXFLAGS+=-g -Wall
 LDFLAGS+=
 
 # some gcc versions treat var in `if (type var = val)` as unused
@@ -198,38 +205,44 @@ $(AST_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include
 
 $(BYTECODE_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICommon/include
 $(JITINLINER_OBJECTS): CXXFLAGS+=-std=c++17 -IInliner/include -IBytecode/include -IBytecode/src -ICommon/include -IVM/include -IVM/src
-$(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICompiler/include -ICommon/include -IAst/include -ILSLBuiltins/include -Istage/packages/include
+$(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -IBytecode/include -ICompiler/include -ICommon/include -IAst/include -ILSLBuiltins/include -ITailslide
 $(CONFIG_OBJECTS): CXXFLAGS+=-std=c++17 -IConfig/include -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include
 $(ANALYSIS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IBytecode/include -ICompiler/include -IVM/include
 $(CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ICodeGen/include -IVM/include -IVM/src # Code generation needs VM internals
-$(VM_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -ILSLBuiltins/include -Istage/packages/include -I VM/cjson
+$(VM_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -ILSLBuiltins/include -I VM/cjson
 $(EXECUTOR_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IBytecode/include -IExecutor/include -ILSLBuiltins/include -IVM/include -IVM/src
 $(LSLBUILTINS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -ILSLBuiltins/include -I$(BUILD)
+$(TAILSLIDE_OBJECTS): CXXFLAGS+=-std=c++17 -ITailslide/tailslide -ILSLBuiltins/include -Wno-deprecated-declarations
+# Bison-generated code has an unused yynerrs
+$(BUILD)/Tailslide/tailslide/lslmini.tab.cc.o: CXXFLAGS+=-Wno-unused-but-set-variable
+
+# ServerLua: GCC doesn't support the FP_CONTRACT pragma these files use, so say it on the command line.
+# -std=c++17 happens to imply it for GCC, -std=gnu++17 wouldn't, so don't rely on that.
+$(BUILD)/VM/src/lll.cpp.o $(BUILD)/VM/src/llsl.cpp.o $(BUILD)/Tailslide/tailslide/operations.cc.o: CXXFLAGS+=-ffp-contract=off
 $(APR_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include
 $(CJSON_OBJECTS): CXXFLAGS+=-std=c++17 -Wno-unused-function -Wno-char-subscripts -IVM/include -ICommon/include -I VM/cjson
 $(REQUIRE_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -IAst/include -IConfig/include -IRequire/include
 $(ISOCLINE_OBJECTS): CXXFLAGS+=-Wno-unused-function -Iextern/isocline/include
-$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IExecutor/include -IRequire/include -ICLI/include -Iextern -ILSLBuiltins/include -Istage/packages/include -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
-$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include
-$(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include -ILSLBuiltins/include -Istage/packages/include
-$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include -I$(BUILD)
+$(TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IConfig/include -IAnalysis/include -ICodeGen/include -IVM/include -IVM/src -IExecutor/include -IRequire/include -ICLI/include -Iextern -ILSLBuiltins/include -ITailslide -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS -DLUAU_CONFORMANCE_SOURCE_DIR=$(LUAU_CONFORMANCE_SOURCE_DIR)
+$(TAILSLIDE_TESTS_OBJECTS): CXXFLAGS+=-std=c++17 -ITailslide/tailslide -ILSLBuiltins/include -Iextern -Wno-deprecated-declarations -DDOCTEST_CONFIG_DOUBLE_STRINGIFY -DDOCTEST_CONFIG_USE_STD_HEADERS
+$(REPL_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IVM/include -ICodeGen/include -IRequire/include -Iextern -Iextern/isocline/include -ICLI/include -ILSLBuiltins/include -ITailslide
+$(ANALYZE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IAnalysis/include -IConfig/include -IRequire/include -IVM/include -Iextern -ICLI/include -ILSLBuiltins/include
+$(COMPILE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include -ILSLBuiltins/include -ITailslide -I$(BUILD)
 $(BYTECODE_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -ICodeGen/include -ICLI/include
-$(HARNESS_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -IExecutor/include -ICLI/include -ILSLBuiltins/include -Istage/packages/include
+$(HARNESS_CLI_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -ICompiler/include -IVM/include -IExecutor/include -ICLI/include -ILSLBuiltins/include -ITailslide
 $(TEST_LINK_VM_OBJECTS): CXXFLAGS+=-std=c++11 -ICommon/include -IVM/include
 $(TEST_LINK_CODEGEN_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IVM/include -ICodeGen/include
-$(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IAnalysis/include -IVM/include -ICodeGen/include -IConfig/include -ILSLBuiltins/include -Istage/packages/include
+$(FUZZ_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include -IBytecode/include -IInliner/include -ICompiler/include -IAnalysis/include -IVM/include -ICodeGen/include -IConfig/include -ILSLBuiltins/include -ITailslide
 
 # POSIX timers live in librt on glibc < 2.34, a stub elsewhere
 LIBRT=$(if $(filter Darwin,$(shell uname -s)),,-lrt)
 
-$(TESTS_TARGET): LDFLAGS+=-lpthread $(LIBRT) -Lstage/packages/lib/release -ltailslide
-$(REPL_CLI_TARGET): LDFLAGS+=-lpthread -Lstage/packages/lib/release -ltailslide
+$(TESTS_TARGET): LDFLAGS+=-lpthread $(LIBRT)
+$(REPL_CLI_TARGET): LDFLAGS+=-lpthread
 $(ANALYZE_CLI_TARGET): LDFLAGS+=-lpthread
-$(COMPILE_CLI_TARGET): LDFLAGS+=-Lstage/packages/lib/release -ltailslide
-$(HARNESS_CLI_TARGET): LDFLAGS+=-lpthread $(LIBRT) -Lstage/packages/lib/release -ltailslide
+$(HARNESS_CLI_TARGET): LDFLAGS+=-lpthread $(LIBRT)
 
 fuzz-proto fuzz-prototest: LDFLAGS+=$(LPROTOBUF)
-fuzz-lsl_script: LDFLAGS+=-Lstage/packages/lib/release -ltailslide
 
 # pseudo targets
 .PHONY: all test clean coverage format luau-size aliases build-mutator-libs
@@ -271,8 +284,8 @@ coverage: $(TESTS_TARGET) $(COMPILE_CLI_TARGET)
 	llvm-profdata merge *.profraw -o default.profdata
 	rm *.profraw
 	llvm-cov show -format=html -show-instantiations=false -show-line-counts=true -show-region-summary=false -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -output-dir=coverage --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile
-	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile
-	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\|stage\)/.* -format lcov --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile >coverage.info
+	llvm-cov report -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -show-region-summary=false --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile
+	llvm-cov export -ignore-filename-regex=\(tests\|extern\|CLI\)/.* -format lcov --instr-profile default.profdata -object build/coverage/slua-tests -object build/coverage/slua-compile >coverage.info
 
 format:
 	git ls-files '*.h' '*.cpp' | xargs clang-format-11 -i
@@ -307,12 +320,13 @@ slua-tests: $(TESTS_TARGET) $(TEST_LINK_VM_TARGET) $(TEST_LINK_CODEGEN_TARGET)
 	ln -fs $(TESTS_TARGET) $@
 
 # executable targets
-$(TESTS_TARGET): $(TESTS_OBJECTS) $(ANALYSIS_TARGET) $(COMPILER_TARGET) $(JITINLINER_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(EXECUTOR_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
-$(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
-$(ANALYZE_CLI_TARGET): $(ANALYZE_CLI_OBJECTS) $(ANALYSIS_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
-$(COMPILE_CLI_TARGET): $(COMPILE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
-$(BYTECODE_CLI_TARGET): $(BYTECODE_CLI_OBJECTS) $(COMPILER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
-$(HARNESS_CLI_TARGET): $(HARNESS_CLI_OBJECTS) $(COMPILER_TARGET) $(AST_TARGET) $(EXECUTOR_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+# ServerLua: the compiler references tailslide, which references LSLBuiltins, so that's the archive order
+$(TESTS_TARGET): $(TESTS_OBJECTS) $(TAILSLIDE_TESTS_OBJECTS) $(ANALYSIS_TARGET) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(JITINLINER_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(EXECUTOR_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+$(REPL_CLI_TARGET): $(REPL_CLI_OBJECTS) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(ISOCLINE_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+$(ANALYZE_CLI_TARGET): $(ANALYZE_CLI_OBJECTS) $(ANALYSIS_TARGET) $(AST_TARGET) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(REQUIRE_TARGET) $(CONFIG_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+$(COMPILE_CLI_TARGET): $(COMPILE_CLI_OBJECTS) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+$(BYTECODE_CLI_TARGET): $(BYTECODE_CLI_OBJECTS) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+$(HARNESS_CLI_TARGET): $(HARNESS_CLI_OBJECTS) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(AST_TARGET) $(EXECUTOR_TARGET) $(BYTECODE_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
 
 $(TESTS_TARGET) $(REPL_CLI_TARGET) $(ANALYZE_CLI_TARGET) $(COMPILE_CLI_TARGET) $(BYTECODE_CLI_TARGET) $(HARNESS_CLI_TARGET):
 	$(CXX) $^ $(LDFLAGS) -o $@
@@ -327,7 +341,7 @@ $(TEST_LINK_CODEGEN_TARGET): $(TEST_LINK_CODEGEN_OBJECTS) $(CODEGEN_TARGET) $(VM
 	$(CXX) $< $(LDFLAGS) $(WHOLE_ARCHIVE_START) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET) $(WHOLE_ARCHIVE_END) -o $@
 
 # executable targets for fuzzing
-fuzz-%: $(BUILD)/fuzz/%.cpp.o $(ANALYSIS_TARGET) $(COMPILER_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CONFIG_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
+fuzz-%: $(BUILD)/fuzz/%.cpp.o $(ANALYSIS_TARGET) $(COMPILER_TARGET) $(TAILSLIDE_TARGET) $(JITINLINER_TARGET) $(BYTECODE_TARGET) $(AST_TARGET) $(CONFIG_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(LSLBUILTINS_TARGET) $(COMMON_TARGET)
 	$(CXX) $^ $(LDFLAGS) -o $@
 
 # add libprotobuf-mutator on top of common targets above
@@ -346,10 +360,11 @@ $(CODEGEN_TARGET): $(CODEGEN_OBJECTS)
 $(VM_TARGET): $(VM_OBJECTS) $(CJSON_OBJECTS) $(APR_OBJECTS)
 $(EXECUTOR_TARGET): $(EXECUTOR_OBJECTS)
 $(LSLBUILTINS_TARGET): $(LSLBUILTINS_OBJECTS)
+$(TAILSLIDE_TARGET): $(TAILSLIDE_OBJECTS)
 $(REQUIRE_TARGET): $(REQUIRE_OBJECTS)
 $(ISOCLINE_TARGET): $(ISOCLINE_OBJECTS)
 
-$(COMMON_TARGET) $(AST_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(EXECUTOR_TARGET) $(LSLBUILTINS_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
+$(COMMON_TARGET) $(AST_TARGET) $(BYTECODE_TARGET) $(JITINLINER_TARGET) $(COMPILER_TARGET) $(CONFIG_TARGET) $(ANALYSIS_TARGET) $(CODEGEN_TARGET) $(VM_TARGET) $(EXECUTOR_TARGET) $(LSLBUILTINS_TARGET) $(TAILSLIDE_TARGET) $(REQUIRE_TARGET) $(ISOCLINE_TARGET):
 	ar rcs $@ $^
 
 # generated header for embedded builtins
@@ -365,6 +380,10 @@ $(BUILD)/LSLBuiltins/src/LSLBuiltins.cpp.o: $(BUILD)/builtins_embedded.h
 
 # object file targets
 $(BUILD)/%.cpp.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $< $(CXXFLAGS) -c -MMD -MP -o $@
+
+$(BUILD)/%.cc.o: %.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $< $(CXXFLAGS) -c -MMD -MP -o $@
 

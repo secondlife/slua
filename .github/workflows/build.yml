@@ -41,18 +41,6 @@ jobs:
     - name: work around ASLR+ASAN compatibility
       run: sudo sysctl -w vm.mmap_rnd_bits=28
       if: matrix.os.name == 'ubuntu' || matrix.os.name == 'ubuntu-32bit'
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: "3.11"
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
-    - name: Autobuild install
-      env:
-        AUTOBUILD_GITHUB_TOKEN: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
-      run: |
-        autobuild install -A${{matrix.addrsize}}
     - name: install 32-bit dependencies
       if: matrix.os.name == 'ubuntu-32bit'
       run: |
@@ -100,18 +88,8 @@ jobs:
         arch: [x64]
     steps:
       - uses: actions/checkout@v1
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: "3.11"
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
-      - name: Autobuild install
-        run: |
-          autobuild install -A64
       - name: cmake configure
-        run: cmake . -A x64 -DLUAU_WERROR=OFF -DLUAU_NATIVE=ON -DLUAU_USE_TAILSLIDE=ON
+        run: cmake . -A x64 -DLUAU_WERROR=OFF -DLUAU_NATIVE=ON
       - name: cmake build
         run: cmake --build . --target Luau.UnitTest Luau.Conformance --config RelWithDebInfo
       - name: run tests
@@ -146,18 +124,6 @@ jobs:
     - name: install
       run: |
         sudo apt install llvm
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: "3.11"
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip setuptools wheel 'autobuild<4' setuptools_scm
-    - name: Autobuild install
-      env:
-        AUTOBUILD_GITHUB_TOKEN: ${{ secrets.SHARED_AUTOBUILD_GITHUB_TOKEN }}
-      run: |
-        autobuild install -A64
     - name: make coverage
       env:
         # ServerLua: regenerate the golden fixtures so the dirty-tree check below

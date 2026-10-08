@@ -261,7 +261,6 @@ static const GoldenScenario kGoldenScenarios[] = {
             dispatch(ts.exec, LSLEvent::MovingStart);
             checkCapture(ts.host.printed, {"ran after reset"});
         }},
-#ifdef LUAU_USE_TAILSLIDE
     {"between-handlers-lsl",
         [](TestScript& ts)
         {
@@ -319,7 +318,6 @@ static const GoldenScenario kGoldenScenarios[] = {
             CHECK(ts.exec.getFaultKind() == FaultKind::OutOfMemory);
             CHECK_FALSE(ts.exec.getFaultString().empty());
         }},
-#endif
 };
 
 static std::string goldenFixtureDir()
@@ -464,11 +462,6 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor golden fixtures")
     std::vector<std::pair<const GoldenScenario*, std::string>> loadable;
     for (const GoldenScenario& scenario : kGoldenScenarios)
     {
-#ifndef LUAU_USE_TAILSLIDE
-        // No LSL compiler in this build, so those scenarios can't run
-        if (isLSLScenario(scenario.name))
-            continue;
-#endif
         // Yucky yucky lambda :(
         auto collect = [&](const std::string& path)
         {

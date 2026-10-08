@@ -95,14 +95,9 @@ target_sources(Luau.Compiler PRIVATE
     Compiler/src/Types.h
     Compiler/src/Utils.h
     Compiler/src/ValueTracking.h
+    Compiler/include/Luau/LSLCompiler.h
+    Compiler/src/LSLCompiler.cpp
 )
-
-if (LUAU_USE_TAILSLIDE)
-    target_sources(Luau.Compiler PRIVATE
-        Compiler/include/Luau/LSLCompiler.h
-        Compiler/src/LSLCompiler.cpp
-    )
-endif()
 
 # Luau.Config Sources
 target_sources(Luau.Config PRIVATE
@@ -661,13 +656,19 @@ if(TARGET Luau.UnitTest)
         tests/Variant.test.cpp
         tests/VecDeque.test.cpp
         tests/VisitType.test.cpp
+        tests/LSLCompiler.test.cpp
         tests/main.cpp)
 
-    if (LUAU_USE_TAILSLIDE)
-        target_sources(Luau.UnitTest PRIVATE
-            tests/LSLCompiler.test.cpp
-        )
-    endif()
+    # ServerLua: tailslide's own test suite lives in the same binary
+    target_sources(Luau.UnitTest PRIVATE
+        Tailslide/tests/ast_rewriting.cc
+        Tailslide/tests/cil_compilation.cc
+        Tailslide/tests/conformance.cc
+        Tailslide/tests/lso_compilation.cc
+        Tailslide/tests/testutils.cc
+        Tailslide/tests/testutils.hh
+        Tailslide/tests/unit_tests.cc
+    )
 endif()
 
 if(TARGET Luau.Conformance)
@@ -685,13 +686,8 @@ if(TARGET Luau.Conformance)
         tests/SLExecutorFixture.h
         tests/SLExecutor.test.cpp
         tests/SLGoldenFixtures.test.cpp
+        tests/LSL.test.cpp
         tests/main.cpp)
-
-    if (LUAU_USE_TAILSLIDE)
-        target_sources(Luau.Conformance PRIVATE
-            tests/LSL.test.cpp
-        )
-    endif()
 endif()
 
 if(TARGET Luau.CLI.Test)

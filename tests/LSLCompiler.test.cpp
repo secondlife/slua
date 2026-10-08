@@ -40,8 +40,8 @@ state two {
 
 TEST_CASE("StateEventBits")
 {
-    // The runtime numbers events off LSLBuiltins.h, but Tailslide's numbering
-    // is what actually lands in the masks
+    // The runtime numbers events off LSLBuiltins.h, but Tailslide's own parse
+    // of the same builtins.txt is what actually lands in the masks
     LSLScriptInfo info;
     compileLSL(R"(
 default {

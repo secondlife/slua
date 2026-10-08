@@ -773,8 +773,9 @@ class LSLScript : public LSLASTNode {
     void validateGlobals(bool mono_semantics);
 };
 
-// Called once at startup, not thread-safe. Loads builtins from a file, or from
-// the copy of builtins.txt embedded in the library when `builtins_file` is null.
+// Not thread-safe. Loads builtins from a file, or from the builtins.txt embedded
+// in Luau.LSLBuiltins when `builtins_file` is null. Only the first call loads
+// anything, later ones return true without looking at their argument.
 // Definitions that can't be read are skipped with a message on stderr, returns
 // false if that happened or the file couldn't be opened.
 bool tailslide_init_builtins(const char *builtins_file);

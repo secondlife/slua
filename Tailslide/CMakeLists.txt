@@ -1,27 +1,10 @@
-cmake_minimum_required(VERSION 3.10)
-project(Tailslide LANGUAGES CXX)
+# Built only as a subdirectory of the SLua tree; the parent owns the toolchain,
+# sanitizer and coverage settings.
 
-include(GNUInstallDirs)
-
-if (MSVC)
-  # MSVC requires C++20 be enabled to allow designated initializers
-  set(CMAKE_CXX_STANDARD 20)
-else()
-  set(CMAKE_CXX_STANDARD 17)
-endif()
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
-
-set(_IGNORED "${CMAKE_C_COMPILER}")
-
-option(TAILSLIDE_CI_RUN "Are we running in CI" OFF)
-option(TAILSLIDE_BUILD_CLI "Build CLI" ON)
-option(TAILSLIDE_BUILD_TESTS "Build Tests" ON)
-option(TAILSLIDE_BUILD_FUZZER "Build Fuzzer" OFF)
+option(TAILSLIDE_BUILD_CLI "Build the tailslide CLI" OFF)
+option(TAILSLIDE_BUILD_FUZZER "Build the libFuzzer harness" OFF)
 option(TAILSLIDE_SANITIZE "Use ASAN" OFF)
 option(TAILSLIDE_FUZZER_INSTRUMENTATION "Add instrumentation for libFuzzer" OFF)
-option(TAILSLIDE_COVERAGE "Track coverage data in tests" OFF)
 option(TAILSLIDE_SKIP_GEN "Skip flex/bison generation" OFF)
 
 if (MSVC)
@@ -32,9 +15,6 @@ else()
   add_definitions("-Wall -Wno-deprecated-declarations")
   if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_definitions("-Wno-unneeded-internal-declaration")
-  endif()
-  if (TAILSLIDE_CI_RUN)
-    add_definitions("-Werror")
   endif()
 endif()
 
@@ -91,113 +71,90 @@ if (TAILSLIDE_FUZZER_INSTRUMENTATION)
   endif()
 endif()
 
-if (TAILSLIDE_COVERAGE)
-  if ( NOT (CMAKE_CXX_COMPILER_ID MATCHES "Clang") )
-    message(FATAL_ERROR "Clang must be used to enable coverage tracking, not ${CMAKE_CXX_COMPILER_ID}")
-  endif()
-  add_compile_options("-fprofile-instr-generate" "-fcoverage-mapping")
-  add_link_options("-fprofile-instr-generate")
-endif()
-
-# Embed builtins.txt into a header file at configure time
-# file(READ) doesn't register a configure dependency on its own, so add one explicitly
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/builtins.txt")
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/builtins.txt" BUILTINS_HEX HEX)
-string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1, " BUILTINS_HEX_ARRAY "${BUILTINS_HEX}")
-configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/libtailslide/builtins_embedded.hh.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/builtins_embedded.hh"
-        @ONLY
-)
-
 add_library(libtailslide STATIC
-        libtailslide/allocator.cc
-        libtailslide/ast.cc
-        libtailslide/builtins.cc
-        libtailslide/logger.cc
-        libtailslide/lslmini.cc
-        libtailslide/operations.cc
-        libtailslide/strings.cc
-        libtailslide/symtab.cc
-        libtailslide/types.cc
-        libtailslide/visitor.cc
-        libtailslide/passes/globalexpr_validator.cc
-        libtailslide/passes/final_pass.cc
-        libtailslide/passes/desugaring.cc
-        libtailslide/passes/pretty_print.cc
-        libtailslide/passes/symbol_resolution.cc
-        libtailslide/passes/type_checking.cc
-        libtailslide/passes/tree_print.cc
-        libtailslide/passes/tree_simplifier.cc
-        libtailslide/passes/constant_expression_simplifier.cc
-        libtailslide/passes/values.cc
-        libtailslide/passes/lso/bytecode_compiler.cc
-        libtailslide/passes/lso/library_funcs.cc
-        libtailslide/passes/lso/script_compiler.cc
-        libtailslide/passes/lso/resource_collector.cc
-        libtailslide/passes/mono/resource_collector.cc
-        libtailslide/passes/mono/script_compiler.cc
-        libtailslide/tailslide.cc
+        tailslide/allocator.cc
+        tailslide/ast.cc
+        tailslide/builtins.cc
+        tailslide/logger.cc
+        tailslide/lslmini.cc
+        tailslide/operations.cc
+        tailslide/strings.cc
+        tailslide/symtab.cc
+        tailslide/types.cc
+        tailslide/visitor.cc
+        tailslide/passes/globalexpr_validator.cc
+        tailslide/passes/final_pass.cc
+        tailslide/passes/desugaring.cc
+        tailslide/passes/pretty_print.cc
+        tailslide/passes/symbol_resolution.cc
+        tailslide/passes/type_checking.cc
+        tailslide/passes/tree_print.cc
+        tailslide/passes/tree_simplifier.cc
+        tailslide/passes/constant_expression_simplifier.cc
+        tailslide/passes/values.cc
+        tailslide/passes/lso/bytecode_compiler.cc
+        tailslide/passes/lso/library_funcs.cc
+        tailslide/passes/lso/script_compiler.cc
+        tailslide/passes/lso/resource_collector.cc
+        tailslide/passes/mono/resource_collector.cc
+        tailslide/passes/mono/script_compiler.cc
+        tailslide/tailslide.cc
         )
 target_sources(libtailslide PRIVATE
-        libtailslide/allocator.hh
-        libtailslide/ast.hh
-        libtailslide/bitstream.hh
-        libtailslide/builtins_embedded.hh.in
-        libtailslide/loctype.hh
-        libtailslide/logger.hh
-        libtailslide/lslmini.hh
-        libtailslide/operations.hh
-        libtailslide/portable_endian.hh
-        libtailslide/strings.hh
-        libtailslide/symtab.hh
-        libtailslide/types.hh
-        libtailslide/unordered_cstr_map.hh
-        libtailslide/visitor.hh
-        libtailslide/passes/globalexpr_validator.hh
-        libtailslide/passes/final_pass.hh
-        libtailslide/passes/desugaring.hh
-        libtailslide/passes/pretty_print.hh
-        libtailslide/passes/symbol_resolution.hh
-        libtailslide/passes/tree_simplifier.hh
-        libtailslide/passes/tree_print.hh
-        libtailslide/passes/type_checking.hh
-        libtailslide/passes/values.hh
-        libtailslide/passes/lso/bytecode_compiler.hh
-        libtailslide/passes/lso/bytecode_format.hh
-        libtailslide/passes/lso/library_funcs.hh
-        libtailslide/passes/lso/script_compiler.hh
-        libtailslide/passes/lso/resource_collector.hh
-        libtailslide/passes/mono/resource_collector.hh
-        libtailslide/passes/mono/script_compiler.hh
-        libtailslide/tailslide.hh
+        tailslide/allocator.hh
+        tailslide/ast.hh
+        tailslide/bitstream.hh
+        tailslide/loctype.hh
+        tailslide/logger.hh
+        tailslide/lslmini.hh
+        tailslide/operations.hh
+        tailslide/portable_endian.hh
+        tailslide/strings.hh
+        tailslide/symtab.hh
+        tailslide/types.hh
+        tailslide/unordered_cstr_map.hh
+        tailslide/visitor.hh
+        tailslide/passes/globalexpr_validator.hh
+        tailslide/passes/final_pass.hh
+        tailslide/passes/desugaring.hh
+        tailslide/passes/pretty_print.hh
+        tailslide/passes/symbol_resolution.hh
+        tailslide/passes/tree_simplifier.hh
+        tailslide/passes/tree_print.hh
+        tailslide/passes/type_checking.hh
+        tailslide/passes/constant_expression_simplifier.hh
+        tailslide/passes/values.hh
+        tailslide/passes/lso/bytecode_compiler.hh
+        tailslide/passes/lso/bytecode_format.hh
+        tailslide/passes/lso/library_funcs.hh
+        tailslide/passes/lso/script_compiler.hh
+        tailslide/passes/lso/resource_collector.hh
+        tailslide/passes/mono/resource_collector.hh
+        tailslide/passes/mono/script_compiler.hh
+        tailslide/tailslide.hh
 )
-
-string(TIMESTAMP BUILD_DATE "%Y-%m-%d")
-add_definitions(-DBUILD_DATE="${BUILD_DATE}")
-add_definitions(-DVERSION="0.1dev")
 
 # The generated scanner and parser are checked in so that flex and bison aren't
 # hard build dependencies. When they are available, regenerate in-tree so the
 # checked-in copies stay current.
-set(LSLMINI_SCANNER libtailslide/lslmini.flex.cc)
-set(LSLMINI_PARSER libtailslide/lslmini.tab.cc)
-set(LSLMINI_PARSER_HEADER libtailslide/lslmini.tab.hh)
+set(LSLMINI_SCANNER tailslide/lslmini.flex.cc)
+set(LSLMINI_PARSER tailslide/lslmini.tab.cc)
+set(LSLMINI_PARSER_HEADER tailslide/lslmini.tab.hh)
 if (BISON_FOUND AND FLEX_FOUND AND NOT TAILSLIDE_SKIP_GEN)
   # Run from the source dir with relative paths so the `#line` directives in the
   # generated files don't embed this machine's absolute paths.
   add_custom_command(
     OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/${LSLMINI_PARSER} ${CMAKE_CURRENT_SOURCE_DIR}/${LSLMINI_PARSER_HEADER}
-    COMMAND ${BISON_EXECUTABLE} --defines=${LSLMINI_PARSER_HEADER} -o ${LSLMINI_PARSER} libtailslide/lslmini.y
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libtailslide/lslmini.y
+    COMMAND ${BISON_EXECUTABLE} --defines=${LSLMINI_PARSER_HEADER} -o ${LSLMINI_PARSER} tailslide/lslmini.y
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tailslide/lslmini.y
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "[BISON] Building parser with bison ${BISON_VERSION}"
     VERBATIM
   )
   add_custom_command(
     OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/${LSLMINI_SCANNER}
-    COMMAND ${FLEX_EXECUTABLE} -o ${LSLMINI_SCANNER} libtailslide/lslmini.l
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libtailslide/lslmini.l ${CMAKE_CURRENT_SOURCE_DIR}/${LSLMINI_PARSER_HEADER}
+    COMMAND ${FLEX_EXECUTABLE} -o ${LSLMINI_SCANNER} tailslide/lslmini.l
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tailslide/lslmini.l ${CMAKE_CURRENT_SOURCE_DIR}/${LSLMINI_PARSER_HEADER}
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "[FLEX] Building scanner with flex ${FLEX_VERSION}"
     VERBATIM
@@ -206,9 +163,15 @@ else()
   message(STATUS "Not using flex and/or bison, using the checked-in scanner and parser")
 endif()
 
-target_include_directories(libtailslide PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
-target_include_directories(libtailslide PUBLIC libtailslide)
+# Consumers include <tailslide/...>, the library itself uses bare names.
+target_include_directories(libtailslide PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(libtailslide PRIVATE tailslide)
 target_sources(libtailslide PRIVATE ${LSLMINI_SCANNER} ${LSLMINI_PARSER} ${LSLMINI_PARSER_HEADER})
+# The embedded builtins.txt comes from here
+target_link_libraries(libtailslide PUBLIC Luau.LSLBuiltins)
+
+target_compile_features(libtailslide PUBLIC cxx_std_17)
+set_target_properties(libtailslide PROPERTIES CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
 # Suppress warning about unused yynerrs variable in Bison-generated code
 if (NOT MSVC)
@@ -220,7 +183,7 @@ if (NOT MSVC)
   # GCC doesn't support the FP_CONTRACT pragma, so we have to use this to tell it it not to
   # fuse multiply and add for these files.
   set_source_files_properties(
-    libtailslide/operations.cc
+    tailslide/operations.cc
     PROPERTIES
     COMPILE_FLAGS "-ffp-contract=off"
   )
@@ -232,38 +195,14 @@ if (NOT WIN32 AND NOT TAILSLIDE_FUZZER_INSTRUMENTATION)
 endif()
 
 
-install(TARGETS libtailslide DESTINATION lib)
-install(DIRECTORY libtailslide/ DESTINATION include/tailslide FILES_MATCHING PATTERN "*.hh")
-
-
 if (TAILSLIDE_BUILD_CLI)
   add_executable(tailslide_cli tailslide_cli/main.cc)
   target_sources(tailslide_cli PRIVATE
-          extern/cxxopt.hh
+          ${CMAKE_SOURCE_DIR}/extern/cxxopt.hh
   )
-  target_include_directories(tailslide_cli PUBLIC ${CMAKE_CURRENT_BINARY_DIR} libtailslide extern)
+  target_include_directories(tailslide_cli PRIVATE tailslide ${CMAKE_SOURCE_DIR}/extern)
   target_link_libraries(tailslide_cli PUBLIC ${EXTRA_LIBS} libtailslide)
   set_target_properties(tailslide_cli PROPERTIES OUTPUT_NAME tailslide)
-endif()
-
-
-if (TAILSLIDE_BUILD_TESTS)
-  add_executable(tailslide_test
-          tests/conformance.cc
-          tests/ast_rewriting.cc
-          tests/lso_compilation.cc
-          tests/cil_compilation.cc
-          tests/testutils.cc
-          tests/main.cc
-          tests/unit_tests.cc
-  )
-  target_sources(tailslide_test PRIVATE
-    extern/doctest.hh
-    tests/testutils.hh
-  )
-  target_include_directories(tailslide_test PUBLIC ${CMAKE_CURRENT_BINARY_DIR} libtailslide extern)
-  target_link_libraries(tailslide_test PUBLIC ${EXTRA_LIBS} libtailslide)
-  set_target_properties(tailslide_test PROPERTIES OUTPUT_NAME tailslide-test)
 endif()
 
 
@@ -278,9 +217,7 @@ if (TAILSLIDE_BUILD_FUZZER)
   add_executable(tailslide_fuzzer
     fuzz/fuzz.cc
   )
-  target_sources(tailslide_fuzzer PRIVATE
-  )
-  target_include_directories(tailslide_fuzzer PUBLIC ${CMAKE_CURRENT_BINARY_DIR} libtailslide)
+  target_include_directories(tailslide_fuzzer PRIVATE tailslide)
   target_link_libraries(tailslide_fuzzer PUBLIC ${EXTRA_LIBS} libtailslide "-fsanitize=fuzzer,address")
   set_target_properties(tailslide_fuzzer PROPERTIES OUTPUT_NAME tailslide-fuzzer)
 endif()
