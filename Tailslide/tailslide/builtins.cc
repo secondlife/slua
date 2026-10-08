@@ -8,7 +8,7 @@
 #include "logger.hh"
 #include "strings.hh"
 
-#include "builtins_embedded.hh"
+#include "Luau/LSLBuiltins.h"
 
 namespace Tailslide {
 
@@ -255,25 +255,32 @@ static bool parse_builtins(std::istream& stream, const char* source_name)
     return ok;
 }
 
-// Called once at startup, not thread-safe.
+// The symbol table is process-global, so only the first load counts. Later
+// calls are no-ops that report success.
+static bool gBuiltinsLoaded = false;
+
+// Not thread-safe.
 // Loads builtins from a NUL-terminated buffer in builtins.txt format.
 // Returns false if any definitions couldn't be loaded.
 bool tailslide_init_builtins_from_data(const char* data)
 {
+    if (gBuiltinsLoaded)
+        return true;
+    gBuiltinsLoaded = true;
     std::istringstream stream(data);
     return parse_builtins(stream, "<data>");
 }
 
-// Called once at startup, not thread-safe.
-// If builtins_file is nullptr, uses embedded builtins data.
+// Not thread-safe.
+// If builtins_file is nullptr, uses the builtins.txt embedded in Luau.LSLBuiltins.
 // Returns false if the file couldn't be opened or any definitions couldn't be loaded.
 bool tailslide_init_builtins(const char* builtins_file)
 {
+    if (gBuiltinsLoaded)
+        return true;
     if (builtins_file == nullptr)
-    {
-        // Use embedded builtins
-        return tailslide_init_builtins_from_data(EMBEDDED_BUILTINS);
-    }
+        return tailslide_init_builtins_from_data(luauSL_default_builtins_text());
+    gBuiltinsLoaded = true;
 
     // Load from file
     std::ifstream file_stream(builtins_file);

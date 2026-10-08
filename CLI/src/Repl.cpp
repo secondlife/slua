@@ -44,9 +44,7 @@
 
 #include "llsl.h"
 #include "Luau/LSLBuiltins.h"
-#ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
-#endif
 
 
 #include <locale.h>
@@ -741,13 +739,8 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     const bool is_lsl = chunkname.find(".lsl") != std::string::npos;
     if (is_lsl)
     {
-#ifdef LUAU_USE_TAILSLIDE
         bytecode = compileLSL(*source);
         lua_setthreaddata(L, lua_getthreaddata(GL));
-#else
-        fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
-        exit(1);
-#endif
     }
     else
     {

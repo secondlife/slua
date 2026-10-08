@@ -145,3 +145,6 @@ const char* lslEventName(int index);
 // Called once at startup, not thread-safe. Loads the constants and the event
 // registry, from the embedded builtins.txt when `builtins_file` is null.
 void luauSL_init_global_builtins(const char* builtins_file);
+
+// The embedded builtins.txt, NUL-terminated. What a null `builtins_file` loads.
+const char* luauSL_default_builtins_text();

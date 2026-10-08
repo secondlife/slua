@@ -12,7 +12,6 @@ option(LUAU_BUILD_WEB "Build Web module" OFF)
 option(LUAU_WERROR "Warnings as errors" OFF)
 option(LUAU_STATIC_CRT "Link with the static CRT (/MT)" OFF)
 option(LUAU_EXTERN_C "Use extern C for all APIs" OFF)
-option(LUAU_USE_TAILSLIDE "Link against tailslide for LSL support" OFF)
 option(LUAU_BUILD_SHARED "Build as a shared library" OFF)
 option(LUAU_TSAN "Build with ThreadSanitizer" OFF)
 
@@ -28,15 +27,6 @@ endif()
 if(LUAU_STATIC_CRT)
     cmake_minimum_required(VERSION 3.15)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
-set(TAILSLIDE_LIBRARY "")
-if (LUAU_USE_TAILSLIDE)
-    set(PACKAGE_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/stage/packages/include")
-    # TODO: this seems wacky
-    set(PACKAGE_LIB_DIR "${CMAKE_SOURCE_DIR}/stage/packages/lib/release")
-    set(TAILSLIDE_LIBRARY "tailslide")
-    add_compile_definitions("LUAU_USE_TAILSLIDE=1")
 endif()
 
 project(Luau LANGUAGES CXX C)
@@ -138,6 +128,9 @@ target_include_directories(Luau.LSLBuiltins PUBLIC LSLBuiltins/include)
 target_include_directories(Luau.LSLBuiltins PRIVATE ${CMAKE_BINARY_DIR})  # For builtins_embedded.h
 target_link_libraries(Luau.LSLBuiltins PUBLIC Luau.Common)
 
+# ServerLua: the LSL frontend, needs Luau.LSLBuiltins configured first
+add_subdirectory(Tailslide)
+
 target_compile_features(Luau.Ast PUBLIC cxx_std_17)
 target_include_directories(Luau.Ast PUBLIC Ast/include)
 target_link_libraries(Luau.Ast PUBLIC Luau.Common)
@@ -153,8 +146,9 @@ target_link_libraries(Luau.Inliner PRIVATE Luau.VM Luau.VM.Internals)
 target_link_libraries(Luau.Inliner PUBLIC Luau.Bytecode)
 
 target_compile_features(Luau.Compiler PUBLIC cxx_std_17)
-target_include_directories(Luau.Compiler PUBLIC Compiler/include "${PACKAGE_INCLUDE_DIR}")
-target_link_libraries(Luau.Compiler PUBLIC Luau.Ast Luau.Bytecode Luau.LSLBuiltins)
+target_include_directories(Luau.Compiler PUBLIC Compiler/include)
+# ServerLua: LSLCompiler.h includes tailslide, so it's part of the public interface
+target_link_libraries(Luau.Compiler PUBLIC Luau.Ast Luau.Bytecode Luau.LSLBuiltins libtailslide)
 
 target_compile_features(Luau.Config PUBLIC cxx_std_17)
 target_include_directories(Luau.Config PUBLIC Config/include)
@@ -172,7 +166,7 @@ target_link_libraries(Luau.CodeGen PRIVATE Luau.VM Luau.VM.Internals) # Code gen
 target_link_libraries(Luau.CodeGen PUBLIC Luau.Common)
 
 target_compile_features(Luau.VM PRIVATE cxx_std_17)
-target_include_directories(Luau.VM PUBLIC VM/include "${PACKAGE_INCLUDE_DIR}")
+target_include_directories(Luau.VM PUBLIC VM/include)
 target_link_libraries(Luau.VM PUBLIC Luau.Common Luau.LSLBuiltins)
 
 # ServerLua: per-script execution engine shared with the script host
@@ -338,9 +332,8 @@ if(LUAU_BUILD_CLI)
     target_compile_options(Luau.Harness.CLI PRIVATE ${LUAU_OPTIONS})
 
     target_include_directories(Luau.Repl.CLI PRIVATE extern extern/isocline/include)
-    target_link_directories(Luau.Repl.CLI PRIVATE "${PACKAGE_LIB_DIR}")
 
-    target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Inliner Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline "${TAILSLIDE_LIBRARY}")
+    target_link_libraries(Luau.Repl.CLI PRIVATE Luau.Compiler Luau.Inliner Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline)
 
     target_link_libraries(Luau.Repl.CLI PRIVATE osthreads)
     target_link_libraries(Luau.Reduce.CLI PRIVATE osthreads)
@@ -358,27 +351,24 @@ if(LUAU_BUILD_CLI)
     target_include_directories(Luau.Reduce.CLI PUBLIC Reduce/include)
     target_link_libraries(Luau.Reduce.CLI PRIVATE Luau.Common Luau.Ast Luau.Analysis Luau.CLI.lib)
 
-    target_link_directories(Luau.Compile.CLI PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.Compile.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
+    target_link_libraries(Luau.Compile.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib)
 
     target_link_libraries(Luau.Bytecode.CLI PRIVATE Luau.Compiler Luau.VM Luau.CodeGen Luau.CLI.lib)
 
-    target_link_directories(Luau.Harness.CLI PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.Harness.CLI PRIVATE Luau.Compiler Luau.VM Luau.Executor Luau.LSLBuiltins Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
+    target_link_libraries(Luau.Harness.CLI PRIVATE Luau.Compiler Luau.VM Luau.Executor Luau.LSLBuiltins Luau.CLI.lib)
 endif()
 
 if(LUAU_BUILD_TESTS)
     target_compile_options(Luau.UnitTest PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.UnitTest PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
-    target_include_directories(Luau.UnitTest PRIVATE extern "${PACKAGE_INCLUDE_DIR}")
-    target_link_directories(Luau.UnitTest PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.UnitTest PRIVATE Luau.Analysis Luau.Bytecode Luau.Compiler Luau.CodeGen "${TAILSLIDE_LIBRARY}")
+    # ServerLua: tailslide's tests use bare includes rooted at Tailslide/tailslide
+    target_include_directories(Luau.UnitTest PRIVATE extern Tailslide/tailslide)
+    target_link_libraries(Luau.UnitTest PRIVATE Luau.Analysis Luau.Bytecode Luau.Compiler Luau.CodeGen)
 
     target_compile_options(Luau.Conformance PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
-    target_include_directories(Luau.Conformance PRIVATE extern VM/src "${PACKAGE_INCLUDE_DIR}")
-    target_link_directories(Luau.Conformance PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Bytecode Luau.Inliner Luau.Compiler Luau.CodeGen Luau.VM Luau.Executor Luau.LSLBuiltins Luau.CLI.lib "${TAILSLIDE_LIBRARY}")
+    target_include_directories(Luau.Conformance PRIVATE extern VM/src)
+    target_link_libraries(Luau.Conformance PRIVATE Luau.Analysis Luau.Bytecode Luau.Inliner Luau.Compiler Luau.CodeGen Luau.VM Luau.Executor Luau.LSLBuiltins Luau.CLI.lib)
 
     if(CMAKE_SYSTEM_NAME MATCHES "Android|iOS")
         set(LUAU_CONFORMANCE_SOURCE_DIR "Client/Luau/tests/conformance")
@@ -392,9 +382,7 @@ if(LUAU_BUILD_TESTS)
     target_compile_options(Luau.CLI.Test PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luau.CLI.Test PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luau.CLI.Test PRIVATE extern CLI)
-
-    target_link_directories(Luau.CLI.Test PRIVATE "${PACKAGE_LIB_DIR}")
-    target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Inliner Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline "${TAILSLIDE_LIBRARY}")
+    target_link_libraries(Luau.CLI.Test PRIVATE Luau.Compiler Luau.Inliner Luau.Config Luau.CodeGen Luau.VM Luau.Require Luau.CLI.lib isocline)
     target_link_libraries(Luau.CLI.Test PRIVATE osthreads)
 
     add_subdirectory(fuzz)

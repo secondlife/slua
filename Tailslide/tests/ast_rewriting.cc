@@ -38,7 +38,8 @@ public:
 };
 
 TEST_CASE("simple_expr_replacement.lsl") {
-  OptimizationOptions ctx{.fold_constants=true};
+  OptimizationOptions ctx{};
+  ctx.fold_constants = true;
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("simple_expr_replacement.lsl", ctx, pretty_ctx, [](LSLScript *script) {
     AddSubbingVisitor visitor;

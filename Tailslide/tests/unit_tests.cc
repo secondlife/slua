@@ -1,5 +1,5 @@
 #include "tailslide.hh"
-#include "doctest.hh"
+#include "doctest.h"
 #include "bitstream.hh"
 #include "operations.hh"
 

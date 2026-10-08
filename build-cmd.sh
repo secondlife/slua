@@ -47,6 +47,9 @@ pushd "$top"
     cp -v "Executor/include/Luau/Executor.h" "Executor/include/Luau/Script.h" "$stage/include/luau/Luau/"
     cp -v "Bytecode/include/Luau/BytecodeHeader.h" "$stage/include/luau/Luau/"
     cp -v "LSLBuiltins/include/Luau/LSLBuiltins.h" "$stage/include/luau/Luau/"
+    # Tailslide's headers, laid out for `#include <tailslide/...>`
+    cp -rv "Tailslide/tailslide" "$stage/include/tailslide"
+    find "$stage/include/tailslide" -type f ! -name '*.hh' -delete
 
     # Don't litter the source directory with build artifacts
     mkdir -p "$stage/build"
@@ -70,7 +73,6 @@ pushd "$top"
                   -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$stage")" \
                   -DCMAKE_C_FLAGS="$(remove_cxxstd $opts)" \
                   -DCMAKE_CXX_FLAGS="$opts" \
-                  -DLUAU_USE_TAILSLIDE=ON \
                   "$top"
             cmake --build . -- /p:Configuration=Release
             cmake --build . --target Luau.Repl.CLI -- /p:Configuration=Release
@@ -86,6 +88,7 @@ pushd "$top"
             cp -v "Release/Luau.Executor.lib" "$stage/lib/release/"
             cp -v "Release/Luau.LSLBuiltins.lib" "$stage/lib/release/"
             cp -v "Release/Luau.Common.lib" "$stage/lib/release/"
+            cp -v "Tailslide/Release/tailslide.lib" "$stage/lib/release/"
 
             cp -v Release/slua.exe "$stage/bin/"
             cp -v Release/slua-harness.exe "$stage/bin/"
@@ -100,7 +103,6 @@ pushd "$top"
             cmake -DCMAKE_INSTALL_PREFIX:STRING="${stage}" \
                   -DCMAKE_CXX_FLAGS="$LL_BUILD_RELEASE -m$AUTOBUILD_ADDRSIZE" \
                   -DCMAKE_C_FLAGS="$(remove_cxxstd $LL_BUILD_RELEASE) -m$AUTOBUILD_ADDRSIZE" \
-                  -DLUAU_USE_TAILSLIDE=ON \
                   "$top"
             cmake --build . -- -j8
 
@@ -115,6 +117,7 @@ pushd "$top"
             cp -v "libLuau.VM.a" "$stage/lib/release"
             cp -v "libLuau.Executor.a" "$stage/lib/release"
             cp -v "libLuau.LSLBuiltins.a" "$stage/lib/release"
+            cp -v "Tailslide/libtailslide.a" "$stage/lib/release"
 
             cp -v "slua" "$stage/bin/"
             cp -v "slua-harness" "$stage/bin/"
@@ -127,3 +130,4 @@ popd
 
 mkdir -p "$stage/LICENSES"
 cp "$top/LICENSE.txt" "$stage/LICENSES/luau.txt"
+cp "$top/Tailslide/LICENSE" "$stage/LICENSES/tailslide.txt"

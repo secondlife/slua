@@ -248,6 +248,11 @@ void luauSL_init_global_builtins(const char* builtins_file)
     }
 }
 
+const char* luauSL_default_builtins_text()
+{
+    return EMBEDDED_BUILTINS;
+}
+
 bool Luau::setLSLEventNames(const std::vector<std::string>& names)
 {
     if (names.size() < std::size(kKnownEventNames))

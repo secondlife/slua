@@ -32,19 +32,11 @@ they aren't in SLua-specific code.
 
 ## Building
 
-If building with LSL support, you must first install [`autobuild`](https://github.com/secondlife/autobuild),
-which will pull in the [`tailslide`](https://github.com/secondlife/tailslide) dependency:
-
-```sh
-pipx install autobuild
-autobuild install
-```
-
 On all platforms, you can use CMake to run the following commands to build Luau binaries from source:
 
 ```sh
 mkdir cmake && cd cmake
-cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo  # add '-DLUAU_USE_TAILSLIDE=ON' if you want LSL support.
+cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build . --target Luau.Repl.CLI --config RelWithDebInfo
 cmake --build . --target Luau.Analyze.CLI --config RelWithDebInfo
 ```
@@ -84,7 +76,7 @@ SLua uses C++ as its implementation language. The runtime requires C++11, while 
 
 Other than the STL/CRT, SLua library components don't have external dependencies. The test suite depends on the [doctest](https://github.com/onqtam/doctest) testing framework, and the REPL command-line depends on [isocline](https://github.com/daanx/isocline).
 
-Note that LSL support does require that Tailslide be installed, but this is optional.
+LSL support comes from [Tailslide](Tailslide/README.md), which lives in this tree and is always built.
 
 # License
 

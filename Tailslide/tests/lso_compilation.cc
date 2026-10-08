@@ -1,4 +1,4 @@
-#include "doctest.hh"
+#include "doctest.h"
 #include "passes/lso/bytecode_format.hh"
 #include "passes/lso/script_compiler.hh"
 #include "tailslide.hh"

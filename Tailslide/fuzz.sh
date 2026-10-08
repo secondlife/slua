@@ -1,8 +1,8 @@
-#1/bin/bash
+#!/bin/bash
 
 set -e
 
-pushd "$( dirname "${BASH_SOURCE[0]}" )" > /dev/null
+pushd "$( dirname "${BASH_SOURCE[0]}" )/.." > /dev/null
 
 mkdir -p build_fuzz
 pushd build_fuzz
@@ -17,7 +17,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
   CLANGPP_BIN="$( brew --prefix llvm )/bin/clang++"
 fi
 
-find ../tests/ -name "*.lsl" | grep -v "/expected/" | xargs -I'{}' cp '{}' fuzz_inputs/
-CXX="${CLANGPP_BIN}" CC="${CLANG_BIN}" cmake .. -DTAILSLIDE_BUILD_FUZZER=on
-cmake --build .
-./tailslide-fuzzer ./fuzz_inputs/ -fork=8
+find ../Tailslide/tests/ -name "*.lsl" | grep -v "/expected/" | xargs -I'{}' cp '{}' fuzz_inputs/
+CXX="${CLANGPP_BIN}" CC="${CLANG_BIN}" cmake .. -DTAILSLIDE_BUILD_FUZZER=on -DLUAU_BUILD_CLI=off -DLUAU_BUILD_TESTS=off
+cmake --build . --target tailslide_fuzzer
+./Tailslide/tailslide-fuzzer ./fuzz_inputs/ -fork=8

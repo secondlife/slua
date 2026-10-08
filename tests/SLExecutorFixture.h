@@ -12,10 +12,7 @@
 
 #include "doctest.h"
 #include "ScopedFlags.h"
-
-#ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
-#endif
 
 #include <initializer_list>
 #include <memory>
@@ -247,10 +244,8 @@ struct TestAsset
 // downstream has to be told it a second time.
 inline TestAsset compileTestAsset(const char* source, bool is_lsl = false, uint32_t api_version = 0)
 {
-#ifdef LUAU_USE_TAILSLIDE
     if (is_lsl)
         return TestAsset{compileLSLAssetOrThrow(source, api_version)};
-#endif
     return TestAsset{Luau::compileAssetOrThrow(source, api_version)};
 }
 

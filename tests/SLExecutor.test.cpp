@@ -21,9 +21,7 @@
 #include "../VM/src/lgc.h"
 #include "../VM/src/lstate.h"
 
-#ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
-#endif
 
 #include <map>
 #include <memory>
@@ -374,7 +372,6 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor host-side image caching")
     REQUIRE(again != nullptr);
     CHECK(host.image_cache.count(asset.bytes) == 1);
 
-#ifdef LUAU_USE_TAILSLIDE
     // An asset of another flavor lands in its own environment, and the
     // build refuses to put it anywhere else
     TestAsset lsl = compileTestAsset(R"(
@@ -390,7 +387,6 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor host-side image caching")
     std::shared_ptr<IImage> misplaced = host.buildImage(host.environmentFor(asset), lsl);
     REQUIRE(misplaced != nullptr);
     CHECK_FALSE(misplaced->isValid());
-#endif
 }
 
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor co-resident scripts account memory independently")
@@ -2773,8 +2769,6 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor image reads its flavor off the asset"
     }
 }
 
-#ifdef LUAU_USE_TAILSLIDE
-
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LSL handler masks reach the image")
 {
     TestAsset asset = compileTestAsset(R"(
@@ -3044,7 +3038,5 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor serialize mid-handler roundtrip")
     // The original instance never reached the print
     CHECK(first.host.printed.empty());
 }
-
-#endif // LUAU_USE_TAILSLIDE
 
 TEST_SUITE_END();

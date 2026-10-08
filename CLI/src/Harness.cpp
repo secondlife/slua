@@ -13,10 +13,7 @@
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
 #include "Luau/Script.h"
-
-#ifdef LUAU_USE_TAILSLIDE
 #include "Luau/LSLCompiler.h"
-#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -435,12 +432,7 @@ int main(int argc, char** argv)
     {
         if (compile_as_lsl)
         {
-#ifdef LUAU_USE_TAILSLIDE
             asset = compileLSLAssetOrThrow(*source, api_version);
-#else
-            fprintf(stderr, "No LSL support, do a Tailslide-enabled build\n");
-            return 1;
-#endif
         }
         else
         {

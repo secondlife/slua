@@ -1,5 +1,5 @@
 #include "tailslide.hh"
-#include "doctest.hh"
+#include "doctest.h"
 #include "passes/pretty_print.hh"
 #include "testutils.hh"
 
@@ -133,56 +133,31 @@ TEST_SUITE_BEGIN("Optimization");
 
 
 TEST_CASE("xytext1.2.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("xytext1.2.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("irc-4.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("irc-4.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("parser_abuse.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("parser_abuse.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("scope3.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("scope3.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("mms_player.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   pretty_ctx.mangle_func_names = true;
   pretty_ctx.mangle_global_names = true;
@@ -206,75 +181,44 @@ TEST_CASE("forloops.lsl") {
 }
 
 TEST_CASE("constprop.lsl") {
-  OptimizationOptions ctx {
-    .fold_constants = true,
-    .prune_unused_locals = true,
-    .prune_unused_globals = true,
-    .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("constprop.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("tltp/browser.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("tltp/browser.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("tltp/exporter.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("tltp/exporter.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("tltp/server.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("tltp/server.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("fpinc.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("fpinc.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("vector_products.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-  };
+  OptimizationOptions ctx{};
+  ctx.fold_constants = true;
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("vector_products.lsl", ctx, pretty_ctx);
 }
 
 TEST_CASE("key_inlining.lsl") {
-  OptimizationOptions ctx {
-      .fold_constants = true,
-      .prune_unused_locals = true,
-      .prune_unused_globals = true,
-      .prune_unused_functions = true,
-  };
+  OptimizationOptions ctx = allOptimizations();
   PrettyPrintOpts pretty_ctx {};
   checkPrettyPrintOutput("key_inlining.lsl", ctx, pretty_ctx);
 }
