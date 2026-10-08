@@ -1,0 +1,15 @@
+build
+build_fuzz
+*.tar.bz2
+*.tar.zstd
+cmake-build-*
+*.o
+*~
+*.rej
+*.orig
+CMakeLists.txt.user
+callgrind.out.*
+*.profraw
+*.profdata
+coverage/
+stage

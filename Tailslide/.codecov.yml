@@ -1,0 +1,13 @@
+coverage:
+  precision: 1
+  round: down
+  status:
+    project:
+      default:
+        # Do not fail commits if the code coverage drops.
+        target: 0%
+        threshold: 100%
+        base: auto
+    patch:
+      default:
+        only_pulls: true

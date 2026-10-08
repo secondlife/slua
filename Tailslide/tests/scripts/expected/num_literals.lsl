@@ -1,0 +1,15 @@
+default
+{
+    state_entry()
+    {
+        llOwnerSay((string)-2147483648);
+        llOwnerSay((string)(-(-2147483648)));
+        llOwnerSay((string)(-(-2147483648)));
+        llOwnerSay((string)-2147483648);
+        llOwnerSay((string)-1);
+        llOwnerSay((string)-1);
+        llOwnerSay((string)-1);
+        llOwnerSay((string)-1);
+        llOwnerSay((string)-1);
+    }
+}
