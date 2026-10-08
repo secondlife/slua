@@ -289,9 +289,10 @@ class BitStream {
 
       // need special endian swapping logic if this is an integral larger than a byte
       if constexpr ((std::is_arithmetic<T>::value || std::is_enum<T>::value) && sizeof(T) > 1) {
-        // Store data reinterpreted as an integral type of the appropriate size and byte-swap,
+        // Copy data into an integral type of the appropriate size and byte-swap,
         // should optimize to a bswap instruction for the given integer width.
-        SameSizedUInt<T> val = reinterpret_cast<const SameSizedUInt<T> &>(data);
+        SameSizedUInt<T> val;
+        memcpy(&val, &data, sizeof(T));
         if (_mEndianness == ENDIAN_BIG)
           val = tail_htobe(val);
         else
@@ -318,14 +319,15 @@ class BitStream {
 
       // need special endian-swapping logic if this is an integral larger than a byte
       if constexpr ((std::is_arithmetic<T>::value || std::is_enum<T>::value) && sizeof(T) > 1) {
-        // reinterpret as an integral type of the appropriate size and byte-swap
-        // should optimize to a bswap instruction for the given integer width
-        auto *val = reinterpret_cast<SameSizedUInt<T> *>(&_mData[_mPos]);
-        auto &sized_data = reinterpret_cast<SameSizedUInt<T> &>(data);
+        // Copy out into an integral type of the appropriate size and byte-swap, the
+        // stream position is rarely aligned for T. Should optimize to a bswap instruction.
+        SameSizedUInt<T> val;
+        memcpy(&val, &_mData[_mPos], sizeof(T));
         if (_mEndianness == ENDIAN_BIG)
-          sized_data = tail_betoh(*val);
+          val = tail_betoh(val);
         else
-          sized_data = tail_letoh(*val);
+          val = tail_letoh(val);
+        memcpy(&data, &val, sizeof(T));
       } else {
         memcpy(&data, &_mData[_mPos], sizeof(T));
       }
