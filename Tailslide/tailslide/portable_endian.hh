@@ -112,6 +112,50 @@
 # define __LITTLE_ENDIAN LITTLE_ENDIAN
 # define __PDP_ENDIAN    PDP_ENDIAN
 
+#elif defined(__GNUC__) || defined(__clang__)
+
+// Anything else GCC-like (emscripten, say): the compiler already knows the
+// byte order and has the swaps, no libc feature macros needed.
+# if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+
+#   define htobe16(x) __builtin_bswap16(x)
+#   define htole16(x) (x)
+#   define be16toh(x) __builtin_bswap16(x)
+#   define le16toh(x) (x)
+
+#   define htobe32(x) __builtin_bswap32(x)
+#   define htole32(x) (x)
+#   define be32toh(x) __builtin_bswap32(x)
+#   define le32toh(x) (x)
+
+#   define htobe64(x) __builtin_bswap64(x)
+#   define htole64(x) (x)
+#   define be64toh(x) __builtin_bswap64(x)
+#   define le64toh(x) (x)
+
+# elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
+#   define htobe16(x) (x)
+#   define htole16(x) __builtin_bswap16(x)
+#   define be16toh(x) (x)
+#   define le16toh(x) __builtin_bswap16(x)
+
+#   define htobe32(x) (x)
+#   define htole32(x) __builtin_bswap32(x)
+#   define be32toh(x) (x)
+#   define le32toh(x) __builtin_bswap32(x)
+
+#   define htobe64(x) (x)
+#   define htole64(x) __builtin_bswap64(x)
+#   define be64toh(x) (x)
+#   define le64toh(x) __builtin_bswap64(x)
+
+# else
+
+#   error byte order not supported
+
+# endif
+
 #else
 
 # error platform not supported
