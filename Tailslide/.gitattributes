@@ -6,3 +6,8 @@
 
 # These definitely must have lf line endings.
 *.sh text eol=lf
+
+# The tests compare pretty-printed output against these byte for byte, so a
+# CRLF checkout breaks them. The LSO outputs are binary despite the extension.
+tests/scripts/** text eol=lf
+tests/scripts/expected/lso/*.lsl -text
