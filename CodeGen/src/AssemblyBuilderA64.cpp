@@ -703,9 +703,9 @@ void AssemblyBuilderA64::tbnz(RegisterA64 src, uint8_t bit, Label& label)
     placeBTR("tbnz", "tbz", label, 0b011011'1, src, bit);
 }
 
-void AssemblyBuilderA64::adr(RegisterA64 dst, const void* ptr, size_t size)
+void AssemblyBuilderA64::adr(RegisterA64 dst, const void* ptr, size_t size, size_t align)
 {
-    size_t pos = allocateData(size, 4);
+    size_t pos = allocateData(size, align); // ServerLua
     uint32_t location = getCodeSize();
 
     memcpy(&data[pos], ptr, size);
