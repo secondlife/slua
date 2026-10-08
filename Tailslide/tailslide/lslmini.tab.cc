@@ -2082,7 +2082,7 @@ yyreduce:
   case 12: /* constant: '-' INTEGER_CONSTANT  */
 #line 298 "libtailslide/lslmini.y"
     {
-        (yyval.constant) = ALLOCATOR->newTracked<LSLIntegerConstant>(-(yyvsp[0].ival));
+        (yyval.constant) = ALLOCATOR->newTracked<LSLIntegerConstant>(negate_wrapping((yyvsp[0].ival)));
         (yyval.constant)->setWasNegated(true);
     }
 #line 2095 "libtailslide/lslmini.tab.cc"

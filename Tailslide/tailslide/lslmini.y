@@ -290,7 +290,7 @@ global_variable
 constant
     : '-' INTEGER_CONSTANT
     {
-        $$ = ALLOCATOR->newTracked<LSLIntegerConstant>(-$2);
+        $$ = ALLOCATOR->newTracked<LSLIntegerConstant>(negate_wrapping($2));
         $$->setWasNegated(true);
     }
     | INTEGER_CONSTANT

@@ -294,7 +294,7 @@ bool LLConformantDeSugaringVisitor::visit(LSLConstantExpression *constant_expr) 
   LSLConstant *new_cv;
   switch (cv->getIType()) {
     case LST_INTEGER:
-      new_cv = _mAllocator->newTracked<LSLIntegerConstant>(-((LSLIntegerConstant *) cv)->getValue());
+      new_cv = _mAllocator->newTracked<LSLIntegerConstant>(negate_wrapping(((LSLIntegerConstant *) cv)->getValue()));
       break;
     case LST_FLOATINGPOINT:
       new_cv = _mAllocator->newTracked<LSLFloatConstant>(-((LSLFloatConstant *) cv)->getValue());

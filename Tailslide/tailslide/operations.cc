@@ -73,7 +73,7 @@ LSLConstant *TailslideOperationBehavior::operation(
         nv = ~value;
         break;
       case '-':
-        nv = -value;
+        nv = negate_wrapping(value);
         break;
       default:
         return nullptr;
