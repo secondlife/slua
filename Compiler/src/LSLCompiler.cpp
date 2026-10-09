@@ -758,7 +758,7 @@ bool LuauVisitor::visit(LSLJumpStatement *jump_stmt)
     // Whether we want to interrupt or not depends on whether this would result
     // in jumping backwards. If the label comes after the jump in the script,
     // it's a forward jump.
-    bool forward_jump = label_sym->getLabelDecl()->getLoc() > jump_stmt->getLoc();
+    bool forward_jump = *label_sym->getLabelDecl()->getLoc() > *jump_stmt->getLoc();
     _mJumpTargets[(uint32_t)mBuilder->emitLabel()] = label_sym;
     mBuilder->emitAD(forward_jump ? LOP_JUMP : LOP_JUMPBACK, 0, 0);
     return false;
