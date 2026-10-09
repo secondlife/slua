@@ -378,7 +378,7 @@ static bool compileFile(
         // ServerLua: for debugging!
         if (sName.substr(sName.length() - 4) == ".lsl")
         {
-            compileLSLOrThrow(bcb, *source);
+            compileLSLOrThrow(bcb, *source, nullptr, globalOptions.debugLevel >= 1);
         }
         else
         {

@@ -119,6 +119,30 @@ default {
     }
 }
 
+TEST_CASE("DebugLines")
+{
+    // The call is on line 4 of the source, counting the newline after R"(
+    const char* source = R"(
+default {
+    state_entry() {
+        llOwnerSay("hi");
+    }
+}
+)";
+
+    const uint32_t dump_flags = BytecodeBuilder::Dump_Code | BytecodeBuilder::Dump_Lines;
+
+    BytecodeBuilder with_lines;
+    with_lines.setDumpFlags(dump_flags);
+    compileLSLOrThrow(with_lines, source, nullptr, true);
+    CHECK_NE(with_lines.dumpEverything().find("\n4: "), std::string::npos);
+
+    BytecodeBuilder without;
+    without.setDumpFlags(dump_flags);
+    compileLSLOrThrow(without, source);
+    CHECK_EQ(without.dumpEverything().find("\n4: "), std::string::npos);
+}
+
 TEST_CASE("ErrorMessageWhat")
 {
     BytecodeBuilder bcb;

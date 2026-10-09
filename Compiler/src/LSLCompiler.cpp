@@ -413,14 +413,41 @@ static uint8_t srefHash(const Luau::BytecodeBuilder::StringRef string_ref)
     return (uint8_t)Luau::BytecodeBuilder::getStringHash(string_ref);
 }
 
-LuauVisitor::LuauVisitor(Luau::BytecodeBuilder* builder, LuauSymbolMap &symbol_map)
+LuauVisitor::LuauVisitor(Luau::BytecodeBuilder* builder, LuauSymbolMap &symbol_map, bool debug_lines)
     : _mSymbolMap(symbol_map)
     , mBuilder(builder)
     , mRegTop(0)
     , mStackSize(0)
     , mTargetReg(-1)
+    , mDebugLines(debug_lines)
 {
-    mBuilder->setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+}
+
+bool LuauVisitor::visitSpecific(LSLASTNode *node)
+{
+    if (!mDebugLines)
+        return ASTVisitor::visitSpecific(node);
+
+    // Nodes without a line of their own keep the enclosing node's
+    const int outer = mDebugLine;
+    if (const auto *loc = node->getLoc(); loc && loc->first_line > 0)
+        mDebugLine = loc->first_line;
+    mBuilder->setDebugLine(mDebugLine);
+    const bool result = ASTVisitor::visitSpecific(node);
+    mDebugLine = outer;
+    mBuilder->setDebugLine(mDebugLine);
+    return result;
+}
+
+// beginFunction() clears the builder's line, and a function whose
+// instructions aren't all on a line gets no line info at all
+void LuauVisitor::beginDebugFunction()
+{
+    if (!mDebugLines)
+        return;
+    const int line = mDebugLine > 0 ? mDebugLine : 1;
+    mBuilder->setDebugLine(line);
+    mBuilder->setDebugFunctionLineDefined(line);
 }
 
 bool LuauVisitor::visit(LSLScript* script)
@@ -437,6 +464,7 @@ bool LuauVisitor::visit(LSLScript* script)
 
     // Now we can build the implicit main function
     auto main_id = mBuilder->beginFunction(0);
+    beginDebugFunction();
     // Luau doesn't emit a name for the main function
     // mBuilder->setDebugFunctionName(sref("main"));
     // Walk over the globals
@@ -529,6 +557,7 @@ void LuauVisitor::buildFunction(LSLASTNode *func_like)
 
     auto *param_list = func_sym->getFunctionDecl();
     auto func_id = mBuilder->beginFunction(param_list->getNumChildren());
+    beginDebugFunction();
     // make sure the function id actually matches what we expect
     LUAU_ASSERT(func_id == sym_data.index);
 
@@ -2188,7 +2217,7 @@ void LuauVisitor::patchJumpOrThrow(size_t jumpLabel, size_t targetLabel)
 }
 
 
-void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source, LSLScriptInfo *info)
+void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source, LSLScriptInfo *info, bool debugLines)
 {
     thread_local bool builtins_initialized = false;
     if (!builtins_initialized) {
@@ -2278,19 +2307,19 @@ void compileLSLOrThrow(Luau::BytecodeBuilder &bcb, const std::string &source, LS
     LuauResourceVisitor luauResourceVisitor(&symbol_map);
     script->visit(&luauResourceVisitor);
 
-    LuauVisitor luauVisitor(&bcb, symbol_map);
+    LuauVisitor luauVisitor(&bcb, symbol_map, debugLines);
     script->visit(&luauVisitor);
 
     if (info != nullptr)
         info->stateHandlerMasks = luauResourceVisitor.getStateMasks();
 }
 
-std::string compileLSL(const std::string &source, LSLScriptInfo *info)
+std::string compileLSL(const std::string &source, LSLScriptInfo *info, bool debugLines)
 {
     Luau::BytecodeBuilder bcb;
     try
     {
-        compileLSLOrThrow(bcb, source, info);
+        compileLSLOrThrow(bcb, source, info, debugLines);
         return bcb.getBytecode();
     }
     catch (Luau::ParseErrors &e)
@@ -2308,11 +2337,11 @@ std::string compileLSL(const std::string &source, LSLScriptInfo *info)
     }
 }
 
-std::string compileLSLAssetOrThrow(const std::string &source, uint32_t apiVersion)
+std::string compileLSLAssetOrThrow(const std::string &source, uint32_t apiVersion, bool debugLines)
 {
     Luau::BytecodeBuilder bcb;
     LSLScriptInfo info;
-    compileLSLOrThrow(bcb, source, &info);
+    compileLSLOrThrow(bcb, source, &info, debugLines);
 
     Luau::BytecodeHeader header;
     header.isLSL = true;

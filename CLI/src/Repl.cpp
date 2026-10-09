@@ -739,7 +739,7 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
     const bool is_lsl = chunkname.find(".lsl") != std::string::npos;
     if (is_lsl)
     {
-        bytecode = compileLSL(*source);
+        bytecode = compileLSL(*source, nullptr, globalOptions.debugLevel >= 1);
         lua_setthreaddata(L, lua_getthreaddata(GL));
     }
     else
