@@ -61,4 +61,13 @@ check(
     {PSYS_PART_FLAGS, PSYS_PART_BOUNCE_MASK}
 )
 
+-- A float for an integer field is converted like the LSL integer cast, so an
+-- out-of-range value saturates instead of depending on the platform.
+check({ flags = 2.9 }, {PSYS_PART_FLAGS, 2})
+check({ flags = 1e300 }, {PSYS_PART_FLAGS, -2147483648})
+
+-- Flag properties only accept booleans and numbers.
+local ok, err = pcall(llprim.ParticleSystem, { color_interp = "yes" })
+assert(not ok and string.find(err, "color_interp"), `expected a color_interp error, got {err}`)
+
 return "OK"

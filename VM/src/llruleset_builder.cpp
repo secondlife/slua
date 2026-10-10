@@ -216,7 +216,13 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
         const TValue* val = luaH_getstr(params_h, luaS_new(L, fdesc.name));
         if (!ttisnil(val))
         {
-            bool set = ttisboolean(val) ? (bool)bvalue(val) : (nvalue(val) != 0.0);
+            bool set;
+            if (ttisboolean(val))
+                set = bvalue(val) != 0;
+            else if (ttisnumber(val))
+                set = nvalue(val) != 0.0;
+            else
+                luaL_error(L, "%s must be a boolean or number", fdesc.name);
             if (set)
                 flag_set_bits[fdesc.field_tag]   |= fdesc.mask;
             else
@@ -233,7 +239,7 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
         const TValue* val = luaH_getstr(params_h, luaS_new(L, desc.name));
         has_raw = !ttisnil(val);
         if (has_raw && ttisnumber(val))
-            raw_int = (int)nvalue(val);
+            raw_int = lsl_float_to_int(nvalue(val));
 
         // Integer fields that back flags: merge accumulated bits.
         auto set_it   = flag_set_bits.find(desc.tag);
@@ -293,6 +299,8 @@ void slua_ruleset_serialize(lua_State* L, int params_idx, const RulesetBuilderDe
 
         if (desc.semantic == 'b' && ttisboolean(val))
             lua_pushinteger(L, bvalue(val));
+        else if (desc.semantic == 'i' && ttisnumber(val))
+            lua_pushinteger(L, raw_int);
         else
             luaA_pushvalue(L, val);
         lua_rawseti(L, list, ++idx);
