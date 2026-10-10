@@ -85,6 +85,24 @@ assert(rules[9] == 0)
 assert(rules[10] == "")
 assert(rules[11] == 1)  -- true -> 1
 
+-- extend() appends a plain rule list and returns self for chaining.
+rules = ParamSetter.new():pos(vector(1, 2, 3))
+assert(rules:extend({PRIM_SIZE, vector(1, 1, 1)}) == rules)
+assert(#rules == 4)
+assert(rules[3] == PRIM_SIZE and rules[4] == vector(1, 1, 1))
+
+-- Another ParamSetter is just a rule list too, and the source is untouched.
+local other = ParamSetter.new():physicsMaterial(2)
+assert(rules:extend(other):name("foo") == rules)
+assert(#rules == 8)
+assert(rules[5] == PRIM_MATERIAL and rules[6] == 2)
+assert(rules[7] == PRIM_NAME and rules[8] == "foo")
+assert(#other == 2)
+
+-- Only tables are accepted as the source.
+assert(not pcall(function() ParamSetter.new():extend("nope") end))
+assert(not pcall(function() ParamSetter.new():extend() end))
+
 -- Coverage check: every method advertised by the typed interface is a
 -- function on the metatable.
 local expected_methods = {
@@ -99,7 +117,7 @@ local expected_methods = {
     "clickAction", "reflectionProbe", "gltfNormal", "gltfEmissive",
     "gltfMetallicRoughness", "gltfBaseColor", "renderMaterial", "sitFlags",
     "damage", "health", "collisionSound",
-    "new", "apply",
+    "new", "apply", "extend",
 }
 for _, name in expected_methods do
     assert(type(ParamSetter[name]) == "function",

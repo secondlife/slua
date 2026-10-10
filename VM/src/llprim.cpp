@@ -173,6 +173,22 @@ void luaSL_setup_llprim_module(lua_State *L)
     lua_pushcfunction(L, prim_params_setter_apply, "apply");
     lua_setfield(L, mt, "apply");
 
+    // Append another rule list, just `table.extend()` returning `self`
+    lua_pushcfunction(
+        L,
+        [](lua_State *L) -> int {
+            luaL_checktype(L, 1, LUA_TTABLE);
+            lua_settop(L, 2);
+            lua_rawgetfield(L, LUA_BASEGLOBALSINDEX, "table");
+            lua_rawgetfield(L, -1, "extend");
+            lua_remove(L, -2);
+            lua_insert(L, 1);
+            lua_call(L, 2, 1);
+            return 1;
+        },
+        "extend");
+    lua_setfield(L, mt, "extend");
+
     lua_pushvalue(L, mt);
     lua_setfield(L, mt, "__index");
 
