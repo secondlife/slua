@@ -215,9 +215,21 @@ FixState FixingPass::classify(GCObject *obj)
             self_unfixable = true;
             break;
         }
-        // TODO: Hmmm, we should probably restrict this to specific
-        //  userdata tags like quats and UUIDs...
-        track_dep(obj2gco(udmt), &has_unfixable, &deps);
+        // A fixed object is never traversed again, so only tags whose payload
+        // is plain data can be fixed. Any other tag has to be plumbed in here.
+        switch (u->tag)
+        {
+        case UTAG_QUATERNION:
+            track_dep(obj2gco(udmt), &has_unfixable, &deps);
+            break;
+        case UTAG_UUID:
+            track_dep(obj2gco(udmt), &has_unfixable, &deps);
+            track_dep(obj2gco(((lua_LSLUUID *)u->data)->str), &has_unfixable, &deps);
+            break;
+        default:
+            self_unfixable = true;
+            break;
+        }
         break;
     }
 
