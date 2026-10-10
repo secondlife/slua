@@ -105,10 +105,11 @@ static RangeExtractionInfo _calc_extraction_range(
         // Select items where (i <= end || i >= start)
         // This gives us: [0, end] + [start, obj_len-1]
 
-        // Check if we want the whole object
+        // Check if we want the whole object. The difference can exceed INT_MAX
+        // once a negative end index has been rebased on the length.
         if (end_idx >= obj_len
             || start_idx <= 0
-            || start_idx - end_idx <= 1)
+            || (int64_t)start_idx - end_idx <= 1)
         {
             result.whole_object = true;
             return result;
@@ -309,10 +310,10 @@ static int ll_getlistentrytype(lua_State *L)
     int idx = _checkobjectindex(L, len, 2, compat_mode);
     if (idx < len && idx >= 0)
     {
-        luaSL_pushinteger(L, lua_lsl_type(&h->array[idx]));
+        luaSL_pushnativeinteger(L, lua_lsl_type(&h->array[idx]));
         return 1;
     }
-    luaSL_pushinteger(L, 0);
+    luaSL_pushnativeinteger(L, 0);
     return 1;
 }
 

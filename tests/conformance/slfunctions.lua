@@ -70,4 +70,11 @@ assert(vec * quaternion(0, 0, 0, 1) == vec)
 -- Make sure our ll.StringLength is unicode-aware
 assert(ll.StringLength("草") == 1)
 
+-- Entry types are plain numbers in SLua mode, so they compare with the TYPE_* constants
+assert(ll.GetListEntryType({"a", 1}, 1) == TYPE_STRING)
+assert(ll.GetListEntryType({"a", 1}, 5) == 0)
+
+-- Wraparound with extreme indices: both segments are empty rather than the whole list
+assert(#ll.List2List({1, 2, 3}, 2147483647, -2147483648) == 0)
+
 return "OK"
