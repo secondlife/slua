@@ -1736,4 +1736,78 @@ TEST_CASE("ruleset_builder_collection")
     });
 }
 
+TEST_CASE("GC fixing is limited to userdata tags that hold no references")
+{
+    // A fixed object is never traversed again, so only tags whose payload is
+    // plain data are fixable. Anything else has to be plumbed in explicitly.
+    auto state = runConformance("nothing.lua", nullptr, [](lua_State *L) {
+        // Kept in the registry so an unfixable object doesn't make _G unfixable
+        luaSL_createeventmanager(L);
+        lua_setfield(L, LUA_REGISTRYINDEX, "test_llevents");
+    });
+    lua_State *GL = state.get();
+
+    lua_getfield(GL, LUA_REGISTRYINDEX, "test_llevents");
+    REQUIRE(lua_touserdatatagged(GL, -1, UTAG_LLEVENTS) != nullptr);
+    CHECK(!isfixed(gcvalue(luaA_toobject(GL, -1))));
+    lua_pop(GL, 1);
+
+    lua_getglobal(GL, "ZERO_ROTATION");
+    REQUIRE(lua_touserdatatagged(GL, -1, UTAG_QUATERNION) != nullptr);
+    CHECK(isfixed(gcvalue(luaA_toobject(GL, -1))));
+    lua_pop(GL, 1);
+
+    lua_getglobal(GL, "NULL_KEY");
+    REQUIRE(lua_touserdatatagged(GL, -1, UTAG_UUID) != nullptr);
+    CHECK(isfixed(gcvalue(luaA_toobject(GL, -1))));
+    lua_pop(GL, 1);
+}
+
+TEST_CASE("UUID held only by a user weak table keeps its interning entry")
+{
+    // A UUID's TString lives only through the interning entry, so a UUID that
+    // survives on value semantics alone has to stay black at every atomic phase
+    // or that entry is dropped and the string dies under it.
+    auto state = runConformance("nothing.lua", nullptr, nullptr, nullptr, nullptr, false);
+    lua_State *L = lua_tothread(state.get(), 1);
+    REQUIRE(L);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+
+    auto *runtime_state = LUAU_GET_SL_VM_STATE(L);
+    static const char *uuid_str = "12345678-9abc-def0-1234-56789abcdef0";
+
+    // The UUID is a weak value in the array part and a weak key in the node part
+    int table_idx = create_weak_table(L, "kv");
+    luaSL_pushuuidstring(L, uuid_str);
+    lua_rawseti(L, table_idx, 1);
+    luaSL_pushuuidstring(L, uuid_str);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, table_idx);
+
+    int weak_idx = lua_gettop(L) + 1;
+    lua_getref(L, runtime_state->uuidWeakTab);
+    lua_getref(L, runtime_state->uuidCompressedWeakTab);
+    require_weak_uuid_counts(L, weak_idx, 0, 1);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        require_weak_uuid_counts(L, weak_idx, 0, 1);
+    }
+
+    lua_rawgeti(L, table_idx, 1);
+    REQUIRE(lua_touserdatatagged(L, -1, UTAG_UUID) != nullptr);
+    CHECK(std::string(luaL_tolstring(L, -1, nullptr)) == uuid_str);
+    lua_pop(L, 2);
+
+    // Dropping the table lets the UUID go, and its entry with it
+    lua_pop(L, 2);
+    lua_remove(L, table_idx);
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    lua_getref(L, runtime_state->uuidWeakTab);
+    lua_getref(L, runtime_state->uuidCompressedWeakTab);
+    require_weak_uuid_counts(L, lua_gettop(L) - 1, 0, 0);
+    lua_pop(L, 2);
+}
+
 TEST_SUITE_END();
