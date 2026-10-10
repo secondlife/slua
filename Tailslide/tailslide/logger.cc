@@ -209,7 +209,8 @@ const char *Logger::_sErrorMessages[E_LAST - E_ERROR] = {
         "May not cast %s to %s",
         "Lists may not contain nulls",
         "Stack-heap collision",
-        "Void expression used as condition"
+        "Void expression used as condition",
+        "Nesting too deep."
 };
 
 const char *Logger::_sWarningMessages[W_LAST - W_WARNING] = {

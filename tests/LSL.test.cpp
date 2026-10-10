@@ -1203,4 +1203,15 @@ TEST_CASE("UUID interning (LSL)")
     lua_gc(L, LUA_GCCOLLECT, 0);
 }
 
+TEST_CASE("Deep statement nesting compiles")
+{
+    // Tailslide caps the tree's height, and the emitter has to survive whatever
+    // gets through. Statement nesting is the shape that reaches it at full
+    // depth; expressions run out of registers long before that.
+    const int depth = 4000;
+    std::string body = std::string(depth, '{') + "integer x = 1;" + std::string(depth, '}');
+    Luau::BytecodeBuilder bcb;
+    CHECK_NOTHROW(compileLSLOrThrow(bcb, "default { state_entry() { " + body + " } }"));
+}
+
 TEST_SUITE_END();

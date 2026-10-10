@@ -169,6 +169,9 @@ class LSLASTNode : public TrackableObject {
       return _mChildren != nullptr;
     }
 
+    // Longest path down to a leaf, maintained as children are pushed.
+    int getHeight() const { return _mHeight; }
+
     // Get the topmost node in the tree
     LSLASTNode *getRoot() {
       LSLASTNode *last_node = this;
@@ -276,6 +279,7 @@ class LSLASTNode : public TrackableObject {
 
   private:
     YYLTYPE                      _mLoc {0};
+    int                          _mHeight = 0;
 
     LSLASTNode *_mParent;
     LSLASTNode *_mNext;

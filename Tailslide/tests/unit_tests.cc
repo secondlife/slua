@@ -218,4 +218,35 @@ TEST_CASE("Float to int cast boundary conditions") {
   }
 }
 
+static std::string wrapInStateEntry(const std::string &expr) {
+  return "default { state_entry() { integer x = " + expr + "; } }";
+}
+
+static std::string leftDeepChain(int terms) {
+  std::string expr = "1";
+  for (int i = 1; i < terms; ++i)
+    expr += " + 1";
+  return expr;
+}
+
+TEST_CASE("AST height limit") {
+  // A left-associative chain never grows the parser stack, so the parser's
+  // own depth cap doesn't bound how deep the passes recurse over the tree.
+  SUBCASE("chain past the limit is rejected") {
+    std::string source = wrapInStateEntry(leftDeepChain(20001));
+    ScopedScriptParser parser(nullptr);
+    CHECK(parser.parseLSLBytes(source.c_str(), (int)source.size()) == nullptr);
+    auto messages = parser.logger.getMessages();
+    REQUIRE(messages.size() == 1);
+    CHECK(messages.front()->getError() == E_NESTING_TOO_DEEP);
+  }
+
+  SUBCASE("chain within the limit parses") {
+    std::string source = wrapInStateEntry(leftDeepChain(9000));
+    ScopedScriptParser parser(nullptr);
+    CHECK(parser.parseLSLBytes(source.c_str(), (int)source.size()) != nullptr);
+    CHECK(parser.logger.getErrors() == 0);
+  }
+}
+
 TEST_SUITE_END();

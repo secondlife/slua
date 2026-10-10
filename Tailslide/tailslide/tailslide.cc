@@ -101,6 +101,11 @@ void ScopedScriptParser::parseInternal() {
   destroyScanner();
   ast_sane = context.ast_sane;
   script = context.script;
+
+  if (script && script->getHeight() > kMaxASTHeight) {
+    logger.error(script->getLoc(), E_NESTING_TOO_DEEP);
+    script = nullptr;
+  }
 }
 
 }

@@ -85,6 +85,8 @@ void LSLASTNode::pushChild(LSLASTNode *child) {
   }
   assert (child != this);
   child->incrementSymbolReferences();
+  if (child->_mHeight + 1 > _mHeight)
+    _mHeight = child->_mHeight + 1;
 }
 
 LSLASTNode *LSLASTNode::takeChild(int child_num) {

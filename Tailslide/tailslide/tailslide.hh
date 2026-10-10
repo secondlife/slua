@@ -13,6 +13,11 @@
 
 namespace Tailslide {
 
+// Matches the parser's stack cap. Left-associative chains never grow that
+// stack, so the tree's height has to be bounded on its own before the passes
+// recurse over it.
+static const int kMaxASTHeight = 10000;
+
 struct ScopedScriptParser {
     explicit ScopedScriptParser(LSLSymbolTable *builtins);
     ~ScopedScriptParser();
