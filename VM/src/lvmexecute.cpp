@@ -872,8 +872,7 @@ reentry:
                 // ServerLua: double-check that we don't have lists or nil in list
                 if (LUAU_UNLIKELY((ttistable(ra) || ttisnil(ra)) && LUAU_IS_LSL_VM(L)))
                 {
-                    lua_pushstring(L, "No nil or lists allowed in lists");
-                    lua_error(L);
+                    VM_PROTECT(luaG_runerrorL(L, "No nil or lists allowed in lists"));
                 }
 
                 // fast-path: array assign
@@ -940,8 +939,7 @@ reentry:
                 // ServerLua: double-check that we don't have lists or nil in list
                 if (LUAU_UNLIKELY((ttistable(ra) || ttisnil(ra)) && LUAU_IS_LSL_VM(L)))
                 {
-                    lua_pushstring(L, "No nil or lists allowed in lists");
-                    lua_error(L);
+                    VM_PROTECT(luaG_runerrorL(L, "No nil or lists allowed in lists"));
                 }
 
                 // fast-path: array assign

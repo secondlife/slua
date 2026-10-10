@@ -413,6 +413,8 @@ static bool sort_cmp_may_call(LuaTable* t, int i, int j)
 // and t->sizearray can change (if the comparator resizes the table), which
 // is what saved_sa detects. God do I hate that this is a macro but what can you do.
 #define SORT_CMP(cmp_var, i_idx, j_idx, phase_name)                                             \
+    if (unsigned(i_idx) >= unsigned(t->sizearray) || unsigned(j_idx) >= unsigned(t->sizearray)) \
+        luaL_error(L, "table modified during sorting");                                          \
     if (use_pred || sort_cmp_may_call(t, i_idx, j_idx) || --yield_budget <= 0)                   \
     {                                                                                            \
         YIELD_CHECK(L, phase_name##_YINT, LUA_INTERRUPT_STDLIB);                                 \
@@ -438,6 +440,8 @@ static bool sort_cmp_may_call(LuaTable* t, int i, int j)
     else                                                                                         \
     {                                                                                            \
         int _sa = t->sizearray;                                                                  \
+        if (unsigned(i_idx) >= unsigned(_sa) || unsigned(j_idx) >= unsigned(_sa))                \
+            luaL_error(L, "table modified during sorting");                                      \
         cmp_var = luaV_lessthan(L, &t->array[i_idx], &t->array[j_idx]);                         \
         if (t->sizearray != _sa)                                                                 \
             luaL_error(L, "table modified during sorting");                                      \
@@ -452,7 +456,9 @@ inline void sort_swap(lua_State* L, LuaTable* t, int i, int j)
 
     TValue* arr = t->array;
     int n = t->sizearray;
-    LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
+    // ServerLua: the array may have shrunk while the sort was suspended
+    if (LUAU_UNLIKELY(unsigned(i) >= unsigned(n) || unsigned(j) >= unsigned(n)))
+        luaL_error(L, "table modified during sorting");
 
     // no barrier required because both elements are in the array before and after the swap
     TValue temp;

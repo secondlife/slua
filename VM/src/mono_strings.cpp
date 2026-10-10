@@ -525,9 +525,14 @@ CodepointString utf8str_to_codepoints(const char *utf8str, size_t len)
                 continue;
             }
 
-            // Check that this character doesn't go past the end of the string
-            size_t end = (len < (i + cont_bytes)) ? len : (i + cont_bytes);
-            do
+            // Index of the sequence's last continuation byte. A sequence cut
+            // off by the end of the string swallows what's there and becomes
+            // the replacement char, without reading past `len`.
+            size_t end = i + cont_bytes;
+            bool truncated = end >= len;
+            if (truncated)
+                end = len - 1;
+            while (i < end)
             {
                 ++i;
 
@@ -544,7 +549,9 @@ CodepointString utf8str_to_codepoints(const char *utf8str, size_t len)
                     --i;
                     break;
                 }
-            } while(i < end);
+            }
+            if (truncated)
+                unichar = UNKNOWN_CHAR_REPLACEMENT;
 
             // Handle overlong characters and NULL characters
             if ( ((cont_bytes == 1) && (unichar < 0x80U))
