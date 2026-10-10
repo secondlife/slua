@@ -95,9 +95,13 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 
         status = e.getStatus();
 
-        // ServerLua: Re-throw uncatchable termination errors - they must propagate to top level
+        // ServerLua: Re-throw uncatchable termination errors - they must propagate to top level.
+        // The frames between here and there skip their cleanup, so the thread is dead from now on.
         if (status == LUA_ERRKILL)
+        {
+            L->status = LUA_ERRKILL;
             throw;
+        }
     }
     catch (std::exception& e)
     {

@@ -4464,6 +4464,25 @@ TEST_CASE("KillError")
 
         lua_pop(L, 1);
     }
+
+    // A kill escaping a host-level lua_pcall leaves the thread dead rather than
+    // merely unwound: the nested pcall frames skip their cleanup on the way out
+    {
+        lua_State* T = lua_newthread(L);
+        lua_pushcfunction(
+            T,
+            [](lua_State* L) -> int
+            {
+                lua_killerror(L, "Script terminated under pcall");
+            },
+            "killer"
+        );
+
+        CHECK_THROWS_AS(lua_pcall(T, 0, 0, 0), lua_exception);
+        CHECK(lua_status(T) == LUA_ERRKILL);
+
+        lua_pop(L, 1);
+    }
 }
 
 TEST_CASE("UserdataApi")
