@@ -1431,6 +1431,32 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor memory limit")
     }
 }
 
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor required module memory is charged to the script")
+{
+    // The module's environment is built on the main thread, so it has to be
+    // created under the script's memcat or the reachability walk skips it and
+    // everything the module stashes in its globals goes uncounted.
+    TestScript ts(R"(
+        require = function() end
+        local stash = dangerouslyexecuterequiredmodule(function()
+            hoard = {}
+            return function(s)
+                hoard[#hoard + 1] = s
+            end
+        end)
+        for i = 1, 400 do
+            stash(string.rep("x", 1000) .. tostring(i))
+        end
+        print("hoarded")
+    )");
+    ts.loadDefaultState();
+    Script& exec = ts.exec;
+
+    resume(exec, 1.0, HandlerRunStatus::Fault);
+    CHECK(exec.getFaultKind() == FaultKind::OutOfMemory);
+    CHECK(ts.host.printed.empty());
+}
+
 TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor LLEvents dispatch")
 {
     // A non-detected event, so the pushed arguments reach the handler verbatim

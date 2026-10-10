@@ -353,10 +353,15 @@ static int dangerouslyexecuterequiredmodule(lua_State* L)
     // mutable globals on the main thread, but that seems to
     // have been a mistake.
     lua_State* GL = lua_mainthread(L);
-    lua_State* co = lua_newthread(GL);
+    lua_State* co;
+    {
+        // The thread inherits the active memcat, and the globals proxy below is
+        // built under the thread's, so everything is charged to the caller.
+        MemcatGuard guard(GL, (uint8_t)lua_getmemcat(L));
+        co = lua_newthread(GL);
+    }
     lua_xmove(GL, L, 1);
     luaL_sandboxthread(co);
-    lua_setmemcat(co, lua_getmemcat(L));
 
     // SL needs some special logic for things that don't live on _G
     if (LUAU_IS_SL_VM(L))
