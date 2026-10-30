@@ -896,6 +896,9 @@ static const luaL_Reg lllib[] = {
     {"ToLower", ll_to_lower},
     {"ToUpper", ll_to_upper},
     {"GetTime", ll_get_time},
+    {"Rot2Fwd", lua_quaternion_tofwd},
+    {"Rot2Left", lua_quaternion_toleft},
+    {"Rot2Up", lua_quaternion_toup},
     {NULL, NULL},
 };
 

@@ -1616,21 +1616,21 @@ static inline void push_rotated_vector(lua_State *L, const float* vec) {
     lua_pushvector(L, res[0], res[1], res[2]);
 }
 
-static int lua_quaternion_tofwd(lua_State *L)
+int lua_quaternion_tofwd(lua_State *L)
 {
     const float vec[3] = {1.0f, 0.0f, 0.0f};
     push_rotated_vector(L, vec);
     return 1;
 }
 
-static int lua_quaternion_toleft(lua_State *L)
+int lua_quaternion_toleft(lua_State *L)
 {
     const float vec[3] = {0.0f, 1.0f, 0.0f};
     push_rotated_vector(L, vec);
     return 1;
 }
 
-static int lua_quaternion_toup(lua_State *L)
+int lua_quaternion_toup(lua_State *L)
 {
     const float vec[3] = {0.0f, 0.0f, 1.0f};
     push_rotated_vector(L, vec);
@@ -1644,9 +1644,6 @@ static const luaL_Reg quaternionlib[] = {
     {"dot", lua_quaternion_dot},
     {"slerp", lua_quaternion_slerp},
     {"conjugate", lua_quaternion_conjugate},
-    {"tofwd", lua_quaternion_tofwd},
-    {"toleft", lua_quaternion_toleft},
-    {"toup", lua_quaternion_toup},
     {NULL, NULL},
 };
 

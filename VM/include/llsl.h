@@ -127,6 +127,9 @@ uint8_t lua_lsl_type(const TValue *tv);
 int lsl_cast(lua_State *L);
 int lsl_cast_list_elem(lua_State *L);
 int lsl_cast_list_elem_poszero(lua_State *L);
+int lua_quaternion_tofwd(lua_State *L);
+int lua_quaternion_toleft(lua_State *L);
+int lua_quaternion_toup(lua_State *L);
 
 void conj_quat(float *quat);
 void rot_vec(const float *vec, const float *rot, float *res);
