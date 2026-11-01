@@ -759,7 +759,7 @@ static void json_append_tagged_integer(lua_State *l, strbuf_t *json, int64_t num
 
 static void json_append_integer(lua_State *l, json_config_t *cfg, strbuf_t *json, int lindex)
 {
-    int64_t val = luaL_checkinteger(l, lindex);
+    int64_t val = luaL_checkinteger64(l, lindex);
     if (cfg->sl_tagged_types)
         json_append_tagged_integer(l, json, val);
     else
