@@ -672,7 +672,7 @@ DEFINE_YIELDABLE(lltimers_tick, 0)
                 lua_pushnumber(L, interval);
             }
         }
-        YIELD_CALL(L, 2, 0, CALL_HANDLER);
+        YIELD_CALL_SAVING_STATE(L, 2, 0, CALL_HANDLER);
 
         // Nil out the timer reference, we don't need it anymore
         lua_pushnil(L);

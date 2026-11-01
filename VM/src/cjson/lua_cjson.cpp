@@ -503,7 +503,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
                 lua_pushvalue(l, -2);                        // self
                 lua_pushvalue(l, (int)EncodeStack::CTX);     // ctx
                 YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
-                YIELD_CALL(l, 2, 1, TOJSON_CALL);
+                YIELD_CALL_SAVING_STATE(l, 2, 1, TOJSON_CALL);
                 // Stack: table, value, resolved
                 lua_remove(l, -2);  // remove original value
                 // Stack: table, resolved
@@ -514,7 +514,7 @@ static void json_append_array(lua_State* l, SlotManager& parent_slots,
             lua_pushvalue(l, -3);      // value (possibly __tojson-resolved)
             lua_pushvalue(l, -5);      // parent (the array table)
             YIELD_CHECK(l, REPLACER_CHECK, LUA_INTERRUPT_LLLIB);
-            YIELD_CALL(l, 3, 1, REPLACER_CALL);
+            YIELD_CALL_SAVING_STATE(l, 3, 1, REPLACER_CALL);
             // Stack: table, value, result
             if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
                 lua_pop(l, 2);  // pop result + value -> table
@@ -846,7 +846,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
                 lua_pushvalue(l, -2);                        // self
                 lua_pushvalue(l, (int)EncodeStack::CTX);     // ctx
                 YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
-                YIELD_CALL(l, 2, 1, TOJSON_CALL);
+                YIELD_CALL_SAVING_STATE(l, 2, 1, TOJSON_CALL);
                 // Stack: table, key, value, resolved
                 lua_remove(l, -2);  // remove original value
                 // Stack: table, key, resolved
@@ -857,7 +857,7 @@ static void json_append_object(lua_State* l, SlotManager& parent_slots,
             lua_pushvalue(l, -3);  // value (possibly __tojson-resolved)
             lua_pushvalue(l, -6);  // parent (the object table)
             YIELD_CHECK(l, REPLACER_CHECK, LUA_INTERRUPT_LLLIB);
-            YIELD_CALL(l, 3, 1, REPLACER_CALL);
+            YIELD_CALL_SAVING_STATE(l, 3, 1, REPLACER_CALL);
             // Stack: table, key, value, result
             if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
                 lua_pop(l, 2);  // pop result + value -> table, key
@@ -1064,7 +1064,7 @@ static int json_append_data(lua_State* l, SlotManager& parent_slots,
                 lua_pushvalue(l, -2);                           // self
                 lua_pushvalue(l, (int)EncodeStack::CTX);        // ctx table
                 YIELD_CHECK(l, TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
-                YIELD_CALL(l, 2, 1, TOJSON_CALL);
+                YIELD_CALL_SAVING_STATE(l, 2, 1, TOJSON_CALL);
                 // Stack: ..., original_table, tojson_result
                 if (lua_istable(l, -1)) {
                     // Table result: replace original, fall through to shape handling
@@ -1301,7 +1301,7 @@ static int json_encode_common(lua_State* l, bool is_init, uint8_t abi_version, b
         lua_pushvalue(l, (int)EncodeStack::VALUE);     // self
         lua_pushvalue(l, (int)EncodeStack::CTX);       // ctx
         YIELD_CHECK(l, ROOT_TOJSON_CHECK, LUA_INTERRUPT_LLLIB);
-        YIELD_CALL(l, 2, 1, ROOT_TOJSON_CALL);
+        YIELD_CALL_SAVING_STATE(l, 2, 1, ROOT_TOJSON_CALL);
         // Stack: [..., resolved]
         lua_replace(l, (int)EncodeStack::VALUE);
     }
@@ -1313,7 +1313,7 @@ static int json_encode_common(lua_State* l, bool is_init, uint8_t abi_version, b
         lua_pushvalue(l, (int)EncodeStack::VALUE);     // value (possibly __tojson-resolved)
         lua_pushnil(l);                                // parent = nil (root)
         YIELD_CHECK(l, ROOT_REPLACER_CHECK, LUA_INTERRUPT_LLLIB);
-        YIELD_CALL(l, 3, 1, ROOT_REPLACER_CALL);
+        YIELD_CALL_SAVING_STATE(l, 3, 1, ROOT_REPLACER_CALL);
         // Stack: [..., result]
         if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
             lua_pop(l, 1);
@@ -2093,7 +2093,7 @@ static void json_parse_object_context(lua_State* l, SlotManager& parent_slots, j
             lua_pushvalue(l, -6);  // parent (the object table)
             lua_pushvalue(l, (int)DecodeStack::CTX);
             YIELD_CHECK(l, REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
-            YIELD_CALL(l, 4, 1, REVIVER_CALL);
+            YIELD_CALL_SAVING_STATE(l, 4, 1, REVIVER_CALL);
             // Stack: [..., table, key, value, result]
             if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
                 // Omit this key/value pair entirely
@@ -2216,7 +2216,7 @@ static void json_parse_array_context(lua_State* l, SlotManager& parent_slots, js
             lua_pushvalue(l, -5);      // parent (the array table)
             lua_pushvalue(l, (int)DecodeStack::CTX);
             YIELD_CHECK(l, REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
-            YIELD_CALL(l, 4, 1, REVIVER_CALL);
+            YIELD_CALL_SAVING_STATE(l, 4, 1, REVIVER_CALL);
             // Stack: [..., table, value, result]
             if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
                 // Omit this element - don't insert, don't increment insert_idx
@@ -2472,7 +2472,7 @@ static int json_decode_common(lua_State* l, bool is_init, uint8_t abi_version, b
         lua_pushnil(l);        // parent = nil (root)
         lua_pushvalue(l, (int)DecodeStack::CTX);
         YIELD_CHECK(l, ROOT_REVIVER_CHECK, LUA_INTERRUPT_LLLIB);
-        YIELD_CALL(l, 4, 1, ROOT_REVIVER_CALL);
+        YIELD_CALL_SAVING_STATE(l, 4, 1, ROOT_REVIVER_CALL);
         // Stack: [..., decoded_value, result]
         if (lua_tolightuserdatatagged(l, -1, LU_TAG_JSON_INTERNAL) == JSON_REMOVE) {
             lua_pop(l, 2);

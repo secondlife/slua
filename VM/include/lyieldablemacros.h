@@ -136,6 +136,30 @@ using Luau::YieldGuard;
     _yieldable_label_##phase_name: ;                                                \
     } while (0)
 
+// Like YIELD_CALL, for a function whose callee runs script code that may catch an error with
+// pcall. Such a catch unwinds this frame (and the frames of any chained helpers) without a yield,
+// and the continuation that finishes the function afterwards reads the state saved at the call,
+// so the state is saved before the call and the "yielding" mark is cleared again when the callee
+// returns normally.
+#define YIELD_CALL_SAVING_STATE(L, nargs, nresults, phase_name)                 \
+    do                                                                          \
+    {                                                                           \
+        (_yieldable_phase) = Phase::phase_name;                                 \
+        _yieldable_slots.flushForCall(nargs, nresults);                         \
+        lua_call(L, nargs, nresults);                                           \
+        if ((L)->status != LUA_OK)                                              \
+        {                                                                       \
+            if ((L)->status == LUA_YIELD || (L)->status == LUA_BREAK)           \
+            {                                                                   \
+                _yieldable_slots.flushForYield(false);                          \
+                return _yieldable_on_yield();                                   \
+            }                                                                   \
+            return _yieldable_on_error();                                       \
+        }                                                                       \
+        _yieldable_slots.clearYielding();                                       \
+    _yieldable_label_##phase_name: ;                                            \
+    } while (0)
+
 // Calls a helper function that has its own chained SlotManager and dispatch
 // region. The goto label is BEFORE the call so the helper is re-called on
 // resume. No flushForYield here — the helper already flushed the entire chain.

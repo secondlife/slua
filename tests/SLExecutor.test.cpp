@@ -3462,3 +3462,138 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor serialize mid-handler roundtrip")
 }
 
 TEST_SUITE_END();
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor a handler that catches an error with pcall finishes and the next event runs")
+{
+    TestScript ts(R"(
+        function LLEvents.moving_start()
+            local ok = pcall(function() error("boom") end)
+            print(`caught {ok}`)
+        end
+    )");
+    ts.start();
+    Script& exec = ts.exec;
+
+    RunResult first;
+    {
+        RunWindow window(exec, 1.0);
+        first = exec.callEventHandler(LSLEvent::MovingStart, nullptr);
+    }
+    CHECK(first.status == HandlerRunStatus::Ok);
+    CHECK(exec.getFaultKind() == FaultKind::None);
+
+    RunResult second;
+    {
+        RunWindow window(exec, 1.0);
+        second = exec.callEventHandler(LSLEvent::MovingStart, nullptr);
+    }
+    CHECK(second.status == HandlerRunStatus::Ok);
+    CHECK(exec.getFaultKind() == FaultKind::None);
+    checkCapture(ts.host.printed, {"caught false", "caught false"});
+}
+
+// An error caught with pcall inside the callee of a yieldable library function unwinds the
+// function's frame without a yield; the function must still finish when the callee returns.
+// Each case runs the same event twice and expects no fault and the same output both times.
+static void checkCaughtErrorInCallee(const char* body, const char* expected, bool catches = true)
+{
+    const std::string source = std::string(catches ? "local function swallow() pcall(function() error('boom') end) end\n"
+                                                   : "local function swallow() end\n") +
+                               "function LLEvents.moving_start()\n" + body + "\nend\n";
+    TestScript ts(source.c_str());
+    ts.start();
+    Script& exec = ts.exec;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        RunResult result;
+        {
+            RunWindow window(exec, 1.0);
+            result = exec.callEventHandler(LSLEvent::MovingStart, nullptr);
+        }
+        CHECK(result.status == HandlerRunStatus::Ok);
+        INFO("fault: ", exec.getFaultString());
+        CHECK(exec.getFaultKind() == FaultKind::None);
+    }
+    checkCapture(ts.host.printed, {expected, expected});
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor string.gsub with a function that catches an error with pcall finishes")
+{
+    checkCaughtErrorInCallee(R"(
+        local s = string.gsub("abc", "%w", function(c) swallow() return c:upper() end)
+        print(s)
+    )", "ABC");
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor table.sort with a comparator that catches an error with pcall finishes")
+{
+    checkCaughtErrorInCallee(R"(
+        local t = {3, 1, 2}
+        table.sort(t, function(a, b) swallow() return a < b end)
+        print(table.concat(t, ","))
+    )", "1,2,3");
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor lljson.encode with a replacer that catches an error with pcall finishes")
+{
+    checkCaughtErrorInCallee(R"(
+        print(lljson.encode({1, 2}, {replacer = function(key, value) swallow() return value end}))
+    )", "[1,2]");
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor lljson.encode with a __tojson that catches an error with pcall finishes")
+{
+    checkCaughtErrorInCallee(R"(
+        local obj = setmetatable({}, {__tojson = function(self) swallow() return "ok" end})
+        print(lljson.encode({x = obj}))
+    )", "{\"x\":\"ok\"}");
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor lljson.decode with a reviver that catches an error with pcall finishes")
+{
+    checkCaughtErrorInCallee(R"(
+        local t = lljson.decode('{"a":1}', function(key, value) swallow() return value end)
+        print(t.a)
+    )", "1");
+}
+
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor a timer handler that catches an error with pcall finishes and the next tick runs")
+{
+    TestScript ts(R"(
+        LLTimers:every(1.0, function()
+            pcall(function() error("boom") end)
+            print("tick")
+        end)
+    )");
+    ts.loadDefaultState();
+    resume(ts.exec);
+
+    for (double when : {1.1, 2.5})
+    {
+        ts.host.script_clock = when;
+        RunResult result = dispatchRaw(ts.exec, LSLEvent::Timer);
+        if (result.status == HandlerRunStatus::Preempted)
+            resumeToCompletion(ts.exec, 1.0);
+        else
+            CHECK(result.status == HandlerRunStatus::Ok);
+        INFO("fault: ", ts.exec.getFaultString());
+        CHECK(ts.exec.getFaultKind() == FaultKind::None);
+    }
+    checkCapture(ts.host.printed, {"tick", "tick"});
+}
+
+// The control for the cases above: the same callbacks with nothing caught finish, so those cases
+// fail only because of the caught error.
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor yieldable library callbacks that catch nothing finish")
+{
+    checkCaughtErrorInCallee(R"(
+        local s = string.gsub("abc", "%w", function(c) swallow() return c:upper() end)
+        local t = {3, 1, 2}
+        table.sort(t, function(a, b) swallow() return a < b end)
+        local e = lljson.encode({1, 2}, {replacer = function(key, value) swallow() return value end})
+        local o = setmetatable({}, {__tojson = function(self) swallow() return "ok" end})
+        local d = lljson.decode('{"a":1}', function(key, value) swallow() return value end)
+        print(s .. "|" .. table.concat(t, ",") .. "|" .. e .. "|" .. lljson.encode({x = o}) .. "|" .. d.a)
+    )", "ABC|1,2,3|[1,2]|{\"x\":\"ok\"}|1", false);
+}

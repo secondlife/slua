@@ -142,6 +142,19 @@ public:
     // frame instead, so there's nothing to restore.
     void flushForYield(bool own_frame);
 
+    // Saves the state ahead of a call to the function at the top of the stack under `nargs`
+    // arguments that wants `nresults` results. The frame top it records is the function's slot plus
+    // the results: that is where a callee that returns after an error caught inside it leaves the
+    // frame, instead of the frame limit, which the continuation would otherwise find above the
+    // results.
+    void flushForCall(int nargs, int nresults);
+
+    // Undoes the "yielding" mark flushForYield() put on this manager and its parents, for a
+    // call that saved the state ahead of time and then returned normally: the frames are not
+    // being unwound, so their destructors must neither write the buffer nor leave a parent
+    // marked as having a child.
+    void clearYielding();
+
     template<typename T>
     PrimitiveSlot<T> allocSlot(T* storage);
 };

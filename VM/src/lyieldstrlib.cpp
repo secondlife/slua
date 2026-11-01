@@ -1408,7 +1408,7 @@ DEFINE_YIELDABLE_EXTERN(yieldable_str_gsub, 0)
                 }
             }
             if (repl_type == LUA_TFUNCTION)
-                YIELD_CALL(L, call_nargs, 1, REPL_CALL);
+                YIELD_CALL_SAVING_STATE(L, call_nargs, 1, REPL_CALL);
             // Function/table result: nil or false -> keep original match text
             if (!lua_toboolean(L, -1))
             {

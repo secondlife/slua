@@ -673,7 +673,7 @@ DEFINE_YIELDABLE(llevents_handle_event, 0)
         }
 
         // handler function and arguments are in order on the stack, do the call.
-        YIELD_CALL(L, nargs, 0, CALL_HANDLER);
+        YIELD_CALL_SAVING_STATE(L, nargs, 0, CALL_HANDLER);
     }
 
     // All handlers completed - mark DetectedEvent wrappers as invalid

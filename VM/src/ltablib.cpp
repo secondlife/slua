@@ -506,7 +506,7 @@ static bool sort_cmp_may_call(LuaTable* t, int i, int j)
             setobj2s(L, L->top + 2, &t->array[j_idx]);                                          \
             L->top += 3;                                                                         \
         }                                                                                        \
-        YIELD_CALL(L, 2, 1, phase_name);                                                         \
+        YIELD_CALL_SAVING_STATE(L, 2, 1, phase_name);                                                         \
         cmp_var = lua_toboolean(L, -1) != 0;                                                     \
         lua_pop(L, 1);                                                                           \
         if (t->sizearray != saved_sa)                                                            \

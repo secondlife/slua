@@ -80,6 +80,23 @@ SlotManager::SlotManager(lua_State* L, bool is_init, uint8_t abi_version)
         luaL_checkstack(L, needed, "yieldable frame");
 }
 
+void SlotManager::flushForCall(int nargs, int nresults)
+{
+    LUAU_ASSERT(nresults >= 0);
+    flushForYield(false);
+
+    ptrdiff_t frame_size = (L->top - nargs - 1 + nresults) - (L->stack + bufferStackOffset);
+    LUAU_ASSERT(frame_size >= 1 && frame_size < UINT16_MAX);
+    uint16_t top = (uint16_t)frame_size;
+    memcpy(bufferData + Luau::kYieldStateHeader, &top, sizeof(uint16_t));
+}
+
+void SlotManager::clearYielding()
+{
+    for (SlotManager* mgr = this; mgr; mgr = mgr->parent)
+        mgr->yielding = false;
+}
+
 // Creates a yield state userdata at position 1 sized for the entire chain.
 // Sets bufferData and yielding on all managers so slot destructors
 // write on unwind.
