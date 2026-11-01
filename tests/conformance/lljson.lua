@@ -11,6 +11,8 @@ assert(lljson.encode(lljson.empty_array) == "[]")
 assert(lljson.encode(lljson.empty_object) == "{}")
 assert(lljson.encode({1}) == "[1]")
 assert(lljson.encode({integer.create(1)}) == "[1]")
+assert(lljson.encode(integer.maxsigned) == "9223372036854775807")
+assert(lljson.encode(integer.minsigned) == "-9223372036854775808")
 assert(lljson.encode(true) == "true")
 assert(lljson.encode({"foo"}) == '["foo"]')
 -- UUIDs are basically just strings, encode them as such.
@@ -158,6 +160,10 @@ assert(lljson.slencode("normal") == '"normal"')
 
 assert(lljson.slencode(1i) == '"!i1"')
 assert(lljson.slencode({[1i]=1i}) == '{"!i1":"!i1"}')
+assert(lljson.slencode(integer.maxsigned) == '"!i9223372036854775807"')
+assert(lljson.slencode(integer.minsigned) == '"!i-9223372036854775808"')
+assert(lljson.sldecode(lljson.slencode(integer.maxsigned)) == integer.maxsigned)
+assert(lljson.sldecode(lljson.slencode(integer.minsigned)) == integer.minsigned)
 
 -- Tagged decoding of values
 assert(lljson.sldecode('"!v<1,2,3>"') == vector(1, 2, 3))
