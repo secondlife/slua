@@ -2799,6 +2799,124 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor kill after a fast pcall caught an err
     CHECK(host.printed.empty());
 }
 
+// A yieldable pcall defers a Lua callee to a scheduled reentry, which runs
+// after luaD_pcall's own catch is gone. An error it raises then unwinds the
+// C++ frame of whatever yieldable function called the script, the event
+// dispatcher here, unless that frame is still live and catches it itself.
+// (A C callee such as error() runs inside luaD_pcall's catch, so it does not
+// reproduce this.) The second round yields out of the dispatcher first, so
+// its frame is already gone and its state already written when the catch
+// happens, and the recovery runs from the top of the thread instead.
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor handler survives a callee's pcall catching")
+{
+    TestScript ts(R"(
+        invocations = 0
+        function LLEvents.moving_start()
+            invocations += 1
+            if invocations == 2 then
+                arm_stdlib_yield()
+                table.sort({2, 1}, function(a, b) return a < b end)
+            end
+            local ok = pcall(function()
+                error("boom")
+            end)
+            print(`caught {ok}`)
+        end
+    )");
+    ts.start();
+
+    dispatch(ts.exec, LSLEvent::MovingStart);
+    CHECK(ts.exec.getFaultKind() == FaultKind::None);
+
+    dispatch(ts.exec, LSLEvent::MovingStart, HandlerRunStatus::Preempted);
+    resume(ts.exec);
+    CHECK(ts.exec.getFaultKind() == FaultKind::None);
+    checkCapture(ts.host.printed, {"caught false", "caught false"});
+}
+
+// A callee that returns after the catch leaves its result where a yield would
+// not: the caller's frame top was never trimmed to the result slot. The sort
+// reads the comparison from the top, so a wrong top is a wrong order, not a fault.
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor comparator survives its pcall catching and still orders")
+{
+    TestScript ts(R"(
+        local t = {3, 1, 2}
+        table.sort(t, function(a, b)
+            pcall(function()
+                error("boom")
+            end)
+            return a < b
+        end)
+        print(table.concat(t, ","))
+    )");
+    ts.loadDefaultState();
+
+    resume(ts.exec);
+    CHECK(ts.exec.getFaultKind() == FaultKind::None);
+    checkCapture(ts.host.printed, {"1,2,3"});
+}
+
+// Suspended inside a pcall inside a comparator, the thread carries a handler
+// CallInfo between the sort's yielded frame and the yield point, and the sort's
+// frame top already rewritten to its result slot. All of that has to survive a
+// trip through the serializer for the sort to finish in the restored script.
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor yield inside a pcall inside a comparator survives a round trip")
+{
+    TestAsset asset = compileTestAsset(R"(
+        function LLEvents.moving_start()
+            local t = {3, 1, 2}
+            local calls, oks = 0, 0
+            table.sort(t, function(a, b)
+                calls += 1
+                local ok = pcall(function()
+                    jump_clock(0.01)
+                    for i = 1, 100 do end
+                end)
+                if ok then oks += 1 end
+                return a < b
+            end)
+            print(`{calls == oks}:{table.concat(t, ",")}`)
+        end
+    )");
+    TestScript first(asset);
+    first.start();
+
+    // jump_clock() puts the comparator's callee past the quantum, so its loop's
+    // back-edge preempts inside the pcall
+    dispatch(first.exec, LSLEvent::MovingStart, HandlerRunStatus::Preempted, nullptr, nullptr, 0.005);
+    std::string payload = serialize(first.exec);
+
+    TestScript second(asset);
+    restore(second.exec, payload);
+    resumeToCompletion(second.exec, 0.005);
+    CHECK(second.exec.getFaultKind() == FaultKind::None);
+    checkCapture(second.host.printed, {"true:1,2,3"});
+}
+
+// The pcall sits between two yieldable callers. The inner one, gsub, is below
+// the handler and unwinds with the error; the outer one, sort, is above it
+// and has to be resumed with its accounting put back to its own level.
+TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor outer caller survives a pcall that discards an inner caller")
+{
+    TestScript ts(R"(
+        local t = {3, 1, 2}
+        table.sort(t, function(a, b)
+            pcall(function()
+                string.gsub("x", "x", function()
+                    error("boom")
+                end)
+            end)
+            return a < b
+        end)
+        print(table.concat(t, ","))
+    )");
+    ts.loadDefaultState();
+
+    resume(ts.exec);
+    CHECK(ts.exec.getFaultKind() == FaultKind::None);
+    checkCapture(ts.host.printed, {"1,2,3"});
+}
+
 // A kill must land whatever the memory limiter thinks: it's the last resort
 // against an unyieldable loop, and the script's pcall sits right there to
 // swallow anything catchable the kill degrades into. The fault is set before

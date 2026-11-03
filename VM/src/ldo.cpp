@@ -309,6 +309,9 @@ bool luaD_performcally(lua_State* L, StkId func, int nresults)
     return false;
 }
 
+// ServerLua: defined with resume_handle
+static bool resume_caller(lua_State* L, int status, ptrdiff_t cioffset, unsigned short callerbase);
+
 /*
 ** Call a function (C or Lua). The function to be called is at *func.
 ** The arguments are on the stack, right after the function.
@@ -336,8 +339,21 @@ void luaD_callint(lua_State* L, StkId func, int nresults, bool preparereentry)
 
     ptrdiff_t funcoffset = savestack(L, func);
     ptrdiff_t cioffset = saveci(L, L->ci);
+    unsigned short callerbase = L->baseCcalls; // ServerLua
 
-    performcall(L, func, nresults, preparereentry);
+    try
+    {
+        performcall(L, func, nresults, preparereentry);
+    }
+    catch (lua_exception& e)
+    {
+        // ServerLua: a pcall above the C caller catching this would continue the caller
+        // through its continuation. Catch it here instead, so lua_call returns into the
+        // caller's live frame as if the callee had returned
+        LUAU_ASSERT(e.getThread() == L);
+        if (!fromyieldableccall || e.getThread() != L || !resume_caller(L, e.getStatus(), cioffset, callerbase))
+            throw;
+    }
 
     bool yielded = isyielded(L);
 
@@ -635,9 +651,17 @@ static void callerrfunc(lua_State* L, void* ud)
     luaD_callny(L, L->top - 2, 1);
 }
 
+// ServerLua: basecioffset bounds the continuations run after the handler, see resume_continue
+struct ResumeHandle
+{
+    CallInfo* ci;
+    ptrdiff_t basecioffset;
+};
+
 static void resume_handle(lua_State* L, void* ud)
 {
-    CallInfo* ci = (CallInfo*)ud;
+    ResumeHandle* rh = (ResumeHandle*)ud; // ServerLua
+    CallInfo* ci = rh->ci;
     Closure* cl = ci_func(ci);
 
     LUAU_ASSERT(ci->flags & LUA_CALLINFO_HANDLE);
@@ -700,7 +724,7 @@ static void resume_handle(lua_State* L, void* ud)
     if (FFlag::LuauPcallErrorContinuationReentry && L->status == SCHEDULED_REENTRY)
     {
         // continuation scheduled a reentry into a nested call
-        resume_continue(L, /* basecioffset */ 0);
+        resume_continue(L, rh->basecioffset);
         return;
     }
 
@@ -711,7 +735,46 @@ static void resume_handle(lua_State* L, void* ud)
     luau_poscall(L, L->top - n);
 
     // run remaining continuations from the stack; typically resumes pcalls
-    resume_continue(L, /* basecioffset */ 0);
+    resume_continue(L, rh->basecioffset);
+}
+
+// ServerLua: a callee error that a handler above the yieldable C caller at cioffset
+// catches. Handled the way resume_finish does at the top of the thread, but stopping
+// at the caller, whose C++ frame is still live: lua_call then returns into it with the
+// callee's results, or yielded if the handler's continuation yielded. False when
+// nothing above the caller catches it, so the caller unwinds with the error.
+static bool resume_caller(lua_State* L, int status, ptrdiff_t cioffset, unsigned short callerbase)
+{
+    if (status == LUA_ERRKILL)
+        return false;
+
+    CallInfo* ch = resume_findhandler(L);
+    if (ch == NULL || ch <= restoreci(L, cioffset))
+        return false;
+
+    while (status != LUA_OK)
+    {
+        // Frames unwound between the caller and the error left the yieldable
+        // baseline above the caller's own
+        L->baseCcalls = callerbase;
+
+        L->status = cast_byte(status);
+        ResumeHandle rh = {ch, cioffset};
+        status = luaD_rawrunprotected(L, resume_handle, &rh);
+
+        if (status == LUA_OK)
+            break;
+
+        ch = resume_findhandler(L);
+        if (ch == NULL || ch <= restoreci(L, cioffset))
+        {
+            // Not the exception we were handling any more: this error's object is on
+            // top of the stack, where the outer handlers expect it with this status
+            luaD_throw(L, status);
+        }
+    }
+
+    return true;
 }
 
 static int resume_error(lua_State* L, const char* msg, int narg)
@@ -767,9 +830,10 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
         L->baseCcalls = oldnCcalls;
 
         L->status = cast_byte(status);
+        ResumeHandle rh = {ch, 0}; // ServerLua
         try
         {
-            status = luaD_rawrunprotected(L, resume_handle, ch);
+            status = luaD_rawrunprotected(L, resume_handle, &rh);
         }
         catch (lua_exception& e)
         {
@@ -856,9 +920,10 @@ int lua_resumeerror(lua_State* L, lua_State* from)
     if (CallInfo* ci = resume_findhandler(L))
     {
         L->status = cast_byte(status);
+        ResumeHandle rh = {ci, 0}; // ServerLua
         try
         {
-            status = luaD_rawrunprotected(L, resume_handle, ci);
+            status = luaD_rawrunprotected(L, resume_handle, &rh);
         }
         catch (lua_exception& e)
         {

@@ -699,6 +699,58 @@ TEST_CASE("Nested Breaks")
     });
 }
 
+// A yieldable C function calling a Lua callee with lua_call, reporting which
+// way control came back to it: straight through the call, or through the
+// continuation after the frame was dropped. The stack top it saw its result
+// at goes along, since a frame that isn't trimmed to the result is as wrong
+// as one resumed the wrong way.
+static int callthrough_finish(lua_State* L, const char* tag)
+{
+    int top = lua_gettop(L);
+    lua_pushstring(L, tag);
+    lua_pushinteger(L, top);
+    lua_pushvalue(L, 2);
+    return 3;
+}
+
+static int callthrough(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    lua_settop(L, 1);
+    lua_pushvalue(L, 1);
+    lua_call(L, 0, 1);
+    if (lua_status(L) != LUA_OK)
+        return -1;
+    return callthrough_finish(L, "direct");
+}
+
+static int callthrough_k(lua_State* L, int status)
+{
+    return callthrough_finish(L, "cont");
+}
+
+// A yieldable C function reaching a metamethod through the aux library
+static int tostring_through(lua_State* L)
+{
+    luaL_tolstring(L, 1, nullptr);
+    return 1;
+}
+
+static int tostring_through_k(lua_State* L, int status)
+{
+    return 1;
+}
+
+TEST_CASE("Yieldable C caller call contract")
+{
+    runConformance("callthrough.lua", nullptr, [](lua_State *L) {
+        lua_pushcclosurek(L, callthrough, "callthrough", 0, callthrough_k);
+        lua_setglobal(L, "callthrough");
+        lua_pushcclosurek(L, tostring_through, "tostring_through", 0, tostring_through_k);
+        lua_setglobal(L, "tostring_through");
+    });
+}
+
 TEST_CASE("Can interrupt everywhere in simple script")
 {
     runConformance("json_encode_sl.lua", nullptr, [](lua_State *L) {

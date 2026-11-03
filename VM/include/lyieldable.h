@@ -129,6 +129,7 @@ public:
 
     LUA_NORETURN void corrupt() const;
     LUA_NORETURN void tooLarge() const;
+    LUA_NORETURN void badStatus() const;
 
     // Lock the slot layout. Must be called after all slots are allocated
     // and before YIELD_DISPATCH_BEGIN.

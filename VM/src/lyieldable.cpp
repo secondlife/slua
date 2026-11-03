@@ -23,6 +23,14 @@ void SlotManager::tooLarge() const
     luaL_error(L, "yield state too large");
 }
 
+// The VM returned into a yieldable function with a status the yield macros
+// don't model. See YIELD_STATUS_CHECK.
+void SlotManager::badStatus() const
+{
+    LUAU_ASSERT(!"unexpected thread status in yieldable function");
+    luaL_error(L, "unexpected thread status %d in yieldable function", L->status);
+}
+
 // Root constructor. On init, pushes nil at position 1.
 // On resume, reads the yield state userdata at position 1.
 SlotManager::SlotManager(lua_State* L, bool is_init, uint8_t abi_version)

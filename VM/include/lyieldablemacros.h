@@ -47,23 +47,27 @@ using Luau::YieldGuard;
 // DEFINE_YIELDABLE_EXTERN: external linkage (cross translation unit).
 #define DEFINE_YIELDABLE_EXTERN(name, version) DEFINE_YIELDABLE_IMPL(LUAI_FUNC, name, version)
 
-// Return value macros: define lambdas for early-return in yield macros.
-// Must appear before YIELD_DISPATCH_BEGIN in each function.
-// Uses lambdas so `return _yieldable_on_yield()` works for void too,
+// Return value macro: defines the lambda for early-return on yield in the
+// yield macros. Must appear before YIELD_DISPATCH_BEGIN in each function.
+// Uses a lambda so `return _yieldable_on_yield()` works for void too,
 // _should_ optimize to just a bare `return`.
-#define YIELDABLE_RETURNS_INTERNAL(yield_val, error_val)                                     \
-    [[maybe_unused]] auto _yieldable_on_yield = [&]() { return (yield_val); };     \
-    [[maybe_unused]] auto _yieldable_on_error = [&]() { return (error_val); }
+#define YIELDABLE_RETURNS(yield_val)                                                \
+    [[maybe_unused]] auto _yieldable_on_yield = [&]() { return (yield_val); }
 
-// Standard returns for DEFINE_YIELDABLE bodies: -1 on yield, 0 on error.
-#define YIELDABLE_RETURNS_DEFAULT YIELDABLE_RETURNS_INTERNAL(-1, 0)
-// Take a single default value for functions that don't return int
-#define YIELDABLE_RETURNS(x) YIELDABLE_RETURNS_INTERNAL((x), (x))
+// Standard return for DEFINE_YIELDABLE bodies: -1 on yield.
+#define YIELDABLE_RETURNS_DEFAULT YIELDABLE_RETURNS(-1)
 
 // For void helper functions that have no return value.
 #define YIELDABLE_RETURNS_VOID                                                      \
-    [[maybe_unused]] auto _yieldable_on_yield = []() {};                           \
-    [[maybe_unused]] auto _yieldable_on_error = []() {}
+    [[maybe_unused]] auto _yieldable_on_yield = []() {}
+
+// The VM hands control back to a yieldable function with status OK, yield or
+// break; errors never return. Anything else is a VM change these macros don't
+// model (upstream syncs have introduced such statuses before), and returning
+// into the frame would corrupt the thread, so fail loudly instead.
+#define YIELD_STATUS_CHECK(L)                                                       \
+    if ((L)->status != LUA_YIELD && (L)->status != LUA_BREAK)                       \
+        _yieldable_slots.badStatus()
 
 // Yield macros: manage the yield state machine with explicit, stable phase
 // names & values. Callers must define a function-local `enum class Phase : uint8_t`
@@ -107,12 +111,9 @@ using Luau::YieldGuard;
         }                                                                           \
         if ((L)->status != LUA_OK)                                                  \
         {                                                                           \
-            if ((L)->status == LUA_YIELD || (L)->status == LUA_BREAK)               \
-            {                                                                       \
-                _yieldable_slots.flushForYield(true);                               \
-                return _yieldable_on_yield();                                       \
-            }                                                                       \
-            return _yieldable_on_error();                                           \
+            YIELD_STATUS_CHECK(L);                                                  \
+            _yieldable_slots.flushForYield(true);                                   \
+            return _yieldable_on_yield();                                           \
         }                                                                           \
     _yieldable_label_##phase_name: ;                                                \
     } while (0)
@@ -126,12 +127,9 @@ using Luau::YieldGuard;
         lua_call(L, nargs, nresults);                                               \
         if ((L)->status != LUA_OK)                                                  \
         {                                                                           \
-            if ((L)->status == LUA_YIELD || (L)->status == LUA_BREAK)               \
-            {                                                                       \
-                _yieldable_slots.flushForYield(false);                              \
-                return _yieldable_on_yield();                                       \
-            }                                                                       \
-            return _yieldable_on_error();                                           \
+            YIELD_STATUS_CHECK(L);                                                  \
+            _yieldable_slots.flushForYield(false);                                  \
+            return _yieldable_on_yield();                                           \
         }                                                                           \
     _yieldable_label_##phase_name: ;                                                \
     } while (0)
@@ -149,8 +147,7 @@ using Luau::YieldGuard;
         __VA_ARGS__;                                                                \
         if ((L)->status != LUA_OK)                                                  \
         {                                                                           \
-            if ((L)->status == LUA_YIELD || (L)->status == LUA_BREAK)               \
-                return _yieldable_on_yield();                                       \
-            return _yieldable_on_error();                                           \
+            YIELD_STATUS_CHECK(L);                                                  \
+            return _yieldable_on_yield();                                           \
         }                                                                           \
     } while (0)

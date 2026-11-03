@@ -302,7 +302,11 @@ int luaL_callmeta(lua_State* L, int obj, const char* event)
     lua_pushvalue(L, obj);
     // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
     luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
+    // ServerLua: same yield guard as callTMres, a yieldable C caller must not make the
+    // metamethod yieldable
+    ++L->nCcalls;
     lua_call(L, 1, 1);
+    --L->nCcalls;
     return 1;
 }
 
