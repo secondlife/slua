@@ -686,46 +686,57 @@ static int lsl_replace_axis(lua_State *L)
     return 1;
 }
 
+// Both of these are cribbed from ScriptTypes.cs in indra, rather than `llmath`.
+// Mono's JIT evaluated those float expressions in double and rounded to float
+// only on the final store, so the inputs are widened here and each component
+// is narrowed exactly once.
+
+// ScriptTypes.cs Combine(q2 = a, q1 = b)
 static void mul_quat(const float *a, const float *b, float *res)
 {
-    res[0] = b[3] * a[0] + b[0] * a[3] + b[1] * a[2] - b[2] * a[1];
-    res[1] = b[3] * a[1] + b[1] * a[3] + b[2] * a[0] - b[0] * a[2];
-    res[2] = b[3] * a[2] + b[2] * a[3] + b[0] * a[1] - b[1] * a[0];
-    res[3] = b[3] * a[3] - b[0] * a[0] - b[1] * a[1] - b[2] * a[2];
+    const double q2x = a[0], q2y = a[1], q2z = a[2], q2s = a[3];
+    const double q1x = b[0], q1y = b[1], q1z = b[2], q1s = b[3];
+    res[0] = (float)((q1s * q2x) + (q1x * q2s) + (q1y * q2z) - (q1z * q2y));
+    res[1] = (float)((q1s * q2y) - (q1x * q2z) + (q1y * q2s) + (q1z * q2x));
+    res[2] = (float)((q1s * q2z) + (q1x * q2y) - (q1y * q2x) + (q1z * q2s));
+    res[3] = (float)((q1s * q2s) - (q1x * q2x) - (q1y * q2y) - (q1z * q2z));
 }
 
+// ScriptTypes.cs Rotate(lhs = vec, rhs = rot)
 void rot_vec(const float *vec, const float *rot, float *res)
 {
-    // This is cribbed from ScriptTypes.cs in indra, rather than `llmath`.
-    res[0] =
-        rot[3] * rot[3] * vec[0] +
-        2.0f * rot[1] * rot[3] * vec[2] -
-        2.0f * rot[2] * rot[3] * vec[1] +
-        rot[0] * rot[0] * vec[0] +
-        2.0f * rot[1] * rot[0] * vec[1] +
-        2.0f * rot[2] * rot[0] * vec[2] -
-        rot[2] * rot[2] * vec[0] -
-        rot[1] * rot[1] * vec[0];
+    const double x = rot[0], y = rot[1], z = rot[2], s = rot[3];
+    const double vx = vec[0], vy = vec[1], vz = vec[2];
 
-    res[1] =
-        2.0f * rot[0] * rot[1] * vec[0] +
-        rot[1] * rot[1] * vec[1] +
-        2.0f * rot[2] * rot[1] * vec[2] +
-        2.0f * rot[3] * rot[2] * vec[0] -
-        rot[2] * rot[2] * vec[1] +
-        rot[3] * rot[3] * vec[1] -
-        2.0f * rot[0] * rot[3] * vec[2] -
-        rot[0] * rot[0] * vec[1];
+    res[0] = (float)(
+        s * s * vx +
+        2.0 * y * s * vz -
+        2.0 * z * s * vy +
+        x * x * vx +
+        2.0 * y * x * vy +
+        2.0 * z * x * vz -
+        z * z * vx -
+        y * y * vx);
 
-    res[2] =
-        2.0f * rot[0] * rot[2] * vec[0] +
-        2.0f * rot[1] * rot[2] * vec[1] +
-        rot[2] * rot[2] * vec[2] -
-        2.0f * rot[3] * rot[1] * vec[0] -
-        rot[1] * rot[1] * vec[2] +
-        2.0f * rot[3] * rot[0] * vec[1] -
-        rot[0] * rot[0] * vec[2] +
-        rot[3] * rot[3] * vec[2];
+    res[1] = (float)(
+        2.0 * x * y * vx +
+        y * y * vy +
+        2.0 * z * y * vz +
+        2.0 * s * z * vx -
+        z * z * vy +
+        s * s * vy -
+        2.0 * x * s * vz -
+        x * x * vy);
+
+    res[2] = (float)(
+        2.0 * x * z * vx +
+        2.0 * y * z * vy +
+        z * z * vz -
+        2.0 * s * y * vx -
+        y * y * vz +
+        2.0 * s * x * vy -
+        x * x * vz +
+        s * s * vz);
 }
 
 void conj_quat(float *quat)

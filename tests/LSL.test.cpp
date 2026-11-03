@@ -585,12 +585,19 @@ TEST_CASE("Quaternions")
             {
                 case 0: expected = "<1.00000, 2.00000, 3.00000, 4.00000>"; break;
                 case 1: expected = "<1.00000, 2.00000, 3.00000, 4.00000>"; break;
+                // Rotation math results are what Mono produces: float inputs,
+                // double intermediates, one rounding to float per component.
+                case 2: expected = "<1142.99400, -673.36550, 16626.49000>"; break;
+                case 3: expected = "<8310.14800, 90363.16000, 43793.37000>"; break;
+                case 4: expected = "<-222272.60000, 354210.60000, -293349.60000>"; break;
+                case 5: expected = "<-655386.60000, 306964.60000, -699282.70000, -293248.40000>"; break;
+                case 6: expected = "<-9382.83300, -9259.14200, -493.94460, 617.16670>"; break;
                 default: assert(0);
             }
             CHECK_EQ(actual, std::string(expected));
             return -1;
         });
-    CHECK_EQ(YIELD_NUM(state.get()), 2);
+    CHECK_EQ(YIELD_NUM(state.get()), 7);
 }
 
 TEST_CASE("Accessors")
