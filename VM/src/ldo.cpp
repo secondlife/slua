@@ -339,20 +339,36 @@ void luaD_callint(lua_State* L, StkId func, int nresults, bool preparereentry)
 
     ptrdiff_t funcoffset = savestack(L, func);
     ptrdiff_t cioffset = saveci(L, L->ci);
-    unsigned short callerbase = L->baseCcalls; // ServerLua
 
-    try
+    if (!fromyieldableccall)
     {
         performcall(L, func, nresults, preparereentry);
     }
-    catch (lua_exception& e)
+    else
     {
         // ServerLua: a pcall above the C caller catching this would continue the caller
         // through its continuation. Catch it here instead, so lua_call returns into the
-        // caller's live frame as if the callee had returned
-        LUAU_ASSERT(e.getThread() == L);
-        if (!fromyieldableccall || e.getThread() != L || !resume_caller(L, e.getStatus(), cioffset, callerbase))
-            throw;
+        // caller's live frame as if the callee had returned.
+        // Thrown again only once the catch block has exited. MSVC runs a catch
+        // block before releasing the frames under it, so a rethrow from inside one nests
+        // the dispatch, and a deep chain of these frames overflows the C stack.
+        unsigned short callerbase = L->baseCcalls;
+        int status = LUA_OK;
+
+        try
+        {
+            performcall(L, func, nresults, preparereentry);
+        }
+        catch (lua_exception& e)
+        {
+            LUAU_ASSERT(e.getThread() == L);
+            if (e.getThread() != L)
+                throw;
+            status = e.getStatus();
+        }
+
+        if (status != LUA_OK && !resume_caller(L, status, cioffset, callerbase))
+            luaD_throw(L, status);
     }
 
     bool yielded = isyielded(L);

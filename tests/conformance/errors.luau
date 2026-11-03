@@ -244,7 +244,16 @@ if not limitedstack then
   -- xpcall error handler on immediate path
   do
     local s, e = cstackoverflows(tostring)
-    
+
+    assert(not s)
+    assert(e == true, "error in xpcall eh, line " .. tostring(ehline))
+  end
+
+  -- same chain started from a different C call depth: the count has to land
+  -- on the limit, not step over it into the error-in-error-handling reserve
+  do
+    local s, e = cstackoverflows(function(x) return tostring(x) end)
+
     assert(not s)
     assert(e == true, "error in xpcall eh, line " .. tostring(ehline))
   end

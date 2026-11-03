@@ -124,11 +124,6 @@ static StkId callTMres(lua_State* L, StkId res, const TValue* f, const TValue* p
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
         luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
 
-        // ServerLua: Make sure `lua_gettable()` and friends don't think they're yieldable if we just
-        // happen to currently be inside a C function with a continuation. Bump nCcalls to ensure
-        // we don't accidentally allow them to yield and cause a big mess on the stack.
-        ++L->nCcalls;
-
         // fast-path for Luau to Luau calls
         if (L->isactive && isLua(L->ci) && ttisfunction(top) && !clvalue(top)->isC)
         {
@@ -140,10 +135,10 @@ static StkId callTMres(lua_State* L, StkId res, const TValue* f, const TValue* p
             luaD_checkstack(L, 3);
             StkId func = L->top;
             L->top += 3;
-            luaD_call(L, func, 1);
+            // ServerLua: `lua_gettable()` and friends must not think they're yieldable when
+            // the caller happens to be a C function with a continuation
+            luaD_callny(L, func, 1);
         }
-
-        --L->nCcalls;
     }
     else
     {
@@ -156,9 +151,7 @@ static StkId callTMres(lua_State* L, StkId res, const TValue* f, const TValue* p
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
         luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
         // ServerLua: same yield guard as above
-        ++L->nCcalls;
-        luaD_call(L, L->top - 3, 1);
-        --L->nCcalls;
+        luaD_callny(L, L->top - 3, 1);
     }
 
     res = restorestack(L, result);
@@ -188,8 +181,6 @@ static LUAU_NOINLINE void callTM(lua_State* L, const TValue* f, const TValue* p1
 
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
         luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
-        // ServerLua: same yield guard as in callTMres
-        ++L->nCcalls;
 
         // fast-path for Luau to Luau calls
         if (L->isactive && isLua(L->ci) && ttisfunction(top) && !clvalue(top)->isC)
@@ -202,10 +193,9 @@ static LUAU_NOINLINE void callTM(lua_State* L, const TValue* f, const TValue* p1
             luaD_checkstack(L, 4);
             StkId func = L->top;
             L->top += 4;
-            luaD_call(L, func, 0);
+            // ServerLua: same yield guard as in callTMres
+            luaD_callny(L, func, 0);
         }
-
-        --L->nCcalls;
     }
     else
     {
@@ -219,9 +209,7 @@ static LUAU_NOINLINE void callTM(lua_State* L, const TValue* f, const TValue* p1
         // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
         luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
         // ServerLua: same yield guard as in callTMres
-        ++L->nCcalls;
-        luaD_call(L, L->top - 4, 0);
-        --L->nCcalls;
+        luaD_callny(L, L->top - 4, 0);
     }
 }
 
