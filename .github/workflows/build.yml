@@ -223,35 +223,31 @@ jobs:
 #        files: ./coverage.info
 #        token: ${{ secrets.CODECOV_TOKEN }}
 
-  verify-builtins:
+  verify-generated:
     runs-on: ubuntu-latest
+    # Advisory: tracks lsl-definitions' default branch, so a red run means a
+    # regeneration is due, not that this change is broken.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-        with:
-          repository: secondlife/lsl-definitions
-          path: lsl-definitions
+      - name: Clone lsl-definitions
+        run: git clone --depth 1 https://github.com/secondlife/lsl-definitions "$RUNNER_TEMP/lsl-definitions"
 
       - name: Install dependencies
         run: pip install pyyaml llsd
 
-      - name: Generate builtins.txt
-        run: |
-          cd lsl-definitions
-          python gen_definitions.py lsl_definitions.yaml gen_builtins_txt builtins.txt
+      - name: Regenerate from lsl-definitions
+        run: ./regen_lsl_definitions.sh "$RUNNER_TEMP/lsl-definitions"
 
-      - name: Verify builtins.txt matches
+      - name: Verify generated files are up to date
         run: |
-          if ! diff -q builtins.txt lsl-definitions/builtins.txt; then
-            echo "ERROR: builtins.txt is out of sync with secondlife/lsl-definitions"
-            diff builtins.txt lsl-definitions/builtins.txt || true
-            echo ""
-            echo "To fix: clone secondlife/lsl-definitions and run:"
-            echo "  python gen_definitions.py lsl_definitions.yaml gen_builtins_txt /path/to/slua/builtins.txt"
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            echo "generated files are out of sync with secondlife/lsl-definitions"
+            echo "To fix: run ./regen_lsl_definitions.sh <lsl-definitions checkout> and commit the result"
             exit 1
           fi
-          echo "builtins.txt is up to date"
 
   web:
     runs-on: ubuntu-latest

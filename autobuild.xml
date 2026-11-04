@@ -93,44 +93,6 @@
         <key>source_type</key>
         <string>git</string>
       </map>
-      <key>lsl_definitions</key>
-      <map>
-        <key>platforms</key>
-        <map>
-          <key>common</key>
-          <map>
-            <key>archive</key>
-            <map>
-              <key>hash</key>
-              <string>c9928095cf40377e901458f5240305a7af2c554d</string>
-              <key>hash_algorithm</key>
-              <string>sha1</string>
-              <key>url</key>
-              <string>https://github.com/secondlife/lsl-definitions/releases/download/v0.6.12/lsl_definitions-0.6.12-common-29281156609.tar.zst</string>
-            </map>
-            <key>name</key>
-            <string>common</string>
-          </map>
-        </map>
-        <key>license</key>
-        <string>MIT</string>
-        <key>license_file</key>
-        <string>LICENSES/lsl_definitions.txt</string>
-        <key>copyright</key>
-        <string>Copyright (c) 2026, Linden Research, Inc.</string>
-        <key>version</key>
-        <string>0.6.12</string>
-        <key>use_scm_version</key>
-        <boolean>true</boolean>
-        <key>name</key>
-        <string>lsl_definitions</string>
-        <key>source_type</key>
-        <string>git</string>
-        <key>canonical_repo</key>
-        <string>https://github.com/secondlife/lsl-definitions</string>
-        <key>description</key>
-        <string>LSL definitions</string>
-      </map>
     </map>
     <key>package_description</key>
     <map>

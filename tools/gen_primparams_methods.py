@@ -2,6 +2,8 @@
 """
 Generate VM/src/llprim_set_primitive_params.inl from lsl_definitions.yaml.
 
+Usage: gen_primparams_methods.py <path to lsl-definitions checkout>
+
 Should be run if new prim params are added.
 """
 
@@ -12,15 +14,14 @@ import sys
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-LSL_DEFS_PKG = os.path.join(
-    REPO_ROOT, "stage", "packages", "lsl_definitions", "python"
-)
-LSL_DEFS_YAML = os.path.join(
-    REPO_ROOT, "stage", "packages", "lsl_definitions", "lsl_definitions.yaml"
-)
 OUTPUT_PATH = os.path.join(REPO_ROOT, "VM", "src", "llprim_set_primitive_params.inl")
 
-sys.path.insert(0, LSL_DEFS_PKG)
+if len(sys.argv) != 2:
+    sys.exit(f"usage: {sys.argv[0]} <lsl-definitions checkout>")
+LSL_DEFS_ROOT = os.path.abspath(sys.argv[1])
+LSL_DEFS_YAML = os.path.join(LSL_DEFS_ROOT, "lsl_definitions.yaml")
+
+sys.path.insert(0, LSL_DEFS_ROOT)
 
 from lsl_definitions import LSLDefinitionParser  # noqa: E402
 from lsl_definitions.rulesets import expand_spp_builder  # noqa: E402
