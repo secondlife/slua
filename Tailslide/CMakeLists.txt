@@ -198,9 +198,9 @@ endif()
 if (TAILSLIDE_BUILD_CLI)
   add_executable(tailslide_cli tailslide_cli/main.cc)
   target_sources(tailslide_cli PRIVATE
-          ${CMAKE_SOURCE_DIR}/extern/cxxopt.hh
+          ${CMAKE_CURRENT_SOURCE_DIR}/extern/cxxopt.hh
   )
-  target_include_directories(tailslide_cli PRIVATE tailslide ${CMAKE_SOURCE_DIR}/extern)
+  target_include_directories(tailslide_cli PRIVATE tailslide ${CMAKE_CURRENT_SOURCE_DIR}/extern)
   target_link_libraries(tailslide_cli PUBLIC ${EXTRA_LIBS} libtailslide)
   set_target_properties(tailslide_cli PROPERTIES OUTPUT_NAME tailslide)
 endif()
