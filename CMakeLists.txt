@@ -56,11 +56,11 @@ if(LUAU_SANITIZE)
 endif()
 
 # Embed builtins.txt into a header file at configure time
-file(READ "${CMAKE_SOURCE_DIR}/builtins.txt" BUILTINS_HEX HEX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/builtins.txt" BUILTINS_HEX HEX)
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1, " BUILTINS_HEX_ARRAY "${BUILTINS_HEX}")
 configure_file(
-        "${CMAKE_SOURCE_DIR}/LSLBuiltins/src/builtins_embedded.h.in"
-        "${CMAKE_BINARY_DIR}/builtins_embedded.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/LSLBuiltins/src/builtins_embedded.h.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/builtins_embedded.h"
         @ONLY
 )
 
@@ -140,7 +140,7 @@ target_link_libraries(Luau.CLI.lib PUBLIC Luau.LSLBuiltins)
 
 target_compile_features(Luau.LSLBuiltins PUBLIC cxx_std_17)
 target_include_directories(Luau.LSLBuiltins PUBLIC LSLBuiltins/include)
-target_include_directories(Luau.LSLBuiltins PRIVATE ${CMAKE_BINARY_DIR})  # For builtins_embedded.h
+target_include_directories(Luau.LSLBuiltins PRIVATE ${CMAKE_CURRENT_BINARY_DIR})  # For builtins_embedded.h
 target_link_libraries(Luau.LSLBuiltins PUBLIC Luau.Common)
 
 # ServerLua: the LSL frontend, needs Luau.LSLBuiltins configured first
@@ -329,8 +329,8 @@ endif()
 # ServerLua: GCC doesn't support the FP_CONTRACT pragma, so we have to use this to tell it it not to
 # fuse multiply and add for these files.
 set(FP_SENSITIVE_SOURCE_FILES
-        ${CMAKE_SOURCE_DIR}/VM/src/lll.cpp
-        ${CMAKE_SOURCE_DIR}/VM/src/llsl.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/VM/src/lll.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/VM/src/llsl.cpp
 )
 set_source_files_properties(${FP_SENSITIVE_SOURCE_FILES} PROPERTIES COMPILE_FLAGS "-ffp-contract=off")
 
