@@ -395,12 +395,26 @@ TEST_CASE("Concat")
                 case 5: expected = "123456"; break;
                 case 6: expected = "6,5,"; break;
                 case 7: expected = "65536"; break;
+                case 8:
+                    for (int i = 0; i < 300; ++i)
+                        expected += (i ? "," : "") + std::to_string(i);
+                    break;
+                case 9:
+                    for (int i = 299; i >= 0; --i)
+                        expected += std::to_string(i) + ",";
+                    break;
+                case 10: expected = "1,2,3,4"; break;
+                case 11: expected = "4,3,2,1,"; break;
+                case 12: expected = "1,2,3,4,56"; break;
+                case 13: expected = "6,5,"; break;
+                case 14: expected = "78,1,2,3,4,56"; break;
+                case 15: expected = "8,7,"; break;
                 default: assert(0);
             }
             CHECK_EQ(actual, expected);
             return -1;
         });
-    CHECK_EQ(YIELD_NUM(state.get()), 8);
+    CHECK_EQ(YIELD_NUM(state.get()), 16);
 }
 
 TEST_CASE("Vector Cast")

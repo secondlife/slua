@@ -577,56 +577,39 @@ static int lsl_try_cast_nil_default(lua_State *L)
     return 1;
 }
 
-static LuaTable* _lsl_arg_to_table(lua_State *L, int argn)
-{
-    if (lua_type(L, argn) == LUA_TTABLE)
-    {
-        return hvalue(luaA_toobject(L, argn));
-    }
-    else
-    {
-        // make a new single-element table and place the argument in it
-        lua_createtable(L, 1, 0);
-        LuaTable *new_tab = hvalue(luaA_toobject(L, -1));
-        setobj(L, &new_tab->array[0], luaA_toobject(L, argn));
-        return new_tab;
-    }
-}
-
+// Concatenates any number of operands, given in LSL evaluation order (rightmost first)
 static int lsl_table_concat(lua_State *L)
 {
-    if (lua_type(L, 1) != LUA_TTABLE && lua_type(L, 2) != LUA_TTABLE)
-        luaL_errorL(L, "At least one argument must be a table");
+    const int nargs = lua_gettop(L);
+    luaL_checkstack(L, 1, "table concat");
 
-    lua_settop(L, 2);
-    luaL_checkstack(L, 4, "table concat");
+    // A chunk of a longer chain may be all scalars, so no list operand is required
+    int new_len = 0;
+    for (int i = 1; i <= nargs; ++i)
+    {
+        const TValue *arg = luaA_toobject(L, i);
+        new_len += ttistable(arg) ? luaH_getn(hvalue(arg)) : 1;
+    }
 
-    // Note: reversed because of LSL evaluation order!
-    LuaTable *l_h = _lsl_arg_to_table(L, 2);
-    LuaTable *r_h = _lsl_arg_to_table(L, 1);
-
-    int l_len = luaH_getn(l_h);
-    int new_len = l_len + luaH_getn(r_h);
-
-    // Push immediately so this is correctly rooted
     lua_createtable(L, new_len, 0);
     LuaTable *new_h = hvalue(luaA_toobject(L, -1));
-
-    for (int i = 0; i<new_len; ++i)
+    TValue *dest = new_h->array;
+    // The rightmost operand comes first
+    for (int i = nargs; i >= 1; --i)
     {
-        LuaTable* source_h = l_h;
-        int effective_i = i;
-        // Start reading from rhs if we passed the end of lhs
-        if (i >= l_len)
+        const TValue *arg = luaA_toobject(L, i);
+        // Anything that isn't a list is appended as a single element
+        if (!ttistable(arg))
         {
-            effective_i -= l_len;
-            source_h = r_h;
+            setobj(L, dest++, arg);
+            continue;
         }
-        setobj(L, &new_h->array[i], &source_h->array[effective_i]);
+
+        LuaTable *h = hvalue(arg);
+        const int len = luaH_getn(h);
+        for (int j = 0; j < len; ++j)
+            setobj(L, dest++, &h->array[j]);
     }
-    // Move the object to the return value position, clobbering any temp lists.
-    if (lua_gettop(L) != 3)
-        lua_replace(L, 3);
     return 1;
 }
 

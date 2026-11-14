@@ -107,6 +107,8 @@ protected:
     uint8_t evalExprToSourceReg(LSLExpression *expr);
     /// Emit a whole tree of string `+` as chunked `CONCAT`s rather than one per node.
     void emitStringConcat(LSLBinaryExpression* bin_expr, uint8_t target_reg);
+    /// Emit a whole tree of list `+` as chunked `lsl.table_concat` calls rather than one per node.
+    void emitListConcat(LSLBinaryExpression* bin_expr, int16_t expected_target, uint8_t target_reg);
     void pushArgument(LSLExpression* expr, bool want_float_cast=true);
     unsigned int pushConstant(LSLConstant* cv);
 
