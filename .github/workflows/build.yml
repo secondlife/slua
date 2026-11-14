@@ -265,6 +265,7 @@ jobs:
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             git status --short
+            git --no-pager diff
             echo "generated files are out of sync with secondlife/lsl-definitions"
             echo "To fix: run ./regen_lsl_definitions.sh <lsl-definitions checkout> and commit the result"
             exit 1
