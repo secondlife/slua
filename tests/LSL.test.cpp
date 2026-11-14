@@ -373,6 +373,36 @@ TEST_CASE("List Concat")
     CHECK_EQ(YIELD_NUM(state.get()), 3);
 }
 
+TEST_CASE("Concat")
+{
+    auto state = runConformance("concat.lsl", [](lua_State *L)
+        {
+            std::string actual = luaL_checkstring(L, 1);
+            std::string expected;
+            switch(YIELD_NUM(L))
+            {
+                case 0: expected = std::string(100, '1'); break;
+                case 1:
+                    for (int i = 0; i < 300; ++i)
+                        expected += std::to_string(i);
+                    break;
+                case 2:
+                    for (int i = 299; i >= 0; --i)
+                        expected += std::to_string(i) + ",";
+                    break;
+                case 3: expected = "1234"; break;
+                case 4: expected = "4,3,2,1,"; break;
+                case 5: expected = "123456"; break;
+                case 6: expected = "6,5,"; break;
+                case 7: expected = "65536"; break;
+                default: assert(0);
+            }
+            CHECK_EQ(actual, expected);
+            return -1;
+        });
+    CHECK_EQ(YIELD_NUM(state.get()), 8);
+}
+
 TEST_CASE("Vector Cast")
 {
     auto state = runConformance("vector_cast.lsl", [](lua_State *L)

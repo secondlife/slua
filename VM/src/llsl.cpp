@@ -12,6 +12,7 @@
 
 #include "lnumutils.h"
 #include "llsl.h"
+#include "lstrbuf.h"
 #include "mono_floats.h"
 #include "Luau/Bytecode.h"
 #include "Luau/LSLBuiltins.h"
@@ -239,23 +240,19 @@ uint8_t luaSL_lsl_type(lua_State *L, int idx)
     return lua_lsl_type(val);
 }
 
-static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool nil_as_default)
+/// Push `orig_val` cast to `to_lsl_type`. Pushes nothing and returns 0 if there's no such cast.
+static int lsl_cast_value(lua_State* L, const TValue* orig_val, LSLIType to_lsl_type, bool in_list, bool neg_zero, bool nil_as_default)
 {
-    luaL_checkstack(L, 4, "cast");
-
-    luaL_checkany(L, 1);
-    // Local copy so we can normalize it
+    // Local copy so we can normalize it, taken before the stack can move under `orig_val`
     TValue val_copy;
-    setobj(L, &val_copy, luaA_toobject(L, 1));
+    setobj(L, &val_copy, orig_val);
     const TValue *val = &val_copy;
+
+    luaL_checkstack(L, 4, "cast");
 
     if (ttisboolean(val))
         setintvalue(&val_copy, bvalue(val));
 
-    int to_type = luaL_checkinteger(L, 2);
-    // Since we don't allow this to be called with arbitrary args, this must be valid.
-    LUAU_ASSERT(to_type < (int)LSLIType::LST_ERROR);
-    auto to_lsl_type = (LSLIType)to_type;
     auto existing_type = (LSLIType)lua_lsl_type(val);
 
     if (existing_type == LSLIType::LST_ERROR)
@@ -505,33 +502,7 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
             if (to_lsl_type != LSLIType::LST_STRING)
                 return 0;
 
-            LuaTable *table_val = hvalue(val);
-            const size_t len = luaH_getn(table_val);
-            // Stupid hack, just string cast all elements and concat at the end.
-            lua_pushstring(L, "");
-            for(size_t idx = 0; idx<len; ++idx)
-            {
-                if (ttisstring(&table_val->array[idx]))
-                {
-                    // Don't need to cast strings, just push.
-                    luaA_pushvalue(L, &table_val->array[idx]);
-                }
-                else
-                {
-                    lua_pushcfunction(L, &lsl_cast_list_elem, "cast_list");
-                    luaA_pushvalue(L, &table_val->array[idx]);
-                    luaSL_pushinteger(L, LSLIType::LST_STRING);
-                    lua_call(L, 2, 1);
-                }
-                lua_concat(L, 2);
-
-                // Matches Mono behavior
-                if (lua_strlen(L, -1) > UINT16_MAX)
-                {
-                    luaD_throw(L, LUA_ERRMEM);
-                }
-            }
-            return 1;
+            return lsl_list_to_string(L, hvalue(val), "", 0, neg_zero);
         }
         default:
         {
@@ -542,6 +513,15 @@ static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool ni
     return 1;
 }
 
+static int _lsl_cast_internal(lua_State* L, bool in_list, bool neg_zero, bool nil_as_default)
+{
+    luaL_checkany(L, 1);
+    int to_type = luaL_checkinteger(L, 2);
+    // Since we don't allow this to be called with arbitrary args, this must be valid.
+    LUAU_ASSERT(to_type < (int)LSLIType::LST_ERROR);
+    return lsl_cast_value(L, luaA_toobject(L, 1), (LSLIType)to_type, in_list, neg_zero, nil_as_default);
+}
+
 int lsl_cast_list_elem(lua_State *L)
 {
     return _lsl_cast_internal(L, true, true, false);
@@ -550,6 +530,28 @@ int lsl_cast_list_elem(lua_State *L)
 int lsl_cast_list_elem_poszero(lua_State *L)
 {
     return _lsl_cast_internal(L, true, false, false);
+}
+
+int lsl_list_to_string(lua_State *L, LuaTable *h, const char *sep, size_t sep_len, bool neg_zero)
+{
+    const int len = luaH_getn(h);
+    luaL_checkstack(L, 2, "list to string");
+
+    auto *strbuf = luaYB_push(L);
+    for (int i = 0; i < len; ++i)
+    {
+        if (i != 0)
+            luaYB_appendmem(L, strbuf, sep, sep_len);
+
+        // Lists can't nest, and letting one through would recurse without a depth check
+        const TValue *elem = &h->array[i];
+        if (ttistable(elem) || !lsl_cast_value(L, elem, LSLIType::LST_STRING, true, neg_zero, false))
+            luaL_errorL(L, "non-LSL value in list");
+        luaYB_addvalue(L, strbuf);
+    }
+
+    luaYB_tostring(L, lua_gettop(L), true);
+    return 1;
 }
 
 int lsl_cast(lua_State *L)

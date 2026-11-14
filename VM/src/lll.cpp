@@ -393,45 +393,12 @@ static int ll_dumplist2string(lua_State *L)
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TSTRING);
     lua_settop(L, 2);
-    auto *h = hvalue(luaA_toobject(L, 1));
-    int len = luaH_getn(h);
 
-    if (len <= 0)
-    {
-        lua_pushstring(L, "");
-        return 1;
-    }
-
-    const char *sep = nullptr;
     size_t sep_size = 0;
-    sep = lua_tolstring(L, 2, &sep_size);
+    const char *sep = lua_tolstring(L, 2, &sep_size);
 
-    luaL_checkstack(L, 5, "list dump");
-
-    auto *strbuf = luaYB_push(L);
-    for(int i=0; i<len; ++i)
-    {
-        if (i != 0)
-        {
-            luaYB_appendmem(L, strbuf, sep, sep_size);
-        }
-
-        // Unlike (string)list_val, this doesn't keep negative zero.
-        lua_pushcfunction(L, lsl_cast_list_elem_poszero, "lsl_cast_list_elem_poszero");
-        luaA_pushvalue(L, &h->array[i]);
-        luaSL_pushinteger(L, LSLIType::LST_STRING);
-        lua_call(L, 2, 1);
-        // But we might have a type we don't understand in the list
-        if (lua_type(L, -1) == LUA_TNIL)
-            luaL_errorL(L, "non-LSL value in list");
-
-        luaYB_addvalue(L, strbuf);
-    }
-
-    // Atomically replace the string buffer on the stack with its new TString equivalent
-    lua_settop(L, 3);
-    luaYB_tostring(L, 3, true);
-    return 1;
+    // Unlike (string)list_val, this doesn't keep negative zero.
+    return lsl_list_to_string(L, hvalue(luaA_toobject(L, 1)), sep, sep_size, false);
 }
 
 static int ll_deletesublist(lua_State *L)

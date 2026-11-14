@@ -123,10 +123,13 @@ LUA_API YieldableStatus luaSL_may_interrupt(lua_State *L);
 LUA_API int luaSL_ismethodstyle(lua_State *L, int idx);
 
 typedef struct lua_TValue TValue;
+typedef struct LuaTable LuaTable;
 uint8_t lua_lsl_type(const TValue *tv);
 int lsl_cast(lua_State *L);
 int lsl_cast_list_elem(lua_State *L);
 int lsl_cast_list_elem_poszero(lua_State *L);
+/// Push the string form of every element of `h` joined by `sep`.
+int lsl_list_to_string(lua_State *L, LuaTable *h, const char *sep, size_t sep_len, bool neg_zero);
 
 void conj_quat(float *quat);
 void rot_vec(const float *vec, const float *rot, float *res);
