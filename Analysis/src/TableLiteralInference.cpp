@@ -15,6 +15,9 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/Unifier2.h"
 
+// ServerLua: std::abs(int), newer libc++ no longer pulls this in transitively
+#include <cstdlib>
+
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceBetterLambdaHandling)
 
 namespace Luau
