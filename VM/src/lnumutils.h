@@ -142,7 +142,15 @@ inline int luai_num2int_impl(double d)
         i = (unsigned int)l; \
     }
 #else
-#define luai_num2unsigned(i, n) ((i) = (unsigned)(long long)(n))
+// ServerLua: Safe float-to-unsigned with x86 semantics, out-of-range and NaN give 0
+inline unsigned luai_num2unsigned_safe(double d)
+{
+    constexpr double kMaxInt64 = 9223372036854775808.0; // 2^63
+    if (d >= -kMaxInt64 && d < kMaxInt64)
+        return (unsigned)(long long)d;
+    return 0;
+}
+#define luai_num2unsigned(i, n) ((i) = luai_num2unsigned_safe(n))
 #endif
 
 #define LUAI_MAXNUM2STR 48

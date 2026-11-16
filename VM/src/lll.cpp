@@ -630,7 +630,7 @@ static int ll_fabs(lua_State *L)
 static int ll_floor(lua_State *L)
 {
     auto val = floor((float)luaL_checknumber(L, 1));
-    luaSL_pushnativeinteger(L, (int32_t)val);
+    luaSL_pushnativeinteger(L, lsl_float_to_int(val));
     return 1;
 }
 
@@ -641,7 +641,7 @@ static int ll_ceil(lua_State *L)
     if (val != res)
         ++res;
 
-    luaSL_pushnativeinteger(L, (int32_t)res);
+    luaSL_pushnativeinteger(L, lsl_float_to_int(res));
     return 1;
 }
 
