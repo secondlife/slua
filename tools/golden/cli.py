@@ -298,6 +298,15 @@ def main(
         print(f"golden: error: {exc}", file=sys.stderr)
         return 2
 
+    # ServerLua: drop tests that can't run under a sanitizer build, going by the build directory
+    sanitizer_dirs = {"sanitize", "tsan"}
+    executable_dirs = set(executables.luau.resolve().parts) | set(executables.analyze.resolve().parts)
+    if sanitizer_dirs & executable_dirs:
+        skipped = [test.test_id for test in tests if test.directives.no_sanitize]
+        tests = [test for test in tests if not test.directives.no_sanitize]
+        if skipped:
+            print(f"golden: skipping {len(skipped)} no-sanitize test(s): {', '.join(skipped)}")
+
     print(f"luau: {executables.luau}")
     print(f"luau-analyze: {executables.analyze}")
 
@@ -311,4 +320,5 @@ def main(
         args.jobs,
         args.dump,
         fflags=args.fflags,
+        environ=actual_environ,
     )

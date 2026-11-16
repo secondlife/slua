@@ -104,45 +104,6 @@ inline bool luauF_trivial(int bfid)
     case LBF_MATH_ISNAN:
     case LBF_MATH_ISINF:
     case LBF_MATH_ISFINITE:
-    case LBF_INTEGER_CREATE:
-    case LBF_INTEGER_TONUMBER:
-    case LBF_INTEGER_NEG:
-    case LBF_INTEGER_ADD:
-    case LBF_INTEGER_SUB:
-    case LBF_INTEGER_MUL:
-    case LBF_INTEGER_DIV:
-    case LBF_INTEGER_MIN:
-    case LBF_INTEGER_MAX:
-    case LBF_INTEGER_REM:
-    case LBF_INTEGER_IDIV:
-    case LBF_INTEGER_UDIV:
-    case LBF_INTEGER_UREM:
-    case LBF_INTEGER_MOD:
-    case LBF_INTEGER_CLAMP:
-    case LBF_INTEGER_BAND:
-    case LBF_INTEGER_BOR:
-    case LBF_INTEGER_BNOT:
-    case LBF_INTEGER_BXOR:
-    case LBF_INTEGER_LT:
-    case LBF_INTEGER_LE:
-    case LBF_INTEGER_ULT:
-    case LBF_INTEGER_ULE:
-    case LBF_INTEGER_GT:
-    case LBF_INTEGER_GE:
-    case LBF_INTEGER_UGT:
-    case LBF_INTEGER_UGE:
-    case LBF_INTEGER_LSHIFT:
-    case LBF_INTEGER_RSHIFT:
-    case LBF_INTEGER_ARSHIFT:
-    case LBF_INTEGER_LROTATE:
-    case LBF_INTEGER_RROTATE:
-    case LBF_INTEGER_EXTRACT:
-    case LBF_INTEGER_BTEST:
-    case LBF_INTEGER_COUNTRZ:
-    case LBF_INTEGER_COUNTLZ:
-    case LBF_INTEGER_BSWAP:
-    case LBF_BUFFER_READINTEGER:
-    case LBF_BUFFER_WRITEINTEGER:
         return true;
     default:
         return false;

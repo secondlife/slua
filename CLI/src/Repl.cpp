@@ -57,6 +57,8 @@ constexpr int MaxTraversalLimit = 50;
 
 static bool codegen = false;
 static bool codegenCold = false;
+static bool codegenLazy = false;
+static bool dumpPromotion = false;
 
 static bool lsl = false;
 static bool sl = false;
@@ -256,7 +258,7 @@ void* createCliRequireContext(lua_State* L)
         coverageActive,
         []()
         {
-            return codegen;
+            return codegen && !codegenLazy;
         },
         coverageTrack,
         countersActive,
@@ -767,7 +769,54 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
             if (countersActive())
                 nativeOptions.recordCounters = true;
 
-            Luau::CodeGen::compile(L, -1, nativeOptions);
+            nativeOptions.runtimeFeedback = true;
+
+            if (dumpPromotion)
+            {
+                nativeOptions.runtimeBuildLog = [](void* context, const std::string& message)
+                {
+                    printf("[codegen] %s\n", message.c_str());
+                };
+
+                nativeOptions.runtimeBuildResult =
+                    [](void* context, const Luau::CodeGen::CompilationResult& result, const Luau::CodeGen::CompilationStats& stats)
+                {
+                    printf("[codegen] status %s, %zu proto(s) failed\n",
+                        Luau::CodeGen::toString(result.result).c_str(),
+                        result.protoFailures.size()
+                    );
+
+                    for (const Luau::CodeGen::ProtoCompilationFailure& failure : result.protoFailures)
+                    {
+                        printf(
+                            "[codegen] function '%s':%d failed: %s\n",
+                            failure.debugname.c_str(),
+                            failure.line,
+                            Luau::CodeGen::toString(failure.result).c_str()
+                        );
+                    }
+
+                    printf(
+                        "[codegen] bytecode %zu bytes, native %zu + %zu bytes, meta %zu bytes\n",
+                        stats.bytecodeSizeBytes,
+                        stats.nativeCodeSizeBytes,
+                        stats.nativeDataSizeBytes,
+                        stats.nativeMetadataSizeBytes
+                    );
+                    printf(
+                        "[codegen] %u function(s) total, %u compiled, %u bound in %.3fms\n",
+                        stats.functionsTotal,
+                        stats.functionsCompiled,
+                        stats.functionsBound,
+                        stats.compilationTimeSec * 1000.0
+                    );
+                };
+            }
+
+            Luau::CodeGen::enableRuntimeCompilation(L, nativeOptions, codegenLazy);
+
+            if (!codegenLazy)
+                Luau::CodeGen::compile(L, -1, nativeOptions);
         }
 
         if (coverageActive())
@@ -837,6 +886,8 @@ static void displayHelp(const char* argv0)
     printf("  --sl: run REPL with SL semantics\n");
     printf("  --codegen: execute code using native code generation\n");
     printf("  --codegen-cold: execute code using native code generation, including any functions deemed not profitable to natively compile\n");
+    printf("  --codegen-lazy: execute code in the VM and compile hot functions to native automatically\n");
+    printf("  --dump-promotion: print runtime promotion and recompilation logs when codegen is enabled\n");
     printf("  --codegen-perf: execute code using native code generation and profile using perf (only on Linux)\n");
     printf("  --program-args,-a: declare start of arguments to be passed to the Luau program\n");
     printf("  --fflags=<flags>: comma-separated list of fast flags to enable/disable (--fflags=true,false,LuauFlag1=true,LuauFlag2=false).\n");
@@ -912,10 +963,19 @@ int replMain(int argc, char** argv)
             codegen = true;
             codegenCold = true;
         }
+        else if (strcmp(argv[i], "--codegen-lazy") == 0)
+        {
+            codegen = true;
+            codegenLazy = true;
+        }
         else if (strcmp(argv[i], "--codegen-perf") == 0)
         {
             codegen = true;
             codegenPerf = true;
+        }
+        else if (strcmp(argv[i], "--dump-promotion") == 0)
+        {
+            dumpPromotion = true;
         }
         else if (strcmp(argv[i], "--coverage") == 0)
         {

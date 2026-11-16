@@ -93,8 +93,6 @@ static Constant ctype(const Constant& c)
     case Constant::Type_Number:
         return cstring("number");
 
-    case Constant::Type_Integer:
-        return cstring("integer");
 
     case Constant::Type_Vectorf:
     case Constant::Type_Vectord:
@@ -124,8 +122,6 @@ static Constant ctypeof(const Constant& c)
     case Constant::Type_Number:
         return cstring("number");
 
-    case Constant::Type_Integer:
-        return cstring("integer");
 
     case Constant::Type_Vectorf:
     case Constant::Type_Vectord:
@@ -143,7 +139,20 @@ static Constant ctypeof(const Constant& c)
 static uint32_t bit32(double v)
 {
     // convert through signed 64-bit integer to match runtime behavior and gracefully truncate negative integers
-    return uint32_t(int64_t(v));
+    // ServerLua: must match luai_num2unsigned_safe, out-of-range and NaN give 0
+    constexpr double kMaxInt64 = 9223372036854775808.0; // 2^63
+    if (v >= -kMaxInt64 && v < kMaxInt64)
+        return uint32_t(int64_t(v));
+    return 0;
+}
+
+// ServerLua: defined float-to-int for shift counts and field positions, out-of-range and NaN give INT_MIN
+static int bitcount(double v)
+{
+    constexpr double kMaxInt = 2147483648.0; // 2^31
+    if (v >= -kMaxInt && v < kMaxInt)
+        return int(v);
+    return int(-kMaxInt);
 }
 
 Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, size_t count, bool vectorDoublePrecision)
@@ -315,7 +324,7 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            int s = bitcount(args[1].valueNumber); // ServerLua
 
             if (unsigned(s) < 32)
                 return cnum(double(uint32_t(int32_t(u) >> s)));
@@ -400,8 +409,9 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
             (count == 2 || args[2].type == Constant::Type_Number))
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int f = int(args[1].valueNumber);
-            int w = count == 2 ? 1 : int(args[2].valueNumber);
+            // ServerLua: defined float-to-int conversion
+            int f = bitcount(args[1].valueNumber);
+            int w = count == 2 ? 1 : bitcount(args[2].valueNumber);
 
             if (f >= 0 && w > 0 && f + w <= 32)
             {
@@ -416,9 +426,9 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            int s = bitcount(args[1].valueNumber); // ServerLua
 
-            return cnum(double((u << (s & 31)) | (u >> ((32 - s) & 31))));
+            return cnum(double((u << (s & 31)) | (u >> ((32u - unsigned(s)) & 31)))); // ServerLua
         }
         break;
 
@@ -426,7 +436,7 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            int s = bitcount(args[1].valueNumber); // ServerLua
 
             if (unsigned(s) < 32)
                 return cnum(double(u << s));
@@ -439,8 +449,9 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         {
             uint32_t n = bit32(args[0].valueNumber);
             uint32_t v = bit32(args[1].valueNumber);
-            int f = int(args[2].valueNumber);
-            int w = count == 3 ? 1 : int(args[3].valueNumber);
+            // ServerLua: defined float-to-int conversion
+            int f = bitcount(args[2].valueNumber);
+            int w = count == 3 ? 1 : bitcount(args[3].valueNumber);
 
             if (f >= 0 && w > 0 && f + w <= 32)
             {
@@ -455,9 +466,9 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            int s = bitcount(args[1].valueNumber); // ServerLua
 
-            return cnum(double((u >> (s & 31)) | (u << ((32 - s) & 31))));
+            return cnum(double((u >> (s & 31)) | (u << ((32u - unsigned(s)) & 31)))); // ServerLua
         }
         break;
 
@@ -465,7 +476,7 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            int s = bitcount(args[1].valueNumber); // ServerLua
 
             if (unsigned(s) < 32)
                 return cnum(double(u >> s));

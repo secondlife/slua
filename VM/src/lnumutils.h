@@ -16,6 +16,7 @@
 #define luai_numeq(a, b) ((a) == (b))
 #define luai_numlt(a, b) ((a) < (b))
 #define luai_numle(a, b) ((a) <= (b))
+// ServerLua: integer support
 #define luai_inteq(a, b) ((a) == (b))
 
 inline bool luai_veceq(const float* a, const float* b)
@@ -123,8 +124,6 @@ inline int luai_num2int_impl(double d)
 #define luai_num2int(i, d) ((i) = (int)(d))
 #endif
 
-#define luai_num2long(i, d) ((i) = (int64_t)(d))
-
 #define luai_fabs condvectordouble(fabs, fabsf)
 #define luai_sqrt condvectordouble(sqrt, sqrtf)
 #define luai_floor condvectordouble(floor, floorf)
@@ -143,13 +142,23 @@ inline int luai_num2int_impl(double d)
         i = (unsigned int)l; \
     }
 #else
-#define luai_num2unsigned(i, n) ((i) = (unsigned)(long long)(n))
+// ServerLua: Safe float-to-unsigned with x86 semantics, out-of-range and NaN give 0
+inline unsigned luai_num2unsigned_safe(double d)
+{
+    constexpr double kMaxInt64 = 9223372036854775808.0; // 2^63
+    if (d >= -kMaxInt64 && d < kMaxInt64)
+        return (unsigned)(long long)d;
+    return 0;
+}
+#define luai_num2unsigned(i, n) ((i) = luai_num2unsigned_safe(n))
 #endif
 
 #define LUAI_MAXNUM2STR 48
+// ServerLua: integer support
 #define LUAI_MAXINT2STR 30
 
 LUAI_FUNC char* luai_num2str(char* buf, double n);
+// ServerLua: integer support
 LUAI_FUNC char* luai_int2str(char* buf, int64_t n);
 
 // ServerLua: Formats a single float to a string buffer, normalizing non-finite values (nan/inf/-inf)
@@ -160,4 +169,3 @@ LUAI_FUNC int luai_formatfloat(char* buf, size_t bufsize, const char* format, fl
 LUAI_FUNC int luai_trimfloat(char* buf, int len);
 
 #define luai_str2num(s, p) strtod((s), (p))
-#define luai_str2long(s, p, base) strtoll((s), (p), base)

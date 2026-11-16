@@ -497,21 +497,25 @@ static inline bool ares_type_is_tvalue(AresType type) {
  * parameters when it goes out of scope. Also withdraws `beforeallocate`, which
  * would otherwise be asked to measure a tree that isn't rooted yet.
  */
-struct ScopedDisableGC {
-    explicit ScopedDisableGC(lua_State *L):
+struct ScopedAresDisableGC {
+    explicit ScopedAresDisableGC(lua_State *L):
             state(L), threshold(L->global->GCthreshold),
+            gcdisabled(L->global->gcdisabled),
             beforealloc(L->global->cb.beforeallocate) {
         state->global->GCthreshold = SIZE_MAX;
+        state->global->gcdisabled = 1;
         state->global->cb.beforeallocate = nullptr;
     };
 
-    ~ScopedDisableGC() {
+    ~ScopedAresDisableGC() {
         state->global->GCthreshold = threshold;
+        state->global->gcdisabled = gcdisabled;
         state->global->cb.beforeallocate = beforealloc;
     }
 
     lua_State *state;
     size_t threshold;
+    uint8_t gcdisabled;
     int (*beforealloc)(lua_State *, size_t, size_t);
 };
 
@@ -2195,6 +2199,11 @@ p_proto(Info *info) {                                            /* ... proto */
   // this VM generated at runtime.
   if (p->deoptimized != nullptr) {
     eris_error(info, "cannot persist an inlined proto");
+  }
+
+  // A `luau_loadlazy()` stub has no body yet, and we never load that way
+  if (p->lazychunk != nullptr) {
+    eris_error(info, "cannot persist a lazily loaded proto");
   }
 
   info->anyProtoNative |= p->execdata != nullptr;
@@ -4167,7 +4176,7 @@ void eris_register_perms(lua_State *L, bool for_unpersist) {
 static void
 unchecked_persist(lua_State *L, std::ostream *writer) {
   // pause GC for the duration of serialization - some objects we're creating aren't rooted
-  ScopedDisableGC _disable_gc(L);
+  ScopedAresDisableGC _disable_gc(L);
 
   eris_ifassert(int old_top=lua_gettop(L));
   Info info;                                            /* perms buff rootobj */
@@ -4274,7 +4283,7 @@ unchecked_persist(lua_State *L, std::ostream *writer) {
 static void
 unchecked_unpersist(lua_State *L, const char *data, size_t size, void *threaddata) {/* perms str? */
   // pause GC for the duration of deserialization - some objects we're creating aren't rooted
-  ScopedDisableGC _disable_gc(L);
+  ScopedAresDisableGC _disable_gc(L);
 
   eris_ifassert(int old_top = lua_gettop(L));
   Info info;

@@ -4,6 +4,7 @@
 
 #include "lua.h"
 #include "lcommon.h"
+#include "lbytecode.h"
 
 /*
 ** Union of all collectible objects
@@ -35,6 +36,7 @@ typedef union
     void* p;
     double n;
     int b;
+    // ServerLua: integer support
     int64_t l;
     float v[2]; // v[0], v[1] live here; v[2] lives in TValue::extra
 } Value;
@@ -65,6 +67,7 @@ typedef struct lua_TValue
 // Macros to test type
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
 #define ttisnumber(o) (ttype(o) == LUA_TNUMBER)
+// ServerLua: integer support
 #define ttisinteger(o) (ttype(o) == LUA_TINTEGER)
 #define ttisstring(o) (ttype(o) == LUA_TSTRING)
 #define ttistable(o) (ttype(o) == LUA_TTABLE)
@@ -84,6 +87,7 @@ typedef struct lua_TValue
 #define gcvalue(o) check_exp(iscollectable(o), (o)->value.gc)
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
+// ServerLua: integer support
 #define lvalue(o) check_exp(ttisinteger(o), (o)->value.l)
 #define vvalue(o) check_exp(ttisvector(o), condvectordouble((o)->value.gc->vec.v, (o)->value.v))
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
@@ -136,6 +140,7 @@ typedef struct lua_TValue
         i_o->tt = LUA_TNUMBER; \
     }
 
+// ServerLua: integer support
 #define setlvalue(obj, x) \
     { \
         TValue* i_o = (obj); \
@@ -332,7 +337,6 @@ typedef struct TString
     char data[1]; // string data is allocated right after the header
 } TString;
 
-
 #define getstr(ts) (ts)->data
 #define svalue(o) getstr(tsvalue(o))
 
@@ -403,6 +407,12 @@ struct FeedbackVectorSlot
     };
 };
 
+enum ProtoExecFlag
+{
+    PEF_EXECLOCKED = 1 << 0,  // function will no longer be examined by custom execution
+    PEF_DEBUGLOCKED = 1 << 1, // bytecode can have breakpoints in it
+};
+
 /*
 ** Function Prototypes
 */
@@ -424,6 +434,9 @@ typedef struct Proto
 
     void* execdata;
     uintptr_t exectarget;
+
+    uint32_t execcount;
+    uint8_t execflags;
 
     uint8_t* lineinfo;      // for each instruction, line number as a delta from baseline
     int* abslineinfo;       // baseline line info, one entry for each 1<<linegaplog2 instructions; allocated after lineinfo
@@ -463,8 +476,37 @@ typedef struct Proto
     Proto* optimized;
     Proto* deoptimized;
     uint64_t cost;
+
+    // Set while the proto is a lazy-load stub (luau_loadlazy)
+    struct LuauLazyChunk* lazychunk;
 } Proto;
 // clang-format on
+
+static const uint32_t userdataTypeLimit = LBC_TYPE_TAGGED_USERDATA_END - LBC_TYPE_TAGGED_USERDATA_BASE;
+
+// The bytecode of a luau_loadlazy chunk, shared by all of its stubs
+typedef struct LuauLazyChunk
+{
+    const char* data;
+    size_t size;
+    void* owner;
+    void (*release)(void* owner);
+
+    uint32_t refs; // the load, every stub and every build in progress
+
+    struct LuaTable* envt;
+    struct LuaTable* importenv;
+
+    uint8_t memcat;
+    uint8_t version;
+    uint8_t typesversion;
+    uint8_t userdataRemapping[userdataTypeLimit];
+
+    uint32_t* stringOffsets; // offset of each string's length
+    uint32_t stringCount;
+    uint32_t* protoOffsets; // offset of each function's maxstacksize byte
+    uint32_t protoCount;
+} LuauLazyChunk;
 
 typedef struct LocVar
 {
@@ -631,14 +673,17 @@ typedef struct LuauClass
     // The superclass of this class. NULL if this class doesn't inherit.
     LuauClass* super;
 
-    // Mapping from offset to static members (only methods for now).
+    // Mapping from offset to static members (only methods for now). Private members at the end.
     TValue* staticmembers;
+    // We store a pointer to the private static members separately as an optimization to avoid computing an overall offset into static members.
+    TValue* privatestaticmembers;
 
-    // Mapping from member name to offset.
+    // Mapping from public member name to offset.
     // For static members, subtracting numberofinstancemembers from the offset gives the actual index into staticmembers.
     LuaTable* memberstooffset;
 
-    // Mapping from offset to member name. Instance member offsets are stored before static member offsets.
+    // Mapping from offset to member name. Instance member offsets are stored before static member offsets. Offsets corresponding to private
+    // fields are NULL, and there are no entries for private static members.
     TString** offsettomember;
 
     // Metatable for this *class object*. At time of writing this only contains __call
@@ -648,19 +693,23 @@ typedef struct LuauClass
     // is added via luaR_addclassmember.
     LuaTable* instancemetatable;
 
-    // Number of instance members that we expect instances of this class object
-    // to have.
+    // Number of public and private instance members that we expect instances of this class object to have.
     uint32_t numberofinstancemembers;
 
-    // Total number of members that we expect this class object to have between
-    // instance and static members.
+    // Total number of members that we expect this class object to have between instance and static members.
     //
     // We store this number as an optimization. It's pretty rare that we need
     // to reference the specific number of static members, but it's very common
     // to reference the total number of members (for validating hot paths in
     // the interpreter) and the number of instance members (branching on
     // instance or static members, creating class instances).
-    uint32_t numberofallmembers;
+    uint32_t numberofmembers;
+
+    uint32_t numberofprivatefields;
+    // If this class inherits, its ancestors' private fields come before this class's, so we track where its own private fields start.
+    uint32_t ownprivatefieldsstart;
+
+    uint8_t numberofprivatestaticmembers;
 
     // Can this class be extended?
     bool isopen;
@@ -681,14 +730,13 @@ typedef struct LuauObject
     // The class object that this value is an instance of.
     LuauClass* lclass;
 
-    // The number of members that this instance contains. We need this in order
-    // to free ourselves if we got swept in the same GC cycle as our class
+    // The number of members that this instance contains. We need these in order to free ourselves if we get swept in the same GC cycle as our class
     // pointer.
     uint32_t numberofmembers;
 
-    // The fields of this instance.
+    // The fields of this instance. Members are ordered according to inheritance chain, with base classes coming first. For each class, public members
+    // come first, then privates.
     TValue* members;
-
 } LuauObject;
 
 /*
@@ -721,7 +769,6 @@ LUAU_FORCEINLINE int luaO_growthcap(int grown, int required, int slack)
 LUAI_FUNC int luaO_rawequalObj(const TValue* t1, const TValue* t2);
 LUAI_FUNC int luaO_rawequalKey(const TKey* t1, const TValue* t2);
 LUAI_FUNC int luaO_str2d(const char* s, double* result);
-LUAI_FUNC int luaO_str2l(const char* s, int64_t* result, int base = 10);
 LUAI_FUNC const char* luaO_pushvfstring(lua_State* L, const char* fmt, va_list argp);
 LUAI_FUNC const char* luaO_pushfstring(lua_State* L, const char* fmt, ...);
 LUAI_FUNC const char* luaO_chunkid(char* buf, size_t buflen, const char* source, size_t srclen);

@@ -17,10 +17,9 @@
 // limit for table tag-method chains (to avoid loops)
 #define MAXTAGLOOP 100
 
-LUAU_FASTFLAG(LuauFrozenMetaButterfly)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAG(LuauPromoteProto)
-LUAU_FASTFLAGVARIABLE(LuauCallLuauTm)
+LUAU_FASTFLAG(LuauRuntimeFeedback)
 
 // ServerLua: we add an L parameter for an interrupt check before coercing large strings
 #define LUAI_LONGNUMERAL 32
@@ -72,6 +71,9 @@ static LUAU_FORCEINLINE void callTMluau(lua_State* L, StkId top, Closure* ccl, i
     ptrdiff_t funcoffset = savestack(L, top);
     Proto* p = getproto(ccl);
 
+    if (FFlag::LuauRuntimeFeedback)
+        p->execcount++;
+
     CallInfo* ci = incr_ci(L);
     ci->func = top;
     ci->p = p;
@@ -113,45 +115,29 @@ static StkId callTMres(lua_State* L, StkId res, const TValue* f, const TValue* p
     // * we cannot use savestack/restorestack because the arguments are sometimes on the C++ stack
     // * during stack reallocation all of the allocated stack is copied (even beyond stack_last) so these
     // values will be preserved even if they go past stack_last
-    if (FFlag::LuauCallLuauTm)
+    StkId top = L->top;
+    LUAU_ASSERT((top + 3) < (L->stack + L->stacksize));
+    setobj2s(L, top, f);      // push function
+    setobj2s(L, top + 1, p1); // 1st argument
+    setobj2s(L, top + 2, p2); // 2nd argument
+
+    // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
+    luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
+
+    // fast-path for Luau to Luau calls
+    if (L->isactive && isLua(L->ci) && ttisfunction(top) && !clvalue(top)->isC)
     {
-        StkId top = L->top;
-        LUAU_ASSERT((top + 3) < (L->stack + L->stacksize));
-        setobj2s(L, top, f);      // push function
-        setobj2s(L, top + 1, p1); // 1st argument
-        setobj2s(L, top + 2, p2); // 2nd argument
-
-        // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-        luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
-
-        // fast-path for Luau to Luau calls
-        if (L->isactive && isLua(L->ci) && ttisfunction(top) && !clvalue(top)->isC)
-        {
-            L->top += 3;
-            callTMluau(L, top, clvalue(top), 1);
-        }
-        else
-        {
-            luaD_checkstack(L, 3);
-            StkId func = L->top;
-            L->top += 3;
-            // ServerLua: `lua_gettable()` and friends must not think they're yieldable when
-            // the caller happens to be a C function with a continuation
-            luaD_callny(L, func, 1);
-        }
+        L->top += 3;
+        callTMluau(L, top, clvalue(top), 1);
     }
     else
     {
-        LUAU_ASSERT((L->top + 3) < (L->stack + L->stacksize));
-        setobj2s(L, L->top, f);      // push function
-        setobj2s(L, L->top + 1, p1); // 1st argument
-        setobj2s(L, L->top + 2, p2); // 2nd argument
         luaD_checkstack(L, 3);
+        StkId func = L->top;
         L->top += 3;
-        // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-        luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
-        // ServerLua: same yield guard as above
-        luaD_callny(L, L->top - 3, 1);
+        // ServerLua: `lua_gettable()` and friends must not think they're yieldable when
+        // the caller happens to be a C function with a continuation
+        luaD_callny(L, func, 1);
     }
 
     res = restorestack(L, result);
@@ -170,46 +156,29 @@ static LUAU_NOINLINE void callTM(lua_State* L, const TValue* f, const TValue* p1
     // * we cannot use savestack/restorestack because the arguments are sometimes on the C++ stack
     // * during stack reallocation all of the allocated stack is copied (even beyond stack_last) so these
     // values will be preserved even if they go past stack_last
-    if (FFlag::LuauCallLuauTm)
+    StkId top = L->top;
+    LUAU_ASSERT((top + 4) < (L->stack + L->stacksize));
+    setobj2s(L, top, f);      // push function
+    setobj2s(L, top + 1, p1); // 1st argument
+    setobj2s(L, top + 2, p2); // 2nd argument
+    setobj2s(L, top + 3, p3); // 3th argument
+
+    // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
+    luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
+
+    // fast-path for Luau to Luau calls
+    if (L->isactive && isLua(L->ci) && ttisfunction(top) && !clvalue(top)->isC)
     {
-        StkId top = L->top;
-        LUAU_ASSERT((top + 4) < (L->stack + L->stacksize));
-        setobj2s(L, top, f);      // push function
-        setobj2s(L, top + 1, p1); // 1st argument
-        setobj2s(L, top + 2, p2); // 2nd argument
-        setobj2s(L, top + 3, p3); // 3th argument
-
-        // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-        luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
-
-        // fast-path for Luau to Luau calls
-        if (L->isactive && isLua(L->ci) && ttisfunction(top) && !clvalue(top)->isC)
-        {
-            L->top += 4;
-            callTMluau(L, top, clvalue(top), 0);
-        }
-        else
-        {
-            luaD_checkstack(L, 4);
-            StkId func = L->top;
-            L->top += 4;
-            // ServerLua: same yield guard as in callTMres
-            luaD_callny(L, func, 0);
-        }
+        L->top += 4;
+        callTMluau(L, top, clvalue(top), 0);
     }
     else
     {
-        LUAU_ASSERT((L->top + 4) < (L->stack + L->stacksize));
-        setobj2s(L, L->top, f);      // push function
-        setobj2s(L, L->top + 1, p1); // 1st argument
-        setobj2s(L, L->top + 2, p2); // 2nd argument
-        setobj2s(L, L->top + 3, p3); // 3th argument
         luaD_checkstack(L, 4);
+        StkId func = L->top;
         L->top += 4;
-        // ServerLua: Check for interrupt to allow pre-emptive abort before calling metamethod
-        luau_callinterrupthandler(L, LUA_INTERRUPT_METAMETHOD);
         // ServerLua: same yield guard as in callTMres
-        luaD_callny(L, L->top - 4, 0);
+        luaD_callny(L, func, 0);
     }
 }
 
@@ -228,34 +197,20 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
             if (res != luaO_nilobject)
                 L->cachedslot = gval2slot(h, res); // remember slot to accelerate future lookups
 
-            if (FFlag::LuauFrozenMetaButterfly)
+            if (LUAU_LIKELY(!ttisnil(res)))
             {
-                if (LUAU_LIKELY(!ttisnil(res)))
-                {
-                    setobj2s(L, val, res);
-                    // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
-                    hardstacktests_tm_realloc(L);
-                    return;
-                }
-
-                if ((tm = fasttm(L, h->metatable, TM_INDEX)) == NULL)
-                {
-                    setnilvalue(val);
-                    // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
-                    hardstacktests_tm_realloc(L);
-                    return;
-                }
+                setobj2s(L, val, res);
+                // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+                hardstacktests_tm_realloc(L);
+                return;
             }
-            else
+
+            if ((tm = fasttm(L, h->metatable, TM_INDEX)) == NULL)
             {
-                if (!ttisnil(res) // result is no nil?
-                    || (tm = fasttm(L, h->metatable, TM_INDEX)) == NULL)
-                { // or no TM?
-                    setobj2s(L, val, res);
-                    // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
-                    hardstacktests_tm_realloc(L);
-                    return;
-                }
+                setnilvalue(val);
+                // ServerLua: force stack realloc so callers with stale StkId are caught by ASAN
+                hardstacktests_tm_realloc(L);
+                return;
             }
 
             // t isn't a table, so see if it has an INDEX meta-method to look up the key with
@@ -285,7 +240,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 luaG_missingmembererror(L, t, key);
 
             const uint32_t offset = uint32_t(nvalue(res));
-            LUAU_ASSERT(offset < lco->numberofallmembers);
+            LUAU_ASSERT(offset < lco->numberofmembers);
 
             // This is the case where we try to access an instance member on a
             // class object, for example:
@@ -355,7 +310,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
             if (ttisnil(offset))
                 luaG_missingmembererror(L, t, key);
             const uint32_t offsetnum = uint32_t(nvalue(offset));
-            LUAU_ASSERT(offsetnum < inst->lclass->numberofallmembers);
+            LUAU_ASSERT(offsetnum < inst->lclass->numberofmembers);
             if (offsetnum >= inst->lclass->numberofinstancemembers)
                 luaG_indexerror(L, t, key);
             setobj2class(L, &inst->members[offsetnum], val);
@@ -512,6 +467,7 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
         hardstacktests_tm_realloc(L);
         return result;
     }
+    // ServerLua: integer support
     case LUA_TINTEGER:
     {
         int result = luai_inteq(lvalue(t1), lvalue(t2));

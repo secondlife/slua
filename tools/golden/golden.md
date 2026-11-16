@@ -192,6 +192,15 @@ both be enabled for the test's execution. Since the syntax of fflag definitions 
 comma-separation, scoped fast flags must be defined with their own directive, and cannot be combined
 like we did earlier. Only one `fflags=` directive is allowed per test.
 
+ServerLua: a test that can't run under a sanitizer build can say so with its own directive:
+
+```luau
+--!golden no-sanitize
+```
+
+Such tests are skipped when either executable resolves to a path under a `sanitize` or `tsan`
+build directory.
+
 ## The Syntax of Directives
 
 The full grammar for directives takes a comma-separated list of `key: value` assignments, except

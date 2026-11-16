@@ -99,11 +99,17 @@ static int b_not(lua_State* L)
     return 1;
 }
 
+// ServerLua: negate a shift count without overflowing on INT_MIN, any magnitude past NBITS shifts everything out anyway
+static int negshift(int i)
+{
+    return i < -NBITS ? NBITS : -i;
+}
+
 static int b_shift(lua_State* L, b_uint r, int i)
 {
     if (i < 0)
     { // shift right?
-        i = -i;
+        i = negshift(i); // ServerLua
         r = trim(r);
         if (i >= NBITS)
             r = 0;
@@ -129,7 +135,7 @@ static int b_lshift(lua_State* L)
 
 static int b_rshift(lua_State* L)
 {
-    return b_shift(L, luaL_checkunsigned(L, 1), -luaL_checkinteger(L, 2));
+    return b_shift(L, luaL_checkunsigned(L, 1), negshift(luaL_checkinteger(L, 2))); // ServerLua
 }
 
 static int b_arshift(lua_State* L)
@@ -137,7 +143,7 @@ static int b_arshift(lua_State* L)
     b_uint r = luaL_checkunsigned(L, 1);
     int i = luaL_checkinteger(L, 2);
     if (i < 0 || !(r & ((b_uint)1 << (NBITS - 1))))
-        return b_shift(L, r, -i);
+        return b_shift(L, r, negshift(i)); // ServerLua
     else
     { // arithmetic shift for 'negative' number
         if (i >= NBITS)
@@ -167,7 +173,8 @@ static int b_lrot(lua_State* L)
 
 static int b_rrot(lua_State* L)
 {
-    return b_rot(L, -luaL_checkinteger(L, 2));
+    // ServerLua: negate in unsigned so INT_MIN doesn't overflow, b_rot only uses the low bits
+    return b_rot(L, int(0u - unsigned(luaL_checkinteger(L, 2))));
 }
 
 /*

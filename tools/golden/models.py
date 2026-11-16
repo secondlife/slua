@@ -69,6 +69,8 @@ class DirectiveSpec:
     config_status: dict[str, str] = field(default_factory=dict)
     regexes: dict[tuple[str | None, str], list[RegexExpectation]] = field(default_factory=dict)
     fflags: str | None = None
+    # ServerLua: skipped when the executables are sanitizer builds
+    no_sanitize: bool = False
 
     def status_for(self, config: str) -> str | None:
         return self.config_status.get(config, self.global_status)

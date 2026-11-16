@@ -10,6 +10,7 @@
 #include "ltable.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lclass.h"
 #include "llsl.h"
 #include "lstrbuf.h"
 
@@ -226,6 +227,9 @@ static void traversethread(ReachableContext* ctx, lua_State* th)
 
 static void traverseproto(ReachableContext* ctx, Proto* p)
 {
+    // We never use `luau_loadlazy()`, so the chunk and its tables aren't walked
+    LUAU_ASSERT(!p->lazychunk);
+
     // Traverse source string
     enqueueref(ctx, p->source);
 
@@ -266,10 +270,10 @@ static void traverseclass(ReachableContext* ctx, LuauClass* lco)
     enqueueref(ctx, lco->super);
     enqueueref(ctx, lco->memberstooffset);
 
-    for (uint32_t i = 0; i < lco->numberofallmembers; ++i)
+    for (uint32_t i = 0; i < luaR_offsettomemberlength(lco); ++i)
         enqueueref(ctx, lco->offsettomember[i]);
 
-    uint32_t numberofstaticmembers = lco->numberofallmembers - lco->numberofinstancemembers;
+    uint32_t numberofstaticmembers = luaR_numstaticmembers(lco);
     for (uint32_t i = 0; i < numberofstaticmembers; ++i)
     {
         if (iscollectable(&lco->staticmembers[i]))
@@ -383,8 +387,8 @@ static size_t calctruegcosize(GCObject *obj)
     {
         LuauClass* lco = gco2class(obj);
         return sizeof(LuauClass) +
-               ((lco->numberofallmembers - lco->numberofinstancemembers) * sizeof(TValue)) +
-               (lco->numberofallmembers * sizeof(TString*));
+               (luaR_numstaticmembers(lco) * sizeof(TValue)) +
+               (luaR_offsettomemberlength(lco) * sizeof(TString*));
     }
     case LUA_TOBJECT:
         return sizeof(LuauObject) + (gco2object(obj)->numberofmembers * sizeof(TValue));
@@ -497,8 +501,8 @@ size_t luaC_calclogicalgcosize(GCObject *obj)
     {
         LuauClass* lco = gco2class(obj);
         return BASE_CLASS_COST +
-               ((lco->numberofallmembers - lco->numberofinstancemembers) * TVALUE_COST) +
-               (lco->numberofallmembers * POINTER_COST);
+               (luaR_numstaticmembers(lco) * TVALUE_COST) +
+               (luaR_offsettomemberlength(lco) * POINTER_COST);
     }
     case LUA_TOBJECT:
         return BASE_OBJECT_COST + (gco2object(obj)->numberofmembers * TVALUE_COST);
