@@ -2947,15 +2947,16 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor non-string error object at the memory
     TestScript ts((std::string(R"(
         -- Presized so the fine fill below never resizes it
         fine = table.create(512)
-    )") + kFillToLimit + R"(
         -- Fresh short strings until one no longer fits, leaving less slack than
         -- the error object's string form needs. The closure stays reachable so
-        -- its death can't hand that slack back.
+        -- its death can't hand that slack back, and it's made before the coarse
+        -- fill so nothing at top level allocates once we're at the limit.
         fine_fill = function()
             for i = 1, 512 do
                 fine[i] = tostring(i + 100000)
             end
         end
+    )") + kFillToLimit + R"(
         pcall(fine_fill)
         -- Level 0, so error() doesn't stringify it with a position prefix
         error(1 / 3, 0)
@@ -2964,6 +2965,7 @@ TEST_CASE_FIXTURE(SLuaFixture, "SLExecutor non-string error object at the memory
     Script& exec = ts.exec;
 
     resume(exec, 1.0, HandlerRunStatus::Fault);
+    INFO(exec.getExtendedFaultString());
     CHECK(exec.getFaultKind() == FaultKind::Runtime);
     CHECK(exec.getExtendedFaultString().find("number") != std::string::npos);
     CHECK_FALSE(exec.isHandlerActive());

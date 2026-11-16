@@ -233,21 +233,9 @@ int luaL_checkinteger(lua_State* L, int narg)
     return d;
 }
 
-int64_t luaL_checkinteger64(lua_State* L, int narg)
-{
-    if (!lua_isinteger64(L, narg))
-        tag_error(L, narg, LUA_TINTEGER);
-    return lua_tointeger64(L, narg, nullptr);
-}
-
 int luaL_optinteger(lua_State* L, int narg, int def)
 {
     return luaL_opt(L, luaL_checkinteger, narg, def);
-}
-
-int64_t luaL_optinteger64(lua_State* L, int narg, int64_t def)
-{
-    return luaL_opt(L, luaL_checkinteger64, narg, def);
 }
 
 unsigned luaL_checkunsigned(lua_State* L, int narg)
@@ -616,6 +604,7 @@ void luaL_addvalueany(luaL_Strbuf* B, int idx)
         luaL_addlstring(B, s, len);
         break;
     }
+    // ServerLua: integer support
     case LUA_TINTEGER:
     {
         int64_t n = lua_tointeger64(L, idx, nullptr);
@@ -715,6 +704,7 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TSTRING:
         lua_pushvalue(L, idx);
         break;
+    // ServerLua: integer support
     case LUA_TINTEGER:
     {
         int64_t l = lua_tointeger64(L, idx, nullptr);

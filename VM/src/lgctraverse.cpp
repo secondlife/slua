@@ -227,6 +227,9 @@ static void traversethread(ReachableContext* ctx, lua_State* th)
 
 static void traverseproto(ReachableContext* ctx, Proto* p)
 {
+    // We never use `luau_loadlazy()`, so the chunk and its tables aren't walked
+    LUAU_ASSERT(!p->lazychunk);
+
     // Traverse source string
     enqueueref(ctx, p->source);
 

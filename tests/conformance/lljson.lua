@@ -10,9 +10,9 @@ assert(lljson.encode(setmetatable({}, lljson.array_mt)) == "[]")
 assert(lljson.encode(lljson.empty_array) == "[]")
 assert(lljson.encode(lljson.empty_object) == "{}")
 assert(lljson.encode({1}) == "[1]")
-assert(lljson.encode({integer.create(1)}) == "[1]")
-assert(lljson.encode(integer.maxsigned) == "9223372036854775807")
-assert(lljson.encode(integer.minsigned) == "-9223372036854775808")
+-- Integers aren't a Lua-facing type, lljson doesn't know them
+assert(not pcall(lljson.encode, integer(1)))
+assert(not pcall(lljson.encode, {integer(1)}))
 assert(lljson.encode(true) == "true")
 assert(lljson.encode({"foo"}) == '["foo"]')
 -- UUIDs are basically just strings, encode them as such.
@@ -158,12 +158,11 @@ assert(lljson.slencode("!") == '"!!"')
 -- Normal strings are unchanged
 assert(lljson.slencode("normal") == '"normal"')
 
-assert(lljson.slencode(1i) == '"!i1"')
-assert(lljson.slencode({[1i]=1i}) == '{"!i1":"!i1"}')
-assert(lljson.slencode(integer.maxsigned) == '"!i9223372036854775807"')
-assert(lljson.slencode(integer.minsigned) == '"!i-9223372036854775808"')
-assert(lljson.sldecode(lljson.slencode(integer.maxsigned)) == integer.maxsigned)
-assert(lljson.sldecode(lljson.slencode(integer.minsigned)) == integer.minsigned)
+assert(not pcall(lljson.slencode, integer(1)))
+assert(not pcall(lljson.slencode, {[integer(1)]=1}))
+-- `!i` is no longer a known tag
+assert(not pcall(lljson.sldecode, '"!i1"'))
+assert(not pcall(lljson.sldecode, '{"!i1":1}'))
 
 -- Tagged decoding of values
 assert(lljson.sldecode('"!v<1,2,3>"') == vector(1, 2, 3))
@@ -610,7 +609,7 @@ assert(
 )
 
 -- Not allowed to use integers as table keys in untagged mode.
-assert(not pcall(lljson.encode, {[1i]=1}))
+assert(not pcall(lljson.encode, {[integer(1)]=1}))
 
 -- Enable interrupt-driven yields for remaining tests.
 enable_check_interrupt()

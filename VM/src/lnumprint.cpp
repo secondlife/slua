@@ -419,6 +419,7 @@ int luai_formatfloat(char* buf, size_t bufsize, const char* format, float value)
     }
 }
 
+// ServerLua: integer support
 char* luai_int2str(char* buf, int64_t l)
 {
     uint64_t val = (l < 0) ? ~(uint64_t)l + 1 : (uint64_t)l;

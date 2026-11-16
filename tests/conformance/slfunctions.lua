@@ -1,18 +1,39 @@
--- In Lua mode `integer` is the standard integer library, the cast function
--- only exists in LSL mode.
-local foo = integer.create(5)
-local bar = integer.create(5)
-local baz = integer.create(6)
+-- Lua can't make integers itself, `integer` here is a helper the test fixture
+-- provides. The cast function of that name only exists in LSL mode.
+local foo = integer(5)
+local bar = integer(5)
+local baz = integer(6)
 local vec = vector(1, 2, 3)
 
+assert(typeof(foo) == "integer")
 assert(foo == bar)
 assert(foo ~= baz)
-assert(integer.add(foo, integer.create(1)) == baz)
 assert(foo ~= 5)
 assert(tonumber(foo) == 5)
+assert(tonumber(integer(-5)) == -5)
 assert(tostring(foo) == "5")
-assert(integer.fromstring("5") == foo)
-assert(typeof(integer.fromstring("5")) == "integer")
+
+-- Arithmetic and ordering operators are not defined on integers outside of LSL
+local lhs = integer(10)
+local rhs = integer(3)
+assert(not pcall(function() return lhs + rhs end))
+assert(not pcall(function() return lhs - rhs end))
+assert(not pcall(function() return lhs * rhs end))
+assert(not pcall(function() return lhs / rhs end))
+assert(not pcall(function() return lhs // rhs end))
+assert(not pcall(function() return lhs % rhs end))
+assert(not pcall(function() return lhs ^ rhs end))
+assert(not pcall(function() return lhs + 1.5 end))
+assert(not pcall(function() return 1.5 + lhs end))
+assert(not pcall(function() return lhs < rhs end))
+assert(not pcall(function() return lhs <= rhs end))
+assert(not pcall(function() return lhs > rhs end))
+assert(not pcall(function() return lhs >= rhs end))
+
+-- Integers are always truthy, even zero
+assert(integer(0))
+assert(integer(1))
+assert(integer(-1))
 
 assert(tovector("<1,2,3>") == vector(1, 2, 3))
 assert(tovector("<1,2,4>") ~= vector(1, 2, 3))
@@ -63,7 +84,6 @@ assert(touuid(ZERO_ROTATION) == nil)
 
 assert(not pcall(function() tovector() end))
 assert(not pcall(function() toquaternion() end))
-assert(not pcall(function() integer.create() end))
 
 -- Vector / quaternion operations should still be supported as in LSL
 assert(vec * quaternion(0, 0, 0, 1) == vec)

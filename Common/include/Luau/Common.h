@@ -230,15 +230,9 @@ struct FValueVersionSetter
 // ServerLua: upstream FFlags SL runs with. Set by name so this needs
 // no link dependency on the modules that define them.
 #define SLUA_REQUIRED_FFLAGS(X) \
-    X("LuauIntegerType2") \
-    X("LuauIntegerLibrary") \
-    X("LuauIntegerFastcalls") \
-    X("LuauIntegerBufferFastcalls") \
-    X("LuauTableRobustOom") \
     X("LuauSandboxFreezesVectorMetatable") \
     X("FixMathNoisePrecision") \
     X("LuauLoadRemapOptionalUserdata") \
-    X("LuauFastpcall") \
     X("LuauPcallErrorContinuationReentry")
 
 namespace Luau

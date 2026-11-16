@@ -21,6 +21,7 @@ const char* const luaT_typenames[] = {
 
     "userdata",
     "number",
+    // ServerLua: integer support
     "integer",
 
 #if LUA_VECTOR_DOUBLE == 0

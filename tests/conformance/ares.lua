@@ -244,15 +244,14 @@ assert(str_key_val[long_str] == long_str)
 assert(str_key_val.other == "other")
 
 -- Integer values survive round-trips at full 64-bit width.
--- The integer library is only registered when the integer fflags are enabled,
--- and this file must still parse without them, so no integer literals here.
+-- Lua can't make integers itself, `integer` is a helper the test fixture provides.
 if integer ~= nil then
     local int_vals = {
-        integer.create(0),
-        integer.create(1),
-        integer.minsigned,
-        integer.maxsigned,
-        integer.sub(integer.maxsigned, integer.create(1)),
+        integer(0),
+        integer(1),
+        integer("-9223372036854775808"),
+        integer("9223372036854775807"),
+        integer("9223372036854775806"),
     }
     for _, v in int_vals do
         local rt = round_trip(v)
@@ -261,10 +260,10 @@ if integer ~= nil then
     end
 
     -- as table values and keys, too
-    local int_tab = round_trip({integer.create(1), key = integer.create(2^40), [integer.create(3)] = "three"})
-    assert(int_tab[1] == integer.create(1))
-    assert(int_tab.key == integer.create(2^40))
-    assert(int_tab[integer.create(3)] == "three")
+    local int_tab = round_trip({integer(1), key = integer(2^40), [integer(3)] = "three"})
+    assert(int_tab[1] == integer(1))
+    assert(int_tab.key == integer(2^40))
+    assert(int_tab[integer(3)] == "three")
 end
 
 print('OK')

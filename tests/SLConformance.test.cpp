@@ -26,6 +26,8 @@
 #include "../VM/src/lgc.h"
 #include "../VM/src/ltable.h"
 
+#include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <set>
 #include <string>
@@ -131,6 +133,17 @@ static std::string getSourceFilePath(std::string name)
     return path;
 }
 
+// Nothing in Lua-land can make an integer, so tests that need one get this helper. Takes a number, or a decimal string for values
+// a double can't hold.
+static int lua_test_integer(lua_State* L)
+{
+    if (lua_type(L, 1) == LUA_TSTRING)
+        lua_pushinteger64(L, strtoll(lua_tostring(L, 1), nullptr, 10));
+    else
+        lua_pushinteger64(L, (int64_t)luaL_checknumber(L, 1));
+    return 1;
+}
+
 static int lua_collectgarbage(lua_State* L)
 {
     static const char* const opts[] = {"stop", "restart", "collect", "count", "isrunning", "step", "setgoal", "setstepmul", "setstepsize", nullptr};
@@ -175,7 +188,7 @@ static int memoryLimitCallback(lua_State *L, size_t osize, size_t nsize)
     RuntimeState* state = (RuntimeState*)L->userdata;
 
     // Bail if GC is disabled (host bulk work like luau_load)
-    if (L->global->GCthreshold == SIZE_MAX)
+    if (L->global->GCthreshold == SIZE_MAX || L->global->gcdisabled != 0)
         return 0;
 
     // This is a net shrink in memory, not relevant for our limiting logic. We can't assume that
@@ -243,6 +256,7 @@ static StateRef runConformance(const char* name, void (*yield)(lua_State* L) = n
     // Register a few global functions for conformance tests
     std::vector<luaL_Reg> funcs = {
         {"collectgarbage", lua_collectgarbage},
+        {"integer", lua_test_integer},
     };
 
     // "null" terminate the list of functions to register

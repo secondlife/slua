@@ -14,7 +14,6 @@ namespace Luau
 class AstNameTable;
 struct ParseResult;
 class BytecodeBuilder;
-class BytecodeEncoder;
 
 using CompileConstant = void*;
 
@@ -103,8 +102,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const std::string& source, const 
 std::string compile(
     const std::string& source,
     const CompileOptions& options = {},
-    const ParseOptions& parseOptions = {},
-    BytecodeEncoder* encoder = nullptr
+    const ParseOptions& parseOptions = {}
 );
 
 // ServerLua: compiles a complete asset, a BytecodeHeader followed by the
@@ -114,14 +112,12 @@ std::string compileAssetOrThrow(
     const std::string& source,
     uint32_t apiVersion = 0,
     const CompileOptions& options = {},
-    const ParseOptions& parseOptions = {},
-    BytecodeEncoder* encoder = nullptr
+    const ParseOptions& parseOptions = {}
 );
 
 void setCompileConstantNil(CompileConstant* constant);
 void setCompileConstantBoolean(CompileConstant* constant, bool b);
 void setCompileConstantNumber(CompileConstant* constant, double n);
-void setCompileConstantInteger64(CompileConstant* constant, int64_t l);
 void setCompileConstantVector(CompileConstant* constant, float x, float y, float z, float w);
 void setCompileConstantVectord(CompileConstant* constant, double x, double y, double z, double w);
 void setCompileConstantString(CompileConstant* constant, const char* s, size_t l);

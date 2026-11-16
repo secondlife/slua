@@ -467,6 +467,7 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
         hardstacktests_tm_realloc(L);
         return result;
     }
+    // ServerLua: integer support
     case LUA_TINTEGER:
     {
         int result = luai_inteq(lvalue(t1), lvalue(t2));

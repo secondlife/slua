@@ -830,6 +830,13 @@ GCObject* luaM_newgcotagged_(lua_State* L, size_t nsize, uint8_t memcat)
 
     global_State* g = L->global;
 
+    // ServerLua: enforce memory allocation limits in user-owned memcats
+    if (LUAU_LIKELY(!!g->cb.beforeallocate) && memcat >= LUA_FIRST_USER_MEMCAT)
+    {
+        if (g->cb.beforeallocate(L, 0, nsize))
+            luaD_throw(L, LUA_ERRMEM);
+    }
+
     int nclass = sizeclass(nsize);
 
     void* block = NULL;

@@ -26,6 +26,7 @@
 #include "BufferCage.h"
 #include "ConformanceIrHooks.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 
@@ -61,26 +62,26 @@ void luaC_validate(lua_State* L);
 
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauRuntimeFeedback)
+LUAU_FASTFLAG(LuauCodegenRuntimeFeedback)
+LUAU_FASTFLAG(LuauCodegenUserdataDirect)
 LUAU_FASTFLAG(LuauPromoteProto)
 LUAU_FASTFLAG(LuauBytecodeFold)
 LUAU_FASTFLAG(LuauBytecodeSlotAlloc)
 LUAU_FASTFLAG(LuauCodegenA64BitlrotateSelf)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(LuauCodegenFastcallAnalysisLimit)
 LUAU_FASTFLAG(LuauCodegenMarkUsed)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
-LUAU_FASTFLAG(LuauIntegerLibrary)
-LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
-LUAU_FASTFLAG(LuauCodegenBufferInteger)
+LUAU_FASTFLAG(DebugLuauBufferVectorLibrary)
+LUAU_FASTFLAG(DebugLuauBufferVectorFastcalls)
 LUAU_FASTFLAG(LuauCodegenA64ReloadLargeConstOffset)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
-LUAU_FASTFLAG(LuauCompileNoFoldVectorEqW)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_DYNAMIC_FASTFLAG(LuauGcHeapShrinkFix)
 LUAU_FASTFLAG(LuauPcallErrorContinuationReentry)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
-LUAU_FASTFLAG(LuauBytecodeCostModel)
 LUAU_FASTFLAG(LuauExperimentalIfLocalSyntax)
 LUAU_FASTFLAG(LuauSandboxFreezesVectorMetatable)
 LUAU_FASTFLAG(LuauBufferCage)
@@ -89,8 +90,6 @@ LUAU_FASTFLAG(LuauCoroutineFinallyAnalysis)
 LUAU_FASTFLAG(LuauCodegenDseTrackTagInvalidation)
 LUAU_FASTFLAG(LuauCodegenCmpAnySideEffecting)
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(LuauCompileCallFbRemap)
-LUAU_DYNAMIC_FASTFLAG(LuauTableRobustOom)
 LUAU_FASTFLAG(LuauExperimentalWhileLocalSyntax)
 LUAU_FASTFLAG(LuauLoadExplicitGcDisable)
 
@@ -290,6 +289,21 @@ void validateBytecodeGraph(const std::string& source, const lua_CompileOptions& 
 
 using StateRef = std::unique_ptr<lua_State, void (*)(lua_State*)>;
 
+// runConformance loads the script with luau_loadlazy
+static bool lazyLoad = false;
+
+struct ScopedLazyLoad
+{
+    explicit ScopedLazyLoad(bool enabled = true)
+    {
+        lazyLoad = enabled;
+    }
+    ~ScopedLazyLoad()
+    {
+        lazyLoad = false;
+    }
+};
+
 static StateRef runConformance(
     const char* name,
     void (*setup)(lua_State* L) = nullptr,
@@ -398,8 +412,16 @@ static StateRef runConformance(
 
     size_t bytecodeSize = 0;
     char* bytecode = luau_compile(source.data(), source.size(), &opts, &bytecodeSize);
-    int result = luau_load(L, chunkname.c_str(), bytecode, bytecodeSize, 0);
-    free(bytecode);
+    int result = 0;
+    if (lazyLoad)
+    {
+        result = luau_loadlazy(L, chunkname.c_str(), bytecode, bytecodeSize, 0, bytecode, free);
+    }
+    else
+    {
+        result = luau_load(L, chunkname.c_str(), bytecode, bytecodeSize, 0);
+        free(bytecode);
+    }
 
     Luau::CodeGen::CompilationOptions nativeOpts = codegenOptions ? *codegenOptions : defaultCodegenOptions();
 
@@ -569,6 +591,24 @@ static void* limitedRealloc(void* ud, void* ptr, size_t osize, size_t nsize)
     }
 }
 
+// ServerLua: integer support. Nothing in Lua-land can make an integer, so tests
+// that need one get this helper. Takes a number, or a decimal string for values
+// a double can't hold.
+static int lua_test_integer(lua_State* L)
+{
+    if (lua_type(L, 1) == LUA_TSTRING)
+        lua_pushinteger64(L, strtoll(lua_tostring(L, 1), nullptr, 10));
+    else
+        lua_pushinteger64(L, (int64_t)luaL_checknumber(L, 1));
+    return 1;
+}
+
+static void setupIntegerHelper(lua_State* L)
+{
+    lua_pushcfunction(L, lua_test_integer, "integer");
+    lua_setglobal(L, "integer");
+}
+
 void setupVectorHelpers(lua_State* L)
 {
     lua_pushvector3(L, 0.0f, 0.0f, 0.0f);
@@ -653,6 +693,21 @@ static int lua_vec2_reenter(lua_State* L, Vec2* self)
     return 1;
 }
 
+static int lua_vec2_results(lua_State* L)
+{
+    int nargs = lua_gettop(L);
+    luaL_checkstack(L, 1024, "results");
+    lua_pushinteger(L, nargs);
+    lua_pushinteger(L, 42);
+    return 2;
+}
+
+static int lua_vec2_yield(lua_State* L)
+{
+    lua_pushinteger(L, 55);
+    return lua_yield(L, 1);
+}
+
 static int lua_vec2_index(lua_State* L)
 {
     Vec2* v = lua_vec2_get(L, 1);
@@ -729,6 +784,12 @@ static int lua_vec2_namecall(lua_State* L)
 
         if (strcmp(str, "Reenter") == 0)
             return lua_vec2_reenter(L, self);
+
+        if (strcmp(str, "Results") == 0)
+            return lua_vec2_results(L);
+
+        if (strcmp(str, "Yield") == 0)
+            return lua_vec2_yield(L);
     }
 
     luaL_error(L, "%s is not a valid method of vector", luaL_checkstring(L, 1));
@@ -1059,6 +1120,8 @@ enum class DirectSlot : uint16_t
     Min,
     Clone,
     Reenter,
+    Results,
+    Yield,
     Pos,
     Normal,
     UV,
@@ -1074,6 +1137,8 @@ const std::unordered_map<std::string, DirectSlot> nameToDirectSlot = {
     {"Min", DirectSlot::Min},
     {"Clone", DirectSlot::Clone},
     {"Reenter", DirectSlot::Reenter},
+    {"Results", DirectSlot::Results},
+    {"Yield", DirectSlot::Yield},
     {"pos", DirectSlot::Pos},
     {"normal", DirectSlot::Normal},
     {"uv", DirectSlot::UV},
@@ -1177,6 +1242,10 @@ static int vec2DirectNamecall(lua_State* L, void* data, int atom, uint16_t* cach
         return lua_vec2_clone(L, self);
     case DirectSlot::Reenter:
         return lua_vec2_reenter(L, self);
+    case DirectSlot::Results:
+        return lua_vec2_results(L);
+    case DirectSlot::Yield:
+        return lua_vec2_yield(L);
     default:
         luaL_error(L, "%s is not a valid method of vec2", lua_namecallatom(L, nullptr));
     }
@@ -1398,7 +1467,10 @@ static void setupAresTestObject(lua_State* L)
 
 TEST_CASE("Ares")
 {
-    runConformance("ares.lua", [](lua_State* L) {setupVectorHelpers(L);});
+    runConformance("ares.lua", [](lua_State* L) {
+        setupVectorHelpers(L);
+        setupIntegerHelper(L);
+    });
     runConformance("ares_closures.lua");
     runConformance("ares_coros.lua");
     runConformance("ares_iterators.lua");
@@ -1420,6 +1492,7 @@ TEST_CASE("Ares padded")
     // the reader has never heard of. Round trips have to come out identical.
     runConformance("ares.lua", [](lua_State* L) {
         setupVectorHelpers(L);
+        setupIntegerHelper(L);
         setAresTestPadding(L, 7);
     });
     runConformance("ares_closures.lua", [](lua_State* L) { setAresTestPadding(L, 7); });
@@ -1926,6 +1999,9 @@ TEST_CASE("Basic")
 
 TEST_CASE("Buffers")
 {
+    ScopedFastFlag bufferVectorLibrary{FFlag::DebugLuauBufferVectorLibrary, true};
+    ScopedFastFlag bufferVectorFastcalls{FFlag::DebugLuauBufferVectorFastcalls, true};
+
     runConformance(
         "buffers.luau",
         [](lua_State* L)
@@ -1947,6 +2023,8 @@ static void setupBufferCage(lua_State* L)
 TEST_CASE("BuffersWithCage")
 {
     ScopedFastFlag luauBufferCage{FFlag::LuauBufferCage, true};
+    ScopedFastFlag bufferVectorLibrary{FFlag::DebugLuauBufferVectorLibrary, true};
+    ScopedFastFlag bufferVectorFastcalls{FFlag::DebugLuauBufferVectorFastcalls, true};
 
     BufferCage cage;
     bufferCage = &cage;
@@ -1964,38 +2042,8 @@ TEST_CASE("Math")
     runConformance("math.luau");
 }
 
-TEST_CASE("Integers")
-{
-    ScopedFastFlag ncgBufferInteger{FFlag::LuauCodegenBufferInteger, true};
-
-    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
-    {
-        runConformance(
-            "integers.luau",
-            [](lua_State* L)
-            {
-                setupNativeHelpers(L);
-            }
-        );
-
-        if (codegen && luau_codegen_supported())
-        {
-            runConformance(
-                "integers_regspill.luau",
-
-                [](lua_State* L)
-                {
-                    setupNativeHelpers(L);
-                }
-            );
-        }
-    }
-}
-
 TEST_CASE("Tables")
 {
-    ScopedFastFlag luauTableRobustOom{DFFlag::LuauTableRobustOom, true};
-
     reallocSizeLimit = 0;
 
     runConformance(
@@ -2444,14 +2492,18 @@ static int unyieldable_call(lua_State* L)
     return 1;
 }
 
+// ServerLua: coroutine.luau uses this, in every test case that runs it
+static void setupCoroutineHelpers(lua_State* L)
+{
+    lua_pushcfunction(L, unyieldable_call, "unyieldable_call");
+    lua_setglobal(L, "unyieldable_call");
+}
+
 TEST_CASE("Coroutine")
 {
     ScopedFastFlag luauCoroutineFinally{FFlag::LuauCoroutineFinally, true};
 
-    runConformance("coroutine.luau", [](lua_State* L) {
-        lua_pushcfunction(L, unyieldable_call, "unyieldable_call");
-        lua_setglobal(L, "unyieldable_call");
-    });
+    runConformance("coroutine.luau", setupCoroutineHelpers);
 }
 
 static int runFinalizers(lua_State* L, bool toclose)
@@ -2851,8 +2903,6 @@ TEST_CASE("CYield")
 
 TEST_CASE("Vector")
 {
-    ScopedFastFlag luauCompileNoFoldVectorEqW{FFlag::LuauCompileNoFoldVectorEqW, true};
-
     lua_CompileOptions copts = defaultOptions();
     Luau::CodeGen::CompilationOptions nativeOpts = defaultCodegenOptions();
 
@@ -2954,11 +3004,6 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
             lua_pushstring(L, "number");
             break;
 
-        case Luau::PrimitiveType::Integer:
-            if (FFlag::LuauIntegerType2)
-                lua_pushstring(L, "integer");
-            break;
-
         case Luau::PrimitiveType::String:
             lua_pushstring(L, "string");
             break;
@@ -3016,7 +3061,6 @@ static void populateRTTI(lua_State* L, Luau::TypeId type)
 
 TEST_CASE("Types")
 {
-    ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag luauCoroutineFinallyAnalysis{FFlag::LuauCoroutineFinallyAnalysis, FFlag::LuauCoroutineFinally};
 
     runConformance(
@@ -3053,6 +3097,160 @@ TEST_CASE("Debug")
     runConformance("debug.luau");
 }
 
+TEST_CASE("LazyLoad")
+{
+    ScopedLazyLoad scopedLazyLoad;
+
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauCoroutineFinally, true},
+        {FFlag::DebugLuauUserDefinedClasses, true},
+        {FFlag::DebugLuauUserDefinedClassesRuntime, true},
+        {FFlag::LuauEmitCallFeedback, true},
+    };
+
+    runConformance("lazyload.luau");
+
+    for (const char* name :
+         {"basic.luau",
+          "calls.luau",
+          "classes.luau",
+          "closure.luau",
+          "constructs.luau",
+          "coroutine.luau",
+          "debug.luau",
+          "errors.luau",
+          "events.luau",
+          "locals.luau",
+          "safeenv.luau",
+          "vararg.luau"})
+    {
+        INFO(name);
+        // ServerLua: our coroutine.luau needs its helper here too
+        runConformance(name, std::string(name) == "coroutine.luau" ? setupCoroutineHelpers : nullptr);
+    }
+}
+
+TEST_CASE("LazyLoadReleasesOwner")
+{
+    static int releases = 0;
+    auto release = [](void* owner)
+    {
+        releases++;
+        free(owner);
+    };
+
+    SUBCASE("LoadError")
+    {
+        releases = 0;
+        StateRef globalState(luaL_newstate(), lua_close);
+        lua_State* L = globalState.get();
+
+        // version 0 bytecode carries a compile error
+        static const char kError[] = "\0boom";
+        char* bytecode = (char*)malloc(sizeof(kError) - 1);
+        memcpy(bytecode, kError, sizeof(kError) - 1);
+
+        CHECK(luau_loadlazy(L, "=LazyLoadReleasesOwner", bytecode, sizeof(kError) - 1, 0, bytecode, release) != 0);
+        CHECK(releases == 1);
+    }
+
+    SUBCASE("UnbuiltFunctions")
+    {
+        releases = 0;
+        {
+            StateRef globalState(luaL_newstate(), lua_close);
+            lua_State* L = globalState.get();
+
+            const std::string source = "local function never() return 1 end\nreturn never\n";
+            size_t bytecodeSize = 0;
+            char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+
+            REQUIRE(luau_loadlazy(L, "=LazyLoadReleasesOwner", bytecode, bytecodeSize, 0, bytecode, release) == 0);
+            CHECK(releases == 0);
+
+            REQUIRE(lua_pcall(L, 0, 1, 0) == 0);
+            CHECK(releases == 0);
+        }
+        CHECK(releases == 1);
+    }
+
+    SUBCASE("AllFunctionsBuilt")
+    {
+        releases = 0;
+        StateRef globalState(luaL_newstate(), lua_close);
+        lua_State* L = globalState.get();
+
+        const std::string source = "local function once() return 1 end\nreturn once()\n";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+
+        REQUIRE(luau_loadlazy(L, "=LazyLoadReleasesOwner", bytecode, bytecodeSize, 0, bytecode, release) == 0);
+        REQUIRE(lua_pcall(L, 0, 1, 0) == 0);
+        CHECK(lua_tonumber(L, -1) == 1);
+
+        // the last stub was built, so nothing needs the bytecode anymore
+        CHECK(releases == 1);
+    }
+
+    SUBCASE("ReentrantBuildOfLastStub")
+    {
+        releases = 0;
+        StateRef globalState(luaL_newstate(), lua_close);
+        lua_State* L = globalState.get();
+        luaL_openlibs(L);
+        // builds only resolve imports (and so run __index) in a safe environment
+        lua_setsafeenv(L, LUA_GLOBALSINDEX, true);
+
+        // read resolves the import Lib.value when it is built, and __index calls read again: the inner build finishes read, the last
+        // stub, and drops its reference while the outer build of read still reads the chunk. The chunk must stay alive until the outer
+        // build ends, so the bytecode cannot have been released yet when the inner call returns.
+        lua_pushcfunction(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushinteger(L, releases);
+                return 1;
+            },
+            "releasesSoFar"
+        );
+        lua_setglobal(L, "releasesSoFar");
+
+        // Lib is never assigned directly, so Lib.value compiles to an import (_G.Lib.value would not: _G is mutable)
+        const std::string source = R"(
+local reentered = false
+local releasedAtEntry = -1
+local releasedDuringBuild = -1
+local function read() return Lib.value end
+_G.Lib = setmetatable({}, { __index = function()
+  if not reentered then
+    reentered = true
+    releasedAtEntry = releasesSoFar()
+    local value = read()
+    releasedDuringBuild = releasesSoFar()
+    return value
+  end
+  return 7
+end })
+local value = read()
+return value, reentered, releasedAtEntry, releasedDuringBuild
+)";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+
+        REQUIRE(luau_loadlazy(L, "=LazyLoadReleasesOwner", bytecode, bytecodeSize, 0, bytecode, release) == 0);
+        CHECK(releases == 0);
+
+        REQUIRE(lua_pcall(L, 0, 4, 0) == 0);
+        CHECK(lua_tonumber(L, -4) == 7);
+        // __index ran while read was still a stub, i.e. during its build
+        REQUIRE(lua_toboolean(L, -3));
+        CHECK(lua_tonumber(L, -2) == 0);
+        // the inner build finished read, and the outer build still kept the bytecode alive
+        CHECK(lua_tonumber(L, -1) == 0);
+        CHECK(releases == 1);
+    }
+}
+
 bool findLocal(lua_State* L, int level, const char* name)
 {
     int n = 1;
@@ -3077,6 +3275,8 @@ TEST_CASE("Debugger")
     static bool singlestep = false;
     static int stephits = 0;
 
+    bool lazy = false;
+
     SUBCASE("")
     {
         singlestep = false;
@@ -3085,6 +3285,13 @@ TEST_CASE("Debugger")
     {
         singlestep = true;
     }
+    SUBCASE("LazyLoad")
+    {
+        singlestep = false;
+        lazy = true;
+    }
+
+    ScopedLazyLoad scopedLazyLoad{lazy};
 
     breakhits = 0;
     interruptedthread = nullptr;
@@ -5762,6 +5969,7 @@ TEST_CASE("Native")
     ScopedFastFlag reloadLargeConstOffset{FFlag::LuauCodegenA64ReloadLargeConstOffset, true};
     ScopedFastFlag luauCodegenDseTrackTagInvalidation{FFlag::LuauCodegenDseTrackTagInvalidation, true};
     ScopedFastFlag luauCodegenCmpAnySideEffecting{FFlag::LuauCodegenCmpAnySideEffecting, true};
+    ScopedFastFlag luauCodegenFastcallAnalysisLimit{FFlag::LuauCodegenFastcallAnalysisLimit, true};
 
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
     if (!codegen || !luau_codegen_supported())
@@ -5815,28 +6023,6 @@ TEST_CASE("Native")
         nullptr,
         &copts
     );
-}
-
-TEST_CASE("NativeIntegerSpills")
-{
-    ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
-
-    lua_CompileOptions copts = defaultOptions();
-
-    SUBCASE("O0")
-    {
-        copts.optimizationLevel = 0;
-    }
-    SUBCASE("O1")
-    {
-        copts.optimizationLevel = 1;
-    }
-    SUBCASE("O2")
-    {
-        copts.optimizationLevel = 2;
-    }
-
-    runConformance("native_integer_spills.luau", nullptr, nullptr, nullptr, &copts);
 }
 
 TEST_CASE("NativeTypeAnnotations")
@@ -6016,6 +6202,7 @@ static std::string getRecordedFastPathCounters(lua_State* L, const char* global)
 TEST_CASE("Promotion")
 {
     ScopedFastFlag luauRuntimeFeedback{FFlag::LuauRuntimeFeedback, true};
+    ScopedFastFlag luauCodegenRuntimeFeedback{FFlag::LuauCodegenRuntimeFeedback, true};
     ScopedFastFlag luauPromoteProto{FFlag::LuauPromoteProto, true};
 
     Luau::CodeGen::CompilationOptions nativeOpts = defaultCodegenOptions();
@@ -6030,6 +6217,38 @@ TEST_CASE("Promotion")
     nativeOpts.hooks.userdataNamecall = userdataNamecall;
 
     nativeOpts.userdataTypes = kUserdataRunTypes;
+
+    if (verbose)
+    {
+        nativeOpts.runtimeBuildLog = [](void* context, const std::string& message)
+        {
+            printf("codegen: %.*s\n", int(message.length()), message.data());
+        };
+
+        nativeOpts.runtimeBuildResult =
+            [](void* context, const Luau::CodeGen::CompilationResult& result, const struct Luau::CodeGen::CompilationStats& stats)
+        {
+            printf("rebuild: status %s, %d proto(s) failed\n",
+                Luau::CodeGen::toString(result.result).c_str(),
+                int(result.protoFailures.size())
+            );
+
+            printf(
+                "rebuild: bc %d bytes, native %d + %d bytes, meta %d bytes\n",
+                int(stats.bytecodeSizeBytes),
+                int(stats.nativeCodeSizeBytes),
+                int(stats.nativeDataSizeBytes),
+                int(stats.nativeMetadataSizeBytes)
+            );
+            printf(
+                "rebuild: %d function(s) total, %d compiled, %d bound in %.3fms\n",
+                int(stats.functionsTotal),
+                int(stats.functionsCompiled),
+                int(stats.functionsBound),
+                stats.compilationTimeSec * 1000.0
+            );
+        };
+    }
 
     StateRef globalState = runConformance(
         "promotion.luau",
@@ -6227,7 +6446,6 @@ TEST_CASE("Classes")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauEmitCallFeedback, true},
-        {FFlag::LuauBytecodeCostModel, true}
     };
 
     runConformance("classes.luau");
@@ -6567,6 +6785,64 @@ TEST_CASE("IrInstructionLimit")
     CHECK(nativeStats.functionsCompiled < 101);
 }
 
+TEST_CASE("PromotionInstructionLimit")
+{
+    if (!codegen || !luau_codegen_supported())
+        return;
+
+    ScopedFastFlag luauRuntimeFeedback{FFlag::LuauRuntimeFeedback, true};
+    ScopedFastFlag luauCodegenRuntimeFeedback{FFlag::LuauCodegenRuntimeFeedback, true};
+    ScopedFastFlag luauPromoteProto{FFlag::LuauPromoteProto, true};
+    ScopedFastInt codegenHeuristicsInstructionLimit{FInt::CodegenHeuristicsInstructionLimit, 100};
+
+    const char* source = R"(
+function fn(...)
+    local p1, p2 = ...
+    for i = 1, 100000 do
+        p1 += 1
+    end
+    return {
+        p1*1, p2+1, p1*2, p2+2, p1*3, p2+3, p1*4, p2+4, p1*5, p2+5,
+        p1*6, p2+6, p1*7, p2+7, p1*8, p2+8, p1*9, p2+9, p1*10, p2+10,
+    }
+end
+assert(fn(0, 2)[1] == 100000)
+)";
+
+    std::vector<Luau::CodeGen::CompilationResult> results;
+    Luau::CodeGen::CompilationOptions nativeOptions = defaultCodegenOptions();
+    nativeOptions.runtimeBuildContext = &results;
+    nativeOptions.runtimeBuildResult = [](void* context, const Luau::CodeGen::CompilationResult& result, const Luau::CodeGen::CompilationStats& stats)
+    {
+        static_cast<std::vector<Luau::CodeGen::CompilationResult>*>(context)->push_back(result);
+        CHECK(stats.functionsCompiled == 0);
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luau_codegen_create(L);
+    Luau::CodeGen::enableRuntimeCompilation(L, nativeOptions, /* promoteVmFunctions */ true);
+
+    luaL_openlibs(L);
+    luaL_sandbox(L);
+    luaL_sandboxthread(L);
+    lua_gc(L, LUA_GCSTOP, 0);
+
+    std::string bytecode = Luau::compile(source);
+    REQUIRE(luau_load(L, "=PromotionInstructionLimit", bytecode.data(), bytecode.size(), 0) == 0);
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+    CHECK(results.empty());
+
+    // A full GC examines hot VM functions and commits their native promotions
+    lua_gc(L, LUA_GCCOLLECT, 0);
+
+    REQUIRE(results.size() == 1);
+    REQUIRE(results.front().protoFailures.size() == 1);
+    CHECK(results.front().protoFailures.front().result == Luau::CodeGen::CodeGenCompilationResult::CodeGenOverflowInstructionLimit);
+    CHECK(results.front().protoFailures.front().debugname == "fn");
+    CHECK(results.front().protoFailures.front().irInstCount >= 100);
+}
+
 TEST_CASE("BytecodeDistributionPerFunctionTest")
 {
     const char* source = R"(
@@ -6821,7 +7097,6 @@ TEST_CASE("ClassInheritanceRepeatedCallMemberOffsetCorruption")
         {FFlag::DebugLuauUserDefinedClasses, true},
         {FFlag::DebugLuauUserDefinedClassesRuntime, true},
         {FFlag::LuauEmitCallFeedback, true},
-        {FFlag::LuauBytecodeCostModel, true},
     };
 
     StateRef globalState(luaL_newstate(), lua_close);
@@ -6880,7 +7155,6 @@ TEST_CASE("SandboxFreezesVectorMetatable")
 TEST_CASE("JitInlinerLongJump")
 {
     ScopedFastFlag luauEmitCallFeedback{FFlag::LuauEmitCallFeedback, true};
-    ScopedFastFlag luauCompileCallFbRemap{FFlag::LuauCompileCallFbRemap, true};
 
     std::string source;
     source += "local function target(x) return x + 1 end\n";

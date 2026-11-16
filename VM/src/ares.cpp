@@ -2197,6 +2197,11 @@ p_proto(Info *info) {                                            /* ... proto */
     eris_error(info, "cannot persist an inlined proto");
   }
 
+  // A `luau_loadlazy()` stub has no body yet, and we never load that way
+  if (p->lazychunk != nullptr) {
+    eris_error(info, "cannot persist a lazily loaded proto");
+  }
+
   info->anyProtoNative |= p->execdata != nullptr;
 
   /* Write function source code */
