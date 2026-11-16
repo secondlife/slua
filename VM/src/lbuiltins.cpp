@@ -436,7 +436,7 @@ static int luauF_arshift(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        int s = luai_num2int_safe(a2); // ServerLua
 
         // note: we only specialize fast-path that doesn't require further conditionals (negative shifts and shifts greater or equal to bit width can
         // be handled generically)
@@ -608,7 +608,7 @@ static int luauF_extract(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
         unsigned n;
         luai_num2unsigned(n, a1);
-        int f = int(a2);
+        int f = luai_num2int_safe(a2); // ServerLua
 
         if (nparams == 2)
         {
@@ -624,7 +624,7 @@ static int luauF_extract(lua_State* L, StkId res, TValue* arg0, int nresults, St
         else if (ttisnumber(args + 1))
         {
             double a3 = nvalue(args + 1);
-            int w = int(a3);
+            int w = luai_num2int_safe(a3); // ServerLua
 
             if (f >= 0 && w > 0 && f + w <= 32)
             {
@@ -649,13 +649,13 @@ static int luauF_lrotate(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        int s = luai_num2int_safe(a2); // ServerLua
 
         // MSVC doesn't recognize the rotate form that is UB-safe
 #ifdef _MSC_VER
         uint32_t r = _rotl(u, s);
 #else
-        uint32_t r = (u << (s & 31)) | (u >> ((32 - s) & 31));
+        uint32_t r = (u << (s & 31)) | (u >> ((32u - unsigned(s)) & 31)); // ServerLua
 #endif
 
         setnvalue(res, double(r));
@@ -674,7 +674,7 @@ static int luauF_lshift(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        int s = luai_num2int_safe(a2); // ServerLua
 
         // note: we only specialize fast-path that doesn't require further conditionals (negative shifts and shifts greater or equal to bit width can
         // be handled generically)
@@ -701,7 +701,7 @@ static int luauF_replace(lua_State* L, StkId res, TValue* arg0, int nresults, St
         unsigned n, v;
         luai_num2unsigned(n, a1);
         luai_num2unsigned(v, a2);
-        int f = int(a3);
+        int f = luai_num2int_safe(a3); // ServerLua
 
         if (nparams == 3)
         {
@@ -717,7 +717,7 @@ static int luauF_replace(lua_State* L, StkId res, TValue* arg0, int nresults, St
         else if (ttisnumber(args + 2))
         {
             double a4 = nvalue(args + 2);
-            int w = int(a4);
+            int w = luai_num2int_safe(a4); // ServerLua
 
             if (f >= 0 && w > 0 && f + w <= 32)
             {
@@ -742,13 +742,13 @@ static int luauF_rrotate(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        int s = luai_num2int_safe(a2); // ServerLua
 
         // MSVC doesn't recognize the rotate form that is UB-safe
 #ifdef _MSC_VER
         uint32_t r = _rotr(u, s);
 #else
-        uint32_t r = (u >> (s & 31)) | (u << ((32 - s) & 31));
+        uint32_t r = (u >> (s & 31)) | (u << ((32u - unsigned(s)) & 31)); // ServerLua
 #endif
 
         setnvalue(res, double(r));
@@ -767,7 +767,7 @@ static int luauF_rshift(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        int s = luai_num2int_safe(a2); // ServerLua
 
         // note: we only specialize fast-path that doesn't require further conditionals (negative shifts and shifts greater or equal to bit width can
         // be handled generically)
@@ -1193,7 +1193,7 @@ static int luauF_extractk(lua_State* L, StkId res, TValue* arg0, int nresults, S
 
         unsigned n;
         luai_num2unsigned(n, a1);
-        int fw = int(a2);
+        int fw = luai_num2int_safe(a2); // ServerLua
 
         int f = fw & 31;
         int w1 = fw >> 5;
