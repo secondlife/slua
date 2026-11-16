@@ -166,6 +166,14 @@ def parse_directives(lines: Sequence[tuple[int, str]], path: Path) -> DirectiveS
             spec.fflags = fflags
             continue
 
+        # ServerLua: marks a test that can't run under a sanitizer build
+        if payload == "no-sanitize":
+            if spec.no_sanitize:
+                raise GoldenError(f"duplicate no-sanitize in {source}")
+
+            spec.no_sanitize = True
+            continue
+
         if payload in STATUSES:
             _parse_assignment(spec, f"status: {payload}", source)
             continue

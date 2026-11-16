@@ -11,6 +11,7 @@
 LUAI_FUNC Proto* luaF_newproto(lua_State* L);
 // ServerLua: used for Ares' u_closure
 LUAI_FUNC UpVal* luaF_newupval (lua_State *L);
+LUAI_FUNC Proto* luaF_cloneproto(lua_State* L, Proto* source);
 LUAI_FUNC Closure* luaF_newLclosure(lua_State* L, int nelems, LuaTable* e, Proto* p);
 LUAI_FUNC Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e);
 LUAI_FUNC UpVal* luaF_findupval(lua_State* L, StkId level);
